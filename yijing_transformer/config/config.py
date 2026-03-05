@@ -86,6 +86,11 @@ class YiJingConfig:
     checkpoint_every: int = 0        # selective checkpoint каждые N слоёв (0 = выкл)
     wd_end: float = 0.01             # конечный weight decay (для scheduling)
 
+    # v14: differential attention, KV-cache quantization, layerwise LR
+    use_diff_attn: bool = False      # Differential Attention
+    quantize_kv_cache: bool = False  # INT8 KV-cache
+    layerwise_lr_decay: float = 1.0  # LR decay per layer (1.0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

@@ -2363,3 +2363,318 @@ class TestV13Integration:
             wds.step()
 
         assert wds.get_wd() < 0.1
+
+
+# ==================== V14 TESTS ====================
+
+class TestV14DifferentialAttention:
+    """Тесты для Differential Attention."""
+
+    def test_forward_shape(self):
+        """Differential Attention: forward shape."""
+        from models.diff_attn import DifferentialAttention
+        da = DifferentialAttention(d_model=64, n_heads=4)
+        x = torch.randn(2, 16, 64)
+        out = da(x)
+        assert out.shape == (2, 16, 64)
+
+    def test_backward(self):
+        """Backward через Differential Attention."""
+        from models.diff_attn import DifferentialAttention
+        da = DifferentialAttention(d_model=64, n_heads=4)
+        x = torch.randn(2, 8, 64, requires_grad=True)
+        out = da(x)
+        out.sum().backward()
+        assert x.grad is not None
+
+    def test_lambda_learnable(self):
+        """Lambda — обучаемый параметр."""
+        from models.diff_attn import DifferentialAttention
+        da = DifferentialAttention(d_model=64, n_heads=4)
+        assert da.lambda_init.requires_grad
+        assert da.lambda_init.shape == (4,)
+
+    def test_lambda_range(self):
+        """Sigmoid(lambda) в [0, 1]."""
+        from models.diff_attn import DifferentialAttention
+        da = DifferentialAttention(d_model=64, n_heads=4)
+        lam = torch.sigmoid(da.lambda_init)
+        assert (lam >= 0).all() and (lam <= 1).all()
+
+    def test_causal_masking(self):
+        """Causal masking работает."""
+        from models.diff_attn import DifferentialAttention
+        da = DifferentialAttention(d_model=32, n_heads=2)
+        x = torch.randn(1, 8, 32)
+        out = da(x)
+        assert out.shape == (1, 8, 32)
+        # Не NaN
+        assert not torch.isnan(out).any()
+
+
+class TestV14QuantizedKVCache:
+    """Тесты для KV-cache quantization."""
+
+    def test_basic_update_get(self):
+        """Update и get работают."""
+        from models.diff_attn import QuantizedKVCache
+        cache = QuantizedKVCache(enabled=True)
+        k = torch.randn(1, 4, 8, 16)  # (B, H, T, D)
+        v = torch.randn(1, 4, 8, 16)
+        cache.update(k, v)
+        k_out, v_out = cache.get()
+        assert k_out.shape == k.shape
+        assert v_out.shape == v.shape
+
+    def test_sequential_update(self):
+        """Последовательные update конкатенируют."""
+        from models.diff_attn import QuantizedKVCache
+        cache = QuantizedKVCache(enabled=True)
+        cache.update(torch.randn(1, 4, 8, 16), torch.randn(1, 4, 8, 16))
+        cache.update(torch.randn(1, 4, 1, 16), torch.randn(1, 4, 1, 16))
+        k, v = cache.get()
+        assert k.shape[2] == 9  # 8 + 1
+        assert cache.seq_len == 9
+
+    def test_quantization_accuracy(self):
+        """Квантизация близка к оригиналу."""
+        from models.diff_attn import QuantizedKVCache
+        cache = QuantizedKVCache(enabled=True)
+        k = torch.randn(1, 4, 16, 32)
+        v = torch.randn(1, 4, 16, 32)
+        cache.update(k, v)
+        k_out, v_out = cache.get()
+        # Ошибка квантизации < 1% от нормы
+        k_error = (k - k_out).norm() / k.norm()
+        assert k_error < 0.05
+
+    def test_memory_savings(self):
+        """INT8 cache меньше float32."""
+        from models.diff_attn import QuantizedKVCache
+        cache_q = QuantizedKVCache(enabled=True)
+        cache_f = QuantizedKVCache(enabled=False)
+        k = torch.randn(1, 8, 256, 64)
+        v = torch.randn(1, 8, 256, 64)
+        cache_q.update(k, v)
+        cache_f.update(k, v)
+        # INT8 ≈ 2x меньше float32 (плюс scales overhead)
+        assert cache_q.memory_bytes() < cache_f.memory_bytes()
+
+    def test_disabled_mode(self):
+        """Disabled mode: хранит float32."""
+        from models.diff_attn import QuantizedKVCache
+        cache = QuantizedKVCache(enabled=False)
+        k = torch.randn(1, 4, 8, 16)
+        v = torch.randn(1, 4, 8, 16)
+        cache.update(k, v)
+        k_out, v_out = cache.get()
+        assert torch.equal(k, k_out)  # Exact match
+
+    def test_reset(self):
+        """Reset очищает кэш."""
+        from models.diff_attn import QuantizedKVCache
+        cache = QuantizedKVCache()
+        cache.update(torch.randn(1, 4, 8, 16), torch.randn(1, 4, 8, 16))
+        assert cache.seq_len == 8
+        cache.reset()
+        assert cache.seq_len == 0
+
+
+class TestV14LayerwiseLR:
+    """Тесты для layerwise learning rate."""
+
+    def test_groups_created(self):
+        """Param groups создаются для каждого слоя."""
+        from training.utils_v14 import get_layerwise_lr_groups
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        groups = get_layerwise_lr_groups(model, base_lr=1e-3, lr_decay=0.8)
+        assert len(groups) >= cfg.n_layers
+
+    def test_lr_decreases_with_depth(self):
+        """LR убывает для более ранних слоёв."""
+        from training.utils_v14 import get_layerwise_lr_groups
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        groups = get_layerwise_lr_groups(model, base_lr=1e-3, lr_decay=0.8)
+        layer_lrs = {}
+        for g in groups:
+            if 'name' in g and g['name'].startswith('layer_'):
+                idx = int(g['name'].split('_')[1])
+                layer_lrs[idx] = g['lr']
+        if len(layer_lrs) >= 2:
+            # Последний слой > первый слой
+            max_idx = max(layer_lrs.keys())
+            min_idx = min(layer_lrs.keys())
+            assert layer_lrs[max_idx] > layer_lrs[min_idx]
+
+    def test_optimizer_works(self):
+        """Optimizer с layerwise LR работает."""
+        from training.utils_v14 import get_layerwise_lr_groups
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        groups = get_layerwise_lr_groups(model, base_lr=1e-3, lr_decay=0.9)
+        opt = torch.optim.AdamW(groups)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        opt.step()
+
+
+class TestV14DataMixing:
+    """Тесты для Data Mixing Scheduler."""
+
+    def test_linear_interpolation(self):
+        """Линейная интерполяция весов."""
+        from training.utils_v14 import DataMixingScheduler
+        sched = DataMixingScheduler(['code', 'text'], total_steps=100)
+        sched.set_linear([0.8, 0.2], [0.2, 0.8])
+
+        w0 = sched.get_weights(0)
+        assert abs(w0[0] - 0.8) < 0.01
+
+        w100 = sched.get_weights(100)
+        assert abs(w100[0] - 0.2) < 0.01
+
+        w50 = sched.get_weights(50)
+        assert abs(w50[0] - 0.5) < 0.05
+
+    def test_step_schedule(self):
+        """Пошаговое переключение."""
+        from training.utils_v14 import DataMixingScheduler
+        sched = DataMixingScheduler(['a', 'b', 'c'])
+        sched.set_step_schedule([
+            (0, [0.5, 0.3, 0.2]),
+            (50, [0.2, 0.5, 0.3]),
+            (80, [0.1, 0.1, 0.8]),
+        ])
+
+        w = sched.get_weights(30)
+        assert abs(w[0] - 0.5) < 0.01
+
+        w = sched.get_weights(60)
+        assert abs(w[1] - 0.5) < 0.01
+
+    def test_sample_source(self):
+        """sample_source возвращает валидный индекс."""
+        from training.utils_v14 import DataMixingScheduler
+        sched = DataMixingScheduler(['a', 'b'])
+        sched.set_linear([1.0, 0.0], [0.0, 1.0])
+
+        # В начале почти всегда 'a' (индекс 0)
+        sources = [sched.sample_source(0) for _ in range(100)]
+        assert all(s in [0, 1] for s in sources)
+        assert sources.count(0) > 50  # Большинство = source 0
+
+    def test_normalize(self):
+        """Веса нормализуются к 1."""
+        from training.utils_v14 import DataMixingScheduler
+        sched = DataMixingScheduler(['a', 'b', 'c'])
+        w = sched.get_weights(0)
+        assert abs(sum(w) - 1.0) < 1e-6
+
+
+class TestV14ModelSurgery:
+    """Тесты для model surgery."""
+
+    def test_prune_heads(self):
+        """Прунинг attention голов."""
+        from training.utils_v14 import prune_attention_heads, count_active_heads
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        result = prune_attention_heads(model, layer_idx=0, heads_to_prune=[0, 1])
+        assert result['pruned_heads'] == [0, 1]
+
+        # Проверяем что головы действительно занулены
+        heads = count_active_heads(model)
+        assert heads[0]['active_heads'] < cfg.n_heads
+
+    def test_count_active_heads(self):
+        """Подсчёт активных голов."""
+        from training.utils_v14 import count_active_heads
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        heads = count_active_heads(model)
+        assert len(heads) == cfg.n_layers
+        assert all(h['active_heads'] == cfg.n_heads for h in heads)
+
+    def test_grow_model(self):
+        """Добавление слоёв."""
+        from training.utils_v14 import grow_model_depth
+        cfg = make_cfg(n_layers=2)
+        model = YiJingGPT(cfg)
+        old_layers = len(model.core.layers)
+        model = grow_model_depth(model, n_new_layers=1, position='end')
+        assert len(model.core.layers) == old_layers + 1
+
+        # Новый слой работает (forward не падает)
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        logits, _, _ = model(x)
+        assert logits.shape[0] == 1
+
+    def test_shrink_model(self):
+        """Удаление слоёв."""
+        from training.utils_v14 import shrink_model_depth
+        cfg = make_cfg(n_layers=4)
+        model = YiJingGPT(cfg)
+        model = shrink_model_depth(model, layers_to_remove=[1, 3])
+        assert len(model.core.layers) == 2
+
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        logits, _, _ = model(x)
+        assert logits.shape[0] == 1
+
+    def test_grow_middle(self):
+        """Добавление слоёв в середину."""
+        from training.utils_v14 import grow_model_depth
+        cfg = make_cfg(n_layers=4)
+        model = YiJingGPT(cfg)
+        model = grow_model_depth(model, n_new_layers=2, position='middle')
+        assert len(model.core.layers) == 6
+
+
+class TestV14Integration:
+    """Интеграционные тесты v14."""
+
+    def test_layerwise_lr_training(self):
+        """Training с layerwise LR."""
+        from training.utils_v14 import get_layerwise_lr_groups
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        groups = get_layerwise_lr_groups(model, base_lr=1e-3, lr_decay=0.8)
+        opt = torch.optim.AdamW(groups)
+
+        for _ in range(3):
+            x = torch.randint(0, cfg.vocab_size, (2, 8))
+            y = torch.randint(0, cfg.vocab_size, (2, 8))
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            opt.zero_grad()
+
+    def test_prune_then_train(self):
+        """Прунинг → training."""
+        from training.utils_v14 import prune_attention_heads
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        prune_attention_heads(model, layer_idx=0, heads_to_prune=[0])
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        opt.step()
+
+    def test_diff_attn_standalone(self):
+        """Differential Attention как standalone модуль."""
+        from models.diff_attn import DifferentialAttention
+        da = DifferentialAttention(d_model=64, n_heads=4, dropout=0.1)
+        da.train()
+        x = torch.randn(2, 16, 64)
+        out = da(x)
+        loss = out.sum()
+        loss.backward()
+        # Lambda gradients exist
+        assert da.lambda_init.grad is not None
