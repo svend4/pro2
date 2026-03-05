@@ -102,6 +102,31 @@ class TestYiJingGPT:
         assert logits.shape == (2, 8, cfg.vocab_size)
         assert loss.item() > 0
 
+    def test_with_octogram_quantizer(self):
+        cfg = make_cfg(quantizer_type='octogram', quant_total_dim=8)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, loss = model(x, y)
+        assert logits.shape == (2, 8, cfg.vocab_size)
+        assert loss.item() > 0
+
+    def test_with_hierarchical_quantizer(self):
+        cfg = make_cfg(quantizer_type='hierarchical', quant_total_dim=8, quant_group_dim=2)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, _ = model(x)
+        assert logits.shape == (2, 8, cfg.vocab_size)
+
+    def test_with_deformable_quantizer(self):
+        cfg = make_cfg(quantizer_type='deformable', quant_total_dim=6, quant_group_dim=3)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss = model(x, y)
+        loss.backward()
+        assert loss.item() > 0
+
 
 class TestVanillaGPT:
     def test_forward(self):

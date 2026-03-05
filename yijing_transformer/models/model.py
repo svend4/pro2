@@ -1,8 +1,9 @@
 """
 YiJing-Transformer: трансформер с геометрической регуляризацией
-на основе 64 гексаграмм (вершины гиперкуба {-1,+1}⁶).
+на основе гиперкубов {-1,+1}^n (64 гексаграмм, 256 октограмм).
 
-v2: RoPE, SwiGLU, адаптивная температура, MoE на триграммах, FlashAttention.
+v3: RoPE, SwiGLU, адаптивная температура, MoE на триграммах, FlashAttention,
+    иерархическая/деформируемая квантизация, октограммы, гексаграммные attention паттерны.
 """
 
 import math
@@ -13,12 +14,45 @@ import torch.nn.functional as F
 from .geometry import (
     get_trigrams,
     FactoredYiJingQuantizer,
+    HierarchicalQuantizer,
+    DeformableQuantizer,
     BianGuaTransform,
+    HexagramAttentionPattern,
     RotaryEmbedding,
     apply_rotary_emb,
     SwiGLU,
     TrigramMoE,
 )
+
+
+def build_quantizer(cfg):
+    """Фабрика квантизаторов по конфигурации."""
+    if cfg.quantizer_type == 'factored6':
+        return FactoredYiJingQuantizer(
+            temp=cfg.temp, adaptive_temp=cfg.adaptive_temp
+        )
+    elif cfg.quantizer_type == 'hierarchical':
+        return HierarchicalQuantizer(
+            total_dim=cfg.quant_total_dim,
+            group_dim=cfg.quant_group_dim,
+            temp=cfg.temp,
+            adaptive_temp=cfg.adaptive_temp,
+        )
+    elif cfg.quantizer_type == 'octogram':
+        return HierarchicalQuantizer(
+            total_dim=8,
+            group_dim=4,  # 2 тетраграммы: 16×16 = 256
+            temp=cfg.temp,
+            adaptive_temp=cfg.adaptive_temp,
+        )
+    elif cfg.quantizer_type == 'deformable':
+        return DeformableQuantizer(
+            total_dim=cfg.quant_total_dim,
+            group_dim=cfg.quant_group_dim,
+            temp=cfg.temp,
+        )
+    else:
+        raise ValueError(f"Unknown quantizer_type: {cfg.quantizer_type}")
 
 
 class YiJingAttention(nn.Module):
@@ -134,13 +168,12 @@ class YiJingTransformerLayer(nn.Module):
         self.ln_attn = nn.LayerNorm(cfg.d_model)
         self.attn = YiJingAttention(cfg)
 
-        # Гексаграммная квантизация (6D бутылочное горлышко)
+        # Квантизация к вершинам гиперкуба (bottleneck)
+        self.quant_dim = cfg.quant_total_dim
         self.ln_hex = nn.LayerNorm(cfg.d_model)
-        self.to_6d = nn.Linear(cfg.d_model, 6, bias=False)
-        self.from_6d = nn.Linear(6, cfg.d_model, bias=False)
-        self.quantizer = FactoredYiJingQuantizer(
-            temp=cfg.temp, adaptive_temp=cfg.adaptive_temp
-        )
+        self.to_qd = nn.Linear(cfg.d_model, self.quant_dim, bias=False)
+        self.from_qd = nn.Linear(self.quant_dim, cfg.d_model, bias=False)
+        self.quantizer = build_quantizer(cfg)
         self.hex_scale = nn.Parameter(torch.tensor(cfg.hex_strength))
 
         # 变卦 (трансформация гексаграмм)
@@ -175,13 +208,13 @@ class YiJingTransformerLayer(nn.Module):
         # 1. Attention с триграммным bias
         x = x + self.attn(self.ln_attn(x))
 
-        # 2. Квантизация к гексаграммам
+        # 2. Квантизация к вершинам гиперкуба
         h = self.ln_hex(x)
-        z6 = self.to_6d(h)
-        z6_q = self.quantizer(z6)
+        zq = self.to_qd(h)
+        zq_out = self.quantizer(zq)
         if self.training:
-            z6_q = z6_q * (1.0 + 0.001 * torch.randn_like(z6_q))
-        x = x + self.hex_scale * self.from_6d(z6_q)
+            zq_out = zq_out * (1.0 + 0.001 * torch.randn_like(zq_out))
+        x = x + self.hex_scale * self.from_qd(zq_out)
 
         # 3. 变卦 трансформация
         if self.bian_gua is not None:
@@ -287,8 +320,9 @@ class YiJingGPT(nn.Module):
     def count_parameters(self):
         total = sum(p.numel() for p in self.parameters())
         hex_params = 0
-        hex_keys = ['to_6d', 'from_6d', 'hex_scale', 'head_scales', 'head_dirs',
-                     'bian_gua', 'quantizer', 'trigram_dirs', 'router_proj']
+        hex_keys = ['to_qd', 'from_qd', 'to_6d', 'from_6d', 'hex_scale',
+                     'head_scales', 'head_dirs', 'bian_gua', 'quantizer',
+                     'trigram_dirs', 'router_proj', 'hex_attn_pattern']
         for name, p in self.named_parameters():
             if any(k in name for k in hex_keys):
                 hex_params += p.numel()

@@ -18,6 +18,12 @@ class YiJingConfig:
     use_bian_gua: bool = True    # использовать 变卦 трансформацию
     adaptive_temp: bool = True   # обучаемая температура квантизации
 
+    # Иерархическая квантизация
+    quantizer_type: str = 'factored6'  # 'factored6', 'hierarchical', 'octogram', 'deformable'
+    quant_total_dim: int = 6     # размерность бутылочного горлышка
+    quant_group_dim: int = 3     # размерность группы для иерархической квант.
+    use_hex_attn_pattern: bool = False  # гексаграммные паттерны attention
+
     # Архитектурные расширения
     use_rope: bool = True        # Rotary Position Embeddings
     use_swiglu: bool = True      # SwiGLU вместо GELU FFN

@@ -1,10 +1,16 @@
 """
-И-Цзин геометрия: триграммы, гексаграммы, квантизаторы и MoE.
+И-Цзин геометрия: триграммы, гексаграммы, октограммы, квантизаторы и MoE.
 
-Математическая основа:
-- 8 триграмм = вершины куба {-1, +1}³ = группа Z₂³
-- 64 гексаграммы = вершины гиперкуба {-1, +1}⁶ = Z₂⁶
-- Тензорная факторизация: гексаграмма = верхняя_триграмма ⊗ нижняя_триграмма
+Иерархия гиперкубов:
+- 4 биграммы    = {-1, +1}² = Z₂²
+- 8 триграмм    = {-1, +1}³ = Z₂³
+- 16 тетраграмм = {-1, +1}⁴ = Z₂⁴
+- 64 гексаграмм = {-1, +1}⁶ = Z₂⁶
+- 256 октограмм = {-1, +1}⁸ = Z₂⁸  (vs 240 корней E8 в R⁸!)
+
+Тензорные факторизации:
+- Гексаграмма = верхняя_триграмма ⊗ нижняя_триграмма (8×8)
+- Октограмма  = 4 биграммы (4×4×4×4) или 2 тетраграммы (16×16)
 """
 
 import torch
@@ -31,6 +37,26 @@ def generate_hexagrams() -> torch.Tensor:
         list(itertools.product(signs, repeat=6)), dtype=torch.float32
     )
     return hexagrams  # (64, 6)
+
+
+def generate_hypercube(n: int) -> torch.Tensor:
+    """2^n точек — все вершины гиперкуба {-1, +1}^n."""
+    signs = [-1.0, 1.0]
+    points = torch.tensor(
+        list(itertools.product(signs, repeat=n)), dtype=torch.float32
+    )
+    return points  # (2^n, n)
+
+
+def generate_octograms() -> torch.Tensor:
+    """256 октограмм — все вершины гиперкуба {-1, +1}⁸.
+    Сравнимо с E8 (240 корней в R⁸), но с тензорной факторизацией."""
+    return generate_hypercube(8)  # (256, 8)
+
+
+def generate_tetragrams() -> torch.Tensor:
+    """16 тетраграмм — {-1, +1}⁴."""
+    return generate_hypercube(4)  # (16, 4)
 
 
 def verify_yijing_properties(trigrams: torch.Tensor, hexagrams: torch.Tensor):
@@ -299,3 +325,196 @@ class TrigramMoE(nn.Module):
         aux_loss = self.aux_loss_coeff * F.mse_loss(tokens_per_expert, uniform)
 
         return output.view(B, T, D), aux_loss
+
+
+# ==================== ИЕРАРХИЧЕСКАЯ КВАНТИЗАЦИЯ ====================
+
+class HierarchicalQuantizer(nn.Module):
+    """
+    Иерархическая квантизация: разбивает вход на группы по k координат
+    и квантизует каждую группу к {-1,+1}^k (Product Quantization).
+
+    Примеры конфигураций для 8D входа:
+    - n_groups=4, group_dim=2: 4 биграммы (4×4×4×4 = 256 точек)
+    - n_groups=2, group_dim=4: 2 тетраграммы (16×16 = 256 точек)
+    - n_groups=1, group_dim=8: 1 октограмма (256 точек, без факторизации)
+
+    Для 6D (гексаграммы): n_groups=2, group_dim=3 — стандартная факторизация.
+    """
+    def __init__(self, total_dim: int, group_dim: int = 2,
+                 temp: float = 0.3, adaptive_temp: bool = False):
+        super().__init__()
+        assert total_dim % group_dim == 0, \
+            f"total_dim ({total_dim}) must be divisible by group_dim ({group_dim})"
+        self.total_dim = total_dim
+        self.group_dim = group_dim
+        self.n_groups = total_dim // group_dim
+        self.n_codewords = 2 ** group_dim  # число вершин гиперкуба per group
+
+        # Кодбук для одной группы: все вершины {-1,+1}^group_dim
+        codebook = generate_hypercube(group_dim)  # (2^k, k)
+        self.register_buffer('codebook', codebook)
+        self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
+
+        self.adaptive_temp = adaptive_temp
+        if adaptive_temp:
+            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+        else:
+            self.temp = temp
+
+    @property
+    def current_temp(self):
+        if self.adaptive_temp:
+            return self.log_temp.exp().clamp(min=0.01, max=5.0)
+        return self.temp
+
+    def forward(self, x):
+        # x: (..., total_dim)
+        shape = x.shape[:-1]
+        groups = x.reshape(*shape, self.n_groups, self.group_dim)  # (..., G, K)
+
+        quantized_groups = self._soft_quantize_batch(groups)
+        quantized = quantized_groups.reshape(*shape, self.total_dim)
+
+        if self.adaptive_temp:
+            return quantized
+        else:
+            return x + (quantized - x).detach()
+
+    def _soft_quantize_batch(self, z):
+        # z: (..., G, K)
+        z_norm_sq = (z * z).sum(dim=-1, keepdim=True)  # (..., G, 1)
+        cross = z @ self.codebook.T  # (..., G, 2^K)
+        dists_sq = z_norm_sq - 2 * cross + self.codebook_norm_sq
+        weights = F.softmax(-dists_sq / self.current_temp, dim=-1)  # (..., G, 2^K)
+        return weights @ self.codebook  # (..., G, K)
+
+    def hard_quantize(self, x):
+        return torch.sign(x)
+
+    def codebook_info(self):
+        """Информация о кодбуке для логирования."""
+        return {
+            'total_dim': self.total_dim,
+            'group_dim': self.group_dim,
+            'n_groups': self.n_groups,
+            'n_codewords_per_group': self.n_codewords,
+            'total_codewords': self.n_codewords ** self.n_groups,
+            'softmax_ops': self.n_groups * self.n_codewords,
+        }
+
+
+class DeformableQuantizer(nn.Module):
+    """
+    Деформируемый кодбук: начинаем с идеального гиперкуба {-1,+1}^n,
+    но позволяем модели «деформировать» кодовые слова.
+
+    codebook = base_hypercube + learnable_delta
+
+    Это мост между:
+    - Фиксированным кодбуком (YiJing, E8) — хорошая инициализация
+    - Полностью обучаемым кодбуком (VQ-VAE) — максимальная гибкость
+    """
+    def __init__(self, total_dim: int, group_dim: int = 3,
+                 temp: float = 0.3, deform_scale: float = 0.0):
+        super().__init__()
+        assert total_dim % group_dim == 0
+        self.total_dim = total_dim
+        self.group_dim = group_dim
+        self.n_groups = total_dim // group_dim
+        self.n_codewords = 2 ** group_dim
+
+        base = generate_hypercube(group_dim)
+        self.register_buffer('base_codebook', base)  # (2^k, k)
+
+        # Обучаемая деформация (инициализирована нулями)
+        self.delta = nn.Parameter(torch.zeros_like(base))
+        self.deform_scale = nn.Parameter(torch.tensor(deform_scale))
+        self.temp = temp
+
+    @property
+    def codebook(self):
+        return self.base_codebook + self.deform_scale * self.delta
+
+    def forward(self, x):
+        shape = x.shape[:-1]
+        groups = x.reshape(*shape, self.n_groups, self.group_dim)
+
+        cb = self.codebook
+        cb_norm_sq = (cb * cb).sum(dim=1)
+        z_norm_sq = (groups * groups).sum(dim=-1, keepdim=True)
+        cross = groups @ cb.T
+        dists_sq = z_norm_sq - 2 * cross + cb_norm_sq
+        weights = F.softmax(-dists_sq / self.temp, dim=-1)
+        quantized_groups = weights @ cb
+        quantized = quantized_groups.reshape(*shape, self.total_dim)
+
+        return x + (quantized - x).detach()
+
+    def deformation_stats(self):
+        """Статистика деформации для мониторинга."""
+        delta_norm = self.delta.norm().item()
+        scale = self.deform_scale.item()
+        effective_shift = delta_norm * abs(scale)
+        return {
+            'delta_norm': delta_norm,
+            'deform_scale': scale,
+            'effective_shift': effective_shift,
+        }
+
+
+# ==================== ГЕКСАГРАММНЫЙ ATTENTION PATTERN ====================
+
+class HexagramAttentionPattern(nn.Module):
+    """
+    Гексаграммный паттерн attention: 64 фиксированных паттерна
+    внимания, каждый соответствует гексаграмме.
+
+    Каждая из 6 линий гексаграммы контролирует один аспект:
+    - Линии 1-3 (нижняя триграмма): локальные паттерны (ближние связи)
+    - Линии 4-6 (верхняя триграмма): глобальные паттерны (дальние связи)
+
+    +1 = «усиливать связь», -1 = «ослаблять связь»
+    """
+    def __init__(self, d_model: int, block_size: int):
+        super().__init__()
+        self.proj_to_6d = nn.Linear(d_model, 6, bias=False)
+        self.scale = nn.Parameter(torch.tensor(0.0))  # начинаем отключённым
+
+        # 6 базовых паттернов attention (один на линию)
+        # Линии 1-3: окна разного размера (локальные)
+        # Линии 4-6: шаги разного размера (глобальные/периодические)
+        patterns = torch.zeros(6, block_size, block_size)
+        for i in range(block_size):
+            for j in range(i + 1):  # causal
+                dist = i - j
+                # Линия 1: ближайший сосед (окно 2)
+                patterns[0, i, j] = 1.0 if dist <= 2 else -1.0
+                # Линия 2: среднее окно (окно 8)
+                patterns[1, i, j] = 1.0 if dist <= 8 else -1.0
+                # Линия 3: широкое окно (окно 32)
+                patterns[2, i, j] = 1.0 if dist <= 32 else -1.0
+                # Линия 4: чётные позиции
+                patterns[3, i, j] = 1.0 if dist % 2 == 0 else -1.0
+                # Линия 5: каждые 4
+                patterns[4, i, j] = 1.0 if dist % 4 == 0 else -1.0
+                # Линия 6: начало последовательности
+                patterns[5, i, j] = 1.0 if j <= 4 else -1.0
+
+        self.register_buffer('patterns', patterns)  # (6, T, T)
+
+    def forward(self, x, T):
+        """
+        Возвращает attention bias (B, 1, T, T).
+        x: (B, T, D) → проецируем в 6D → взвешиваем паттерны.
+        """
+        # Средний вектор последовательности → 6D координата
+        x_mean = x.mean(dim=1)  # (B, D)
+        z6 = self.proj_to_6d(x_mean)  # (B, 6)
+        hex_weights = torch.tanh(z6)  # (B, 6) в [-1, 1]
+
+        # Взвешенная комбинация 6 паттернов
+        patterns = self.patterns[:, :T, :T]  # (6, T, T)
+        bias = torch.einsum('bk,kij->bij', hex_weights, patterns)  # (B, T, T)
+
+        return self.scale * bias.unsqueeze(1)  # (B, 1, T, T)
