@@ -20,7 +20,15 @@ class VanillaAttention(nn.Module):
         self.head_dim = cfg.d_model // cfg.n_heads
         self.scale = 1.0 / math.sqrt(self.head_dim)
         self.use_rope = cfg.use_rope
-        self.qkv = nn.Linear(cfg.d_model, 3 * cfg.d_model, bias=cfg.bias)
+
+        # GQA support
+        self.n_kv_heads = cfg.n_kv_heads if cfg.n_kv_heads is not None else cfg.n_heads
+        assert cfg.n_heads % self.n_kv_heads == 0
+        self.n_rep = cfg.n_heads // self.n_kv_heads
+
+        self.q_proj = nn.Linear(cfg.d_model, cfg.n_heads * self.head_dim, bias=cfg.bias)
+        self.k_proj = nn.Linear(cfg.d_model, self.n_kv_heads * self.head_dim, bias=cfg.bias)
+        self.v_proj = nn.Linear(cfg.d_model, self.n_kv_heads * self.head_dim, bias=cfg.bias)
         self.out = nn.Linear(cfg.d_model, cfg.d_model, bias=cfg.bias)
         self.dropout = nn.Dropout(cfg.dropout)
 
@@ -34,16 +42,25 @@ class VanillaAttention(nn.Module):
             torch.tril(torch.ones(1, 1, cfg.block_size, cfg.block_size))
         )
 
+    def _repeat_kv(self, x):
+        if self.n_rep == 1:
+            return x
+        B, H, T, D = x.shape
+        return x[:, :, None, :, :].expand(B, H, self.n_rep, T, D).reshape(B, H * self.n_rep, T, D)
+
     def forward(self, x):
         B, T, C = x.shape
-        qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.head_dim)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)
+        q = self.q_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
 
         if self.use_rope:
             cos, sin = self.rotary(T)
             q = apply_rotary_emb(q, cos, sin)
             k = apply_rotary_emb(k, cos, sin)
+
+        k = self._repeat_kv(k)
+        v = self._repeat_kv(v)
 
         scores = (q @ k.transpose(-2, -1)) * self.scale
         scores = scores.masked_fill(

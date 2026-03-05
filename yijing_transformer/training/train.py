@@ -29,6 +29,7 @@ import argparse
 from dataclasses import asdict
 
 import torch
+from torch.amp import autocast, GradScaler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -179,6 +180,9 @@ def train(args):
         use_wandb=args.wandb,
         use_tensorboard=args.tensorboard,
         run_name=args.run_name,
+        use_amp=getattr(args, 'amp', False),
+        n_kv_heads=getattr(args, 'gqa_heads', None),
+        sliding_window=getattr(args, 'sliding_window', None),
     )
 
     logger = Logger(cfg, args)
@@ -242,6 +246,13 @@ def train(args):
     if args.synthetic:
         print("Using synthetic data with patterns")
 
+    # Mixed precision
+    use_amp = cfg.use_amp and device.type == 'cuda'
+    scaler = GradScaler('cuda', enabled=use_amp)
+    amp_dtype = torch.float16 if use_amp else torch.float32
+    if use_amp:
+        print("Using mixed precision (AMP) training")
+
     model.train()
     optimizer.zero_grad()
     accum_loss = 0.0
@@ -259,14 +270,18 @@ def train(args):
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
             )
 
-        _, loss, _ = model(xb, yb)
-        loss = loss / cfg.grad_accum_steps
-        loss.backward()
+        with autocast('cuda', enabled=use_amp, dtype=amp_dtype):
+            _, loss, _ = model(xb, yb)
+            loss = loss / cfg.grad_accum_steps
+
+        scaler.scale(loss).backward()
         accum_loss += loss.item()
 
         if step % cfg.grad_accum_steps == 0:
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
 
         if step % cfg.log_every == 0:
@@ -282,7 +297,15 @@ def train(args):
 
         if step % cfg.val_every == 0:
             val_loss = estimate_val_loss(model, cfg, device, data_fn=data_fn)
-            logger.log({'val_loss': val_loss}, step)
+            metrics = {'val_loss': val_loss}
+            # Периодический анализ квантизации
+            if args.model == 'yijing' and hasattr(model, 'quantization_analytics'):
+                qa = model.quantization_analytics()
+                for layer_name, info in qa.items():
+                    for k, v in info.items():
+                        if isinstance(v, (int, float)):
+                            metrics[f'{layer_name}/{k}'] = v
+            logger.log(metrics, step)
 
         if step % cfg.save_every == 0:
             os.makedirs(args.checkpoint_dir, exist_ok=True)
@@ -338,6 +361,12 @@ def main():
     parser.add_argument('--tb-dir', type=str, default='runs')
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints')
     parser.add_argument('--resume', type=str, default=None)
+    parser.add_argument('--amp', action='store_true', default=False,
+                        help='Mixed precision training (requires CUDA)')
+    parser.add_argument('--gqa-heads', type=int, default=None,
+                        help='Number of KV heads for GQA (default: MHA)')
+    parser.add_argument('--sliding-window', type=int, default=None,
+                        help='Sliding window size for attention')
     args = parser.parse_args()
     train(args)
 

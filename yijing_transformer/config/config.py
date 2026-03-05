@@ -39,6 +39,11 @@ class YiJingConfig:
     ffn_multiplier: float = 4.0  # множитель для FFN hidden dim
     rope_base: float = 10000.0   # base для RoPE
 
+    # v5: GQA и sliding window
+    n_kv_heads: Optional[int] = None  # число KV голов для GQA (None = MHA)
+    sliding_window: Optional[int] = None  # размер окна sliding window attention
+    use_amp: bool = False        # mixed precision training (AMP)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

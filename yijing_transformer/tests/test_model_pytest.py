@@ -299,3 +299,95 @@ class TestV4Features:
         grads = sum(1 for p in model.parameters() if p.requires_grad and p.grad is not None)
         total = sum(1 for p in model.parameters() if p.requires_grad)
         assert grads > total * 0.9
+
+
+class TestV5Features:
+    """Тесты для v5: GQA, sliding window, quantization analytics."""
+
+    def test_gqa_forward(self):
+        """GQA с 2 KV головами из 8."""
+        cfg = make_cfg(n_kv_heads=2)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_gqa_with_targets(self):
+        cfg = make_cfg(n_kv_heads=4)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        assert loss.item() > 0
+
+    def test_gqa_kv_cache(self):
+        """GQA с KV-cache должен давать такие же результаты."""
+        cfg = make_cfg(n_kv_heads=2)
+        model = YiJingGPT(cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        logits_full, _, _ = model(x)
+        logits_prefix, _, kv = model(x[:, :6])
+        logits_suffix, _, _ = model(x[:, 6:], kv_cache=kv)
+        torch.testing.assert_close(
+            logits_full[:, -1, :], logits_suffix[:, -1, :], atol=1e-4, rtol=1e-4
+        )
+
+    def test_gqa_parameter_savings(self):
+        """GQA должен иметь меньше параметров чем MHA."""
+        cfg_mha = make_cfg(n_kv_heads=None)  # MHA: 8 KV heads
+        cfg_gqa = make_cfg(n_kv_heads=2)     # GQA: 2 KV heads
+        mha = YiJingGPT(cfg_mha)
+        gqa = YiJingGPT(cfg_gqa)
+        mha_total, _ = mha.count_parameters()
+        gqa_total, _ = gqa.count_parameters()
+        assert gqa_total < mha_total, f"GQA ({gqa_total}) should have fewer params than MHA ({mha_total})"
+
+    def test_sliding_window(self):
+        cfg = make_cfg(sliding_window=8)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_sliding_window_with_kv_cache(self):
+        cfg = make_cfg(sliding_window=8)
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = model.generate(idx, max_new_tokens=5, use_cache=True)
+        assert out.shape == (1, 9)
+
+    def test_gqa_vanilla(self):
+        """GQA в VanillaGPT baseline."""
+        cfg = make_cfg(n_kv_heads=2)
+        model = VanillaGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, _ = model(x)
+        assert logits.shape == (2, 8, cfg.vocab_size)
+
+    def test_quantization_analytics(self):
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        analytics = model.quantization_analytics()
+        assert len(analytics) == cfg.n_layers
+        for layer_name, info in analytics.items():
+            assert 'hex_scale' in info
+            assert 'quant_error' in info
+            assert 'quant_snr' in info
+            assert info['quant_error'] >= 0
+
+    def test_gqa_combined_features(self):
+        """GQA + sliding window + BianGua + все фичи вместе."""
+        cfg = make_cfg(
+            n_kv_heads=2, sliding_window=8,
+            use_bian_gua=True, use_rope=True, use_swiglu=True,
+        )
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        y = torch.randint(0, cfg.vocab_size, (2, 16))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        assert loss.item() > 0

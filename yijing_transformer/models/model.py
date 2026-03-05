@@ -2,8 +2,8 @@
 YiJing-Transformer: трансформер с геометрической регуляризацией
 на основе гиперкубов {-1,+1}^n (64 гексаграмм, 256 октограмм).
 
-v4: KV-cache, weight tying, Gumbel-Softmax, commitment loss,
-    multi-scale quantization, gradient checkpointing, mixed precision.
+v5: GQA (Grouped Query Attention), sliding window attention,
+    AMP support, quantization analytics.
 """
 
 import math
@@ -69,11 +69,14 @@ class YiJingAttention(nn.Module):
     """
     Multi-head attention с геометрическим bias из триграмм.
 
+    Поддерживает:
+    - GQA (Grouped Query Attention): n_kv_heads < n_heads
+    - Sliding window attention: ограничение контекста
+    - RoPE, FlashAttention, KV-cache
+
     Каждая из 8 голов получает направление одной из 8 триграмм.
     Bias — ранг-1 матрица (внешнее произведение проекций q и k на направление).
     Инициализация head_scales=0: модель начинает как стандартный трансформер.
-
-    Поддерживает: RoPE, FlashAttention.
     """
     def __init__(self, cfg):
         super().__init__()
@@ -83,8 +86,18 @@ class YiJingAttention(nn.Module):
         self.scale = 1.0 / math.sqrt(self.head_dim)
         self.use_rope = cfg.use_rope
         self.use_flash = cfg.use_flash_attn
+        self.sliding_window = cfg.sliding_window
 
-        self.qkv = nn.Linear(cfg.d_model, 3 * cfg.d_model, bias=cfg.bias)
+        # GQA: число KV голов (None = MHA, т.е. n_kv_heads = n_heads)
+        self.n_kv_heads = cfg.n_kv_heads if cfg.n_kv_heads is not None else cfg.n_heads
+        assert cfg.n_heads % self.n_kv_heads == 0, \
+            f"n_heads ({cfg.n_heads}) must be divisible by n_kv_heads ({self.n_kv_heads})"
+        self.n_rep = cfg.n_heads // self.n_kv_heads  # сколько раз повторять KV
+
+        # Раздельные проекции для GQA
+        self.q_proj = nn.Linear(cfg.d_model, cfg.n_heads * self.head_dim, bias=cfg.bias)
+        self.k_proj = nn.Linear(cfg.d_model, self.n_kv_heads * self.head_dim, bias=cfg.bias)
+        self.v_proj = nn.Linear(cfg.d_model, self.n_kv_heads * self.head_dim, bias=cfg.bias)
         self.out = nn.Linear(cfg.d_model, cfg.d_model, bias=cfg.bias)
         self.dropout = nn.Dropout(cfg.dropout)
 
@@ -100,43 +113,48 @@ class YiJingAttention(nn.Module):
         self.register_buffer('head_dirs', trigrams_norm[:cfg.n_heads])
         self.head_scales = nn.Parameter(torch.zeros(cfg.n_heads))
 
-        if not self.use_flash:
-            self.register_buffer(
-                "causal_mask",
-                torch.tril(torch.ones(1, 1, cfg.block_size, cfg.block_size))
-            )
+    def _repeat_kv(self, x):
+        """Повторяем KV головы для GQA: (B, n_kv_heads, T, D) -> (B, n_heads, T, D)."""
+        if self.n_rep == 1:
+            return x
+        B, H, T, D = x.shape
+        return x[:, :, None, :, :].expand(B, H, self.n_rep, T, D).reshape(B, H * self.n_rep, T, D)
 
     def forward(self, x, kv_cache=None):
         B, T, C = x.shape
-        qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.head_dim)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)  # each: (B, H, T, D)
+
+        # Раздельные проекции Q, K, V (для GQA)
+        q = self.q_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
 
         # Применяем RoPE (с учётом позиции при KV-cache)
         if self.use_rope:
             offset = 0
             if kv_cache is not None:
-                offset = kv_cache[0].size(2)  # длина кэшированных ключей
+                offset = kv_cache[0].size(2)
             cos, sin = self.rotary(T + offset)
-            # Для q — только текущие позиции
             q = apply_rotary_emb(q, cos[offset:offset+T], sin[offset:offset+T])
             k = apply_rotary_emb(k, cos[offset:offset+T], sin[offset:offset+T])
 
-        # KV-cache: конкатенируем с кэшированными k, v
+        # KV-cache: сохраняем/конкатенируем (до repeat для GQA — экономим память)
         new_kv_cache = (k, v)
         if kv_cache is not None:
             k = torch.cat([kv_cache[0], k], dim=2)
             v = torch.cat([kv_cache[1], v], dim=2)
 
-        S = k.size(2)  # полная длина последовательности (с кэшем)
+        # GQA: повторяем KV головы до n_heads
+        k = self._repeat_kv(k)
+        v = self._repeat_kv(v)
+
+        S = k.size(2)  # полная длина (с кэшем)
 
         if self.use_flash and hasattr(F, 'scaled_dot_product_attention') and kv_cache is None:
-            # SDPA только без кэша (is_causal=True не работает с разными размерами q/k)
             out = F.scaled_dot_product_attention(
                 q, k, v, is_causal=True, dropout_p=self.dropout.p if self.training else 0.0
             )
 
-            # Геометрический bias (добавляем к результату, а не к scores)
+            # Геометрический bias
             if self.head_dim >= 3:
                 q3, k3 = q[..., :3], k[..., :3]
                 q_proj = torch.einsum('bhtd,hd->bht', q3, self.head_dirs)
@@ -153,10 +171,19 @@ class YiJingAttention(nn.Module):
                 out = out + scales * (geo_out - out).detach()
         else:
             scores = (q @ k.transpose(-2, -1)) * self.scale
-            # Causal mask с учётом разных размеров q и k при KV-cache
+
+            # Causal mask с учётом KV-cache
             causal = torch.tril(torch.ones(S, S, device=x.device))
-            # Берём только строки, соответствующие текущим позициям
-            causal = causal[S-T:S, :S].unsqueeze(0).unsqueeze(0)
+            causal = causal[S-T:S, :S]
+
+            # Sliding window: маскируем всё за пределами окна
+            if self.sliding_window is not None:
+                for i in range(T):
+                    pos = S - T + i  # абсолютная позиция в последовательности
+                    window_start = max(0, pos - self.sliding_window + 1)
+                    causal[i, :window_start] = 0.0
+
+            causal = causal.unsqueeze(0).unsqueeze(0)
             scores = scores.masked_fill(causal == 0, float('-inf'))
 
             # Геометрический bias из триграмм
@@ -401,3 +428,47 @@ class YiJingGPT(nn.Module):
             if any(k in name for k in hex_keys):
                 hex_params += p.numel()
         return total, hex_params
+
+    @torch.no_grad()
+    def quantization_analytics(self):
+        """Анализ квантизации по всем слоям: расстояние до кодбука, использование кодовых слов."""
+        analytics = {}
+        x_probe = torch.randn(1, 16, self.cfg.d_model, device=next(self.parameters()).device)
+
+        for i, layer in enumerate(self.core.layers):
+            info = {
+                'hex_scale': layer.hex_scale.item(),
+                'quant_dim': layer.quant_dim,
+            }
+
+            # Пропускаем через проекцию и квантизатор
+            h = layer.ln_hex(x_probe)
+            zq = layer.to_qd(h)
+            zq_out = layer.quantizer(zq)
+
+            # Расстояние до кодбука (мера "жёсткости" квантизации)
+            info['quant_error'] = (zq - zq_out).pow(2).mean().item()
+            info['quant_snr'] = (zq_out.pow(2).mean() / (zq - zq_out).pow(2).mean().clamp(min=1e-8)).item()
+
+            # Температура квантизатора
+            if hasattr(layer.quantizer, 'current_temp'):
+                temp = layer.quantizer.current_temp
+                info['temp'] = temp.item() if isinstance(temp, torch.Tensor) else temp
+
+            # GQA info
+            info['n_kv_heads'] = layer.attn.n_kv_heads
+            info['n_rep'] = layer.attn.n_rep
+
+            # Commitment loss
+            if hasattr(layer.quantizer, 'get_commitment_loss'):
+                info['commitment_loss'] = layer.quantizer.get_commitment_loss().item()
+
+            # BianGua stats
+            if layer.bian_gua is not None:
+                probs = torch.sigmoid(layer.bian_gua.change_logits)
+                info['bian_gua_scale'] = layer.bian_gua.scale.item()
+                info['active_lines'] = (probs > 0.5).sum().item()
+
+            analytics[f'layer_{i}'] = info
+
+        return analytics
