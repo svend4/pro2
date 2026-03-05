@@ -2678,3 +2678,227 @@ class TestV14Integration:
         loss.backward()
         # Lambda gradients exist
         assert da.lambda_init.grad is not None
+
+
+# ==================== V15 TESTS ====================
+
+class TestV15ExpertChoice:
+    """Тесты для Expert Choice MoE routing."""
+
+    def test_forward_shape(self):
+        from models.expert_choice import ExpertChoiceRouter
+        ec = ExpertChoiceRouter(d_model=64, n_experts=4, capacity_factor=1.0)
+        x = torch.randn(2, 16, 64)
+        out, info = ec(x)
+        assert out.shape == (2, 16, 64)
+
+    def test_backward(self):
+        from models.expert_choice import ExpertChoiceRouter
+        ec = ExpertChoiceRouter(d_model=64, n_experts=4)
+        x = torch.randn(2, 8, 64, requires_grad=True)
+        out, _ = ec(x)
+        out.sum().backward()
+        assert x.grad is not None
+
+    def test_aux_info(self):
+        from models.expert_choice import ExpertChoiceRouter
+        ec = ExpertChoiceRouter(d_model=64, n_experts=4, capacity_factor=1.0)
+        x = torch.randn(2, 16, 64)
+        _, info = ec(x)
+        assert 'tokens_per_expert' in info
+        assert info['tokens_per_expert'] >= 1
+
+    def test_load_balance(self):
+        from models.expert_choice import ExpertChoiceRouter
+        ec = ExpertChoiceRouter(d_model=64, n_experts=4, capacity_factor=1.0)
+        x = torch.randn(1, 16, 64)
+        _, info = ec(x)
+        assert info['tokens_per_expert'] == 4  # 16 * 1.0 / 4
+
+
+class TestV15CrossLayerSharing:
+    """Тесты для cross-layer parameter sharing."""
+
+    def test_shared_layer_forward(self):
+        from models.expert_choice import SharedTransformerLayer
+        from models.model import YiJingTransformerLayer
+        cfg = make_cfg()
+        layer = YiJingTransformerLayer(cfg)
+        shared = SharedTransformerLayer(layer, n_virtual_layers=4, share_ln=True)
+        x = torch.randn(1, 8, cfg.d_model)
+        out, _ = shared(x, virtual_layer_idx=0)
+        assert out.shape == x.shape
+
+    def test_different_ln(self):
+        from models.expert_choice import SharedTransformerLayer
+        from models.model import YiJingTransformerLayer
+        cfg = make_cfg()
+        layer = YiJingTransformerLayer(cfg)
+        shared = SharedTransformerLayer(
+            layer, n_virtual_layers=3, share_ln=False, d_model=cfg.d_model
+        )
+        assert len(shared.layer_norms_attn) == 3
+
+    def test_parameter_savings(self):
+        from models.expert_choice import SharedTransformerLayer
+        from models.model import YiJingTransformerLayer
+        cfg = make_cfg()
+        layer = YiJingTransformerLayer(cfg)
+        params = sum(p.numel() for p in layer.parameters())
+        shared = SharedTransformerLayer(
+            layer, n_virtual_layers=6, share_ln=False, d_model=cfg.d_model
+        )
+        savings = shared.parameter_savings(params)
+        assert savings['compression_ratio'] > 1.0
+        assert savings['savings_pct'] > 50
+
+
+class TestV15ZLoss:
+    """Тесты для Z-Loss."""
+
+    def test_z_loss_positive(self):
+        from training.utils_v15 import z_loss
+        logits = torch.randn(4, 16, 100)
+        assert z_loss(logits).item() >= 0
+
+    def test_z_loss_scales(self):
+        from training.utils_v15 import z_loss
+        small = torch.randn(4, 16, 100)
+        big = small * 10
+        assert z_loss(big).item() > z_loss(small).item()
+
+    def test_z_loss_gradient(self):
+        from training.utils_v15 import z_loss
+        logits = torch.randn(2, 8, 50, requires_grad=True)
+        z_loss(logits).backward()
+        assert logits.grad is not None
+
+    def test_compute_loss_with_z(self):
+        from training.utils_v15 import compute_loss_with_z
+        logits = torch.randn(2, 8, 100)
+        targets = torch.randint(0, 100, (2, 8))
+        total, ce, zl = compute_loss_with_z(logits, targets, z_weight=1e-4)
+        assert total.item() >= ce.item()
+
+    def test_z_weight_zero(self):
+        from training.utils_v15 import compute_loss_with_z
+        logits = torch.randn(2, 8, 100)
+        targets = torch.randint(0, 100, (2, 8))
+        total, ce, zl = compute_loss_with_z(logits, targets, z_weight=0)
+        assert abs(total.item() - ce.item()) < 1e-6
+
+
+class TestV15GradAccumProfiler:
+    """Тесты для Gradient Accumulation Profiler."""
+
+    def test_basic_profiling(self):
+        from training.utils_v15 import GradAccumProfiler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        profiler = GradAccumProfiler(model, grad_accum_steps=4)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        for _ in range(4):
+            x = torch.randint(0, cfg.vocab_size, (2, 8))
+            y = torch.randint(0, cfg.vocab_size, (2, 8))
+            _, loss, _ = model(x, y)
+            (loss / 4).backward()
+            profiler.log_micro_step()
+        profiler.log_optimizer_step(step=1)
+        opt.step()
+        opt.zero_grad()
+        stats = profiler.get_stats()
+        assert stats['n_steps'] == 1
+        assert stats['avg_accumulated_norm'] > 0
+
+    def test_empty_stats(self):
+        from training.utils_v15 import GradAccumProfiler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        profiler = GradAccumProfiler(model)
+        assert profiler.get_stats()['n_steps'] == 0
+
+
+class TestV15VocabExpansion:
+    """Тесты для vocab expansion."""
+
+    def test_expand_mean(self):
+        from training.utils_v15 import expand_vocab
+        cfg = make_cfg(vocab_size=128)
+        model = YiJingGPT(cfg)
+        old_emb = model.tok_emb.weight.data[:128].clone()
+        model = expand_vocab(model, new_vocab_size=200, init_method='mean')
+        assert model.cfg.vocab_size == 200
+        assert torch.equal(model.tok_emb.weight.data[:128], old_emb)
+
+    def test_expand_forward(self):
+        from training.utils_v15 import expand_vocab
+        cfg = make_cfg(vocab_size=128)
+        model = YiJingGPT(cfg)
+        model = expand_vocab(model, new_vocab_size=200)
+        x = torch.randint(0, 200, (1, 8))
+        logits, _, _ = model(x)
+        assert logits.shape == (1, 8, 200)
+
+    def test_expand_backward(self):
+        from training.utils_v15 import expand_vocab
+        cfg = make_cfg(vocab_size=128)
+        model = YiJingGPT(cfg)
+        model = expand_vocab(model, new_vocab_size=200)
+        x = torch.randint(0, 200, (2, 8))
+        y = torch.randint(0, 200, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+    def test_shrink_vocab(self):
+        from training.utils_v15 import shrink_vocab
+        cfg = make_cfg(vocab_size=200)
+        model = YiJingGPT(cfg)
+        model = shrink_vocab(model, new_vocab_size=100)
+        assert model.cfg.vocab_size == 100
+        x = torch.randint(0, 100, (1, 8))
+        logits, _, _ = model(x)
+        assert logits.shape == (1, 8, 100)
+
+    def test_expand_weight_tying(self):
+        from training.utils_v15 import expand_vocab
+        cfg = make_cfg(vocab_size=128, weight_tying=True)
+        model = YiJingGPT(cfg)
+        model = expand_vocab(model, new_vocab_size=200)
+        assert model.head.weight is model.tok_emb.weight
+
+
+class TestV15Integration:
+    """Интеграционные тесты v15."""
+
+    def test_expert_choice_training(self):
+        from models.expert_choice import ExpertChoiceRouter
+        ec = ExpertChoiceRouter(d_model=64, n_experts=4)
+        opt = torch.optim.Adam(ec.parameters(), lr=1e-3)
+        for _ in range(3):
+            x = torch.randn(2, 8, 64)
+            out, _ = ec(x)
+            out.sum().backward()
+            opt.step()
+            opt.zero_grad()
+
+    def test_z_loss_in_model(self):
+        from training.utils_v15 import z_loss
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, ce_loss, _ = model(x, y)
+        total = ce_loss + z_loss(logits)
+        total.backward()
+
+    def test_expand_then_train(self):
+        from training.utils_v15 import expand_vocab
+        cfg = make_cfg(vocab_size=128)
+        model = YiJingGPT(cfg)
+        model = expand_vocab(model, new_vocab_size=160)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, 160, (2, 8))
+        y = torch.randint(0, 160, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        opt.step()
