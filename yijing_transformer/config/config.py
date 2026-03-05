@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -15,6 +16,19 @@ class YiJingConfig:
     hex_strength: float = 0.01   # масштаб вклада гексаграммной ветки
     temp: float = 0.3            # температура квантизации (мягче, чем E8: 0.1)
     use_bian_gua: bool = True    # использовать 变卦 трансформацию
+    adaptive_temp: bool = True   # обучаемая температура квантизации
+
+    # Архитектурные расширения
+    use_rope: bool = True        # Rotary Position Embeddings
+    use_swiglu: bool = True      # SwiGLU вместо GELU FFN
+    use_flash_attn: bool = False # FlashAttention (требует flash-attn)
+    ffn_multiplier: float = 4.0  # множитель для FFN hidden dim
+    rope_base: float = 10000.0   # base для RoPE
+
+    # MoE на гексаграммах
+    use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
+    moe_top_k: int = 2           # сколько экспертов активировать
+    n_experts: int = 8           # число экспертов (= число триграмм)
 
     # Обучение
     lr: float = 3e-4
@@ -24,3 +38,26 @@ class YiJingConfig:
     total_steps: int = 50000
     weight_decay: float = 0.1
     max_grad_norm: float = 1.0
+
+    # Логирование
+    log_every: int = 100
+    save_every: int = 2000
+    val_every: int = 500
+    use_wandb: bool = False
+    use_tensorboard: bool = False
+    project_name: str = "yijing-transformer"
+    run_name: Optional[str] = None
+
+    @property
+    def head_dim(self):
+        return self.d_model // self.n_heads
+
+    @property
+    def ffn_hidden(self):
+        h = int(self.d_model * self.ffn_multiplier)
+        # SwiGLU использует 2/3 от стандартного hidden для той же параметрики
+        if self.use_swiglu:
+            h = int(h * 2 / 3)
+            # Округление до кратного 8 для эффективности
+            h = ((h + 7) // 8) * 8
+        return h

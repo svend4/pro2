@@ -1,3 +1,7 @@
 torch>=2.0.0
 sentencepiece
 datasets
+pytest
+matplotlib
+wandb          # optional: experiment tracking
+tensorboard    # optional: local logging

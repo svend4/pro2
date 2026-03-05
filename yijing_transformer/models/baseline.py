@@ -1,12 +1,15 @@
 """
 Vanilla Transformer baseline — для честного сравнения.
 Та же архитектура, что YiJingGPT, но без геометрических компонентов.
+Поддерживает RoPE и SwiGLU для честного A/B сравнения.
 """
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from .geometry import RotaryEmbedding, apply_rotary_emb, SwiGLU
 
 
 class VanillaAttention(nn.Module):
@@ -16,9 +19,16 @@ class VanillaAttention(nn.Module):
         self.n_heads = cfg.n_heads
         self.head_dim = cfg.d_model // cfg.n_heads
         self.scale = 1.0 / math.sqrt(self.head_dim)
+        self.use_rope = cfg.use_rope
         self.qkv = nn.Linear(cfg.d_model, 3 * cfg.d_model, bias=cfg.bias)
         self.out = nn.Linear(cfg.d_model, cfg.d_model, bias=cfg.bias)
         self.dropout = nn.Dropout(cfg.dropout)
+
+        if self.use_rope:
+            self.rotary = RotaryEmbedding(
+                self.head_dim, max_seq_len=cfg.block_size, base=cfg.rope_base
+            )
+
         self.register_buffer(
             "causal_mask",
             torch.tril(torch.ones(1, 1, cfg.block_size, cfg.block_size))
@@ -29,6 +39,12 @@ class VanillaAttention(nn.Module):
         qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
+
+        if self.use_rope:
+            cos, sin = self.rotary(T)
+            q = apply_rotary_emb(q, cos, sin)
+            k = apply_rotary_emb(k, cos, sin)
+
         scores = (q @ k.transpose(-2, -1)) * self.scale
         scores = scores.masked_fill(
             self.causal_mask[:, :, :T, :T] == 0, float('-inf')
@@ -45,12 +61,16 @@ class VanillaTransformerLayer(nn.Module):
         self.ln_attn = nn.LayerNorm(cfg.d_model)
         self.attn = VanillaAttention(cfg)
         self.ln_ffn = nn.LayerNorm(cfg.d_model)
-        self.ffn = nn.Sequential(
-            nn.Linear(cfg.d_model, 4 * cfg.d_model),
-            nn.GELU(),
-            nn.Linear(4 * cfg.d_model, cfg.d_model),
-            nn.Dropout(cfg.dropout),
-        )
+
+        if cfg.use_swiglu:
+            self.ffn = SwiGLU(cfg.d_model, cfg.ffn_hidden, cfg.dropout)
+        else:
+            self.ffn = nn.Sequential(
+                nn.Linear(cfg.d_model, cfg.ffn_hidden),
+                nn.GELU(),
+                nn.Linear(cfg.ffn_hidden, cfg.d_model),
+                nn.Dropout(cfg.dropout),
+            )
 
     def forward(self, x):
         x = x + self.attn(self.ln_attn(x))
@@ -63,7 +83,12 @@ class VanillaGPT(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        self.pos_emb = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
+
+        if not cfg.use_rope:
+            self.pos_emb = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
+        else:
+            self.pos_emb = None
+
         self.layers = nn.ModuleList(
             [VanillaTransformerLayer(cfg) for _ in range(cfg.n_layers)]
         )
@@ -81,7 +106,9 @@ class VanillaGPT(nn.Module):
 
     def forward(self, idx, targets=None):
         b, t = idx.size()
-        x = self.tok_emb(idx) + self.pos_emb[:, :t, :]
+        x = self.tok_emb(idx)
+        if self.pos_emb is not None:
+            x = x + self.pos_emb[:, :t, :]
         for layer in self.layers:
             x = layer(x)
         x = self.final_norm(x)
@@ -89,8 +116,8 @@ class VanillaGPT(nn.Module):
         loss = None
         if targets is not None:
             loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                targets.view(-1),
+                logits.reshape(-1, logits.size(-1)),
+                targets.reshape(-1),
             )
         return logits, loss
 
