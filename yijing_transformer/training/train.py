@@ -131,7 +131,7 @@ def estimate_val_loss(model, cfg, device, num_batches=20, data_fn=None):
             xb, yb = generate_synthetic_batch(
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
             )
-        _, loss = model(xb, yb)
+        _, loss, _ = model(xb, yb)
         losses.append(loss.item())
     model.train()
     return sum(losses) / len(losses) if losses else float('nan')
@@ -259,7 +259,7 @@ def train(args):
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
             )
 
-        _, loss = model(xb, yb)
+        _, loss, _ = model(xb, yb)
         loss = loss / cfg.grad_accum_steps
         loss.backward()
         accum_loss += loss.item()

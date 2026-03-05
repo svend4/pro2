@@ -23,7 +23,7 @@ def generate(model, sp, prompt="Once upon a time", max_tokens=100,
 
     for _ in range(max_tokens):
         idx_cond = context[:, -block_size:]
-        logits, _ = model(idx_cond)
+        logits, _, _ = model(idx_cond)
         logits = logits[0, -1, :].clone()
 
         # Repetition penalty

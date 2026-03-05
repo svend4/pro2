@@ -463,6 +463,78 @@ class DeformableQuantizer(nn.Module):
         }
 
 
+class GumbelQuantizer(nn.Module):
+    """
+    Gumbel-Softmax квантизация к вершинам гиперкуба.
+
+    Вместо soft attention по расстояниям используем Gumbel-Softmax
+    для дискретного выбора ближайшей вершины. При обучении —
+    дифференцируемое приближение, при инференсе — hard argmax.
+
+    Поддерживает commitment loss: ||x - sg(quantized)||² + β·||sg(x) - quantized||²
+    """
+    def __init__(self, total_dim: int, group_dim: int = 3,
+                 temp: float = 1.0, hard: bool = False,
+                 commitment_weight: float = 0.25):
+        super().__init__()
+        assert total_dim % group_dim == 0
+        self.total_dim = total_dim
+        self.group_dim = group_dim
+        self.n_groups = total_dim // group_dim
+        self.n_codewords = 2 ** group_dim
+        self.hard = hard
+        self.commitment_weight = commitment_weight
+
+        # Лог-температура (обучаемая)
+        self.log_temp = nn.Parameter(torch.tensor(temp).log())
+
+        codebook = generate_hypercube(group_dim)
+        self.register_buffer('codebook', codebook)
+        self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
+
+        # Для commitment loss
+        self._commitment_loss = torch.tensor(0.0)
+
+    @property
+    def current_temp(self):
+        return self.log_temp.exp().clamp(min=0.05, max=5.0)
+
+    def forward(self, x):
+        shape = x.shape[:-1]
+        groups = x.reshape(*shape, self.n_groups, self.group_dim)  # (..., G, K)
+
+        # Расстояния до кодовых слов
+        z_norm_sq = (groups * groups).sum(dim=-1, keepdim=True)
+        cross = groups @ self.codebook.T
+        dists_sq = z_norm_sq - 2 * cross + self.codebook_norm_sq
+        logits = -dists_sq  # (..., G, 2^K)
+
+        # Gumbel-Softmax
+        if self.training:
+            weights = F.gumbel_softmax(logits, tau=self.current_temp, hard=self.hard)
+        else:
+            # Hard argmax при инференсе
+            idx = logits.argmax(dim=-1)  # (..., G)
+            weights = F.one_hot(idx, self.n_codewords).float()
+
+        quantized_groups = weights @ self.codebook  # (..., G, K)
+        quantized = quantized_groups.reshape(*shape, self.total_dim)
+
+        # Commitment loss
+        if self.training and self.commitment_weight > 0:
+            self._commitment_loss = (
+                (x.detach() - quantized).pow(2).mean()
+                + self.commitment_weight * (x - quantized.detach()).pow(2).mean()
+            )
+        else:
+            self._commitment_loss = torch.tensor(0.0, device=x.device)
+
+        return quantized
+
+    def get_commitment_loss(self):
+        return self._commitment_loss
+
+
 # ==================== ГЕКСАГРАММНЫЙ ATTENTION PATTERN ====================
 
 class HexagramAttentionPattern(nn.Module):

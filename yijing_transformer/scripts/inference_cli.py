@@ -56,7 +56,7 @@ def generate_interactive(model, tokenizer, cfg, device,
         generated = []
         for _ in range(max_tokens):
             idx_cond = context[:, -cfg.block_size:]
-            logits, _ = model(idx_cond)
+            logits, _, _ = model(idx_cond)
             logits = logits[0, -1, :].clone()
 
             # Repetition penalty

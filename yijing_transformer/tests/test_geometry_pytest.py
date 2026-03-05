@@ -18,6 +18,7 @@ from models.geometry import (
     FactoredYiJingQuantizer,
     HierarchicalQuantizer,
     DeformableQuantizer,
+    GumbelQuantizer,
     HexagramAttentionPattern,
     BianGuaTransform,
     RotaryEmbedding,
@@ -401,3 +402,62 @@ class TestCharTokenizer:
         ids = tok.encode("abc")
         decoded = tok.decode(ids)
         assert decoded == "abc"
+
+
+class TestGumbelQuantizer:
+    """Тесты Gumbel-Softmax квантизатора."""
+
+    def test_output_shape(self):
+        gq = GumbelQuantizer(total_dim=6, group_dim=3)
+        x = torch.randn(4, 16, 6)
+        out = gq(x)
+        assert out.shape == x.shape
+
+    def test_training_mode(self):
+        gq = GumbelQuantizer(total_dim=6, group_dim=3)
+        gq.train()
+        x = torch.randn(4, 8, 6, requires_grad=True)
+        out = gq(x)
+        loss = out.sum()
+        loss.backward()
+        assert x.grad is not None
+
+    def test_eval_mode_hard(self):
+        """В eval режиме должен выдавать точки кодбука."""
+        gq = GumbelQuantizer(total_dim=6, group_dim=3)
+        gq.eval()
+        x = torch.randn(2, 4, 6)
+        out = gq(x)
+        # Каждая тройка координат должна быть ±1
+        for i in range(2):
+            upper = out[..., :3]
+            lower = out[..., 3:]
+            assert torch.all(upper.abs() == 1.0)
+            assert torch.all(lower.abs() == 1.0)
+
+    def test_commitment_loss_nonzero(self):
+        gq = GumbelQuantizer(total_dim=6, group_dim=3, commitment_weight=0.5)
+        gq.train()
+        x = torch.randn(2, 4, 6)
+        gq(x)
+        cl = gq.get_commitment_loss()
+        assert cl.item() > 0
+
+    def test_commitment_loss_zero_in_eval(self):
+        gq = GumbelQuantizer(total_dim=6, group_dim=3, commitment_weight=0.5)
+        gq.eval()
+        x = torch.randn(2, 4, 6)
+        gq(x)
+        cl = gq.get_commitment_loss()
+        assert cl.item() == 0.0
+
+    def test_8d_octogram(self):
+        gq = GumbelQuantizer(total_dim=8, group_dim=4)
+        x = torch.randn(2, 4, 8)
+        out = gq(x)
+        assert out.shape == (2, 4, 8)
+
+    def test_learnable_temperature(self):
+        gq = GumbelQuantizer(total_dim=6, group_dim=3, temp=1.0)
+        assert hasattr(gq, 'log_temp')
+        assert gq.current_temp.item() > 0

@@ -10,6 +10,7 @@ from .geometry import (
     FactoredYiJingQuantizer,
     HierarchicalQuantizer,
     DeformableQuantizer,
+    GumbelQuantizer,
     HexagramAttentionPattern,
     RotaryEmbedding,
     SwiGLU,

@@ -62,7 +62,7 @@ def train_model(model, name, cfg, steps, device):
             pg['lr'] = lr
 
         x, y = generate_synthetic_batch(cfg.batch_size, cfg.block_size, cfg.vocab_size, device)
-        _, loss = model(x, y)
+        _, loss, _ = model(x, y)
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

@@ -24,6 +24,14 @@ class YiJingConfig:
     quant_group_dim: int = 3     # размерность группы для иерархической квант.
     use_hex_attn_pattern: bool = False  # гексаграммные паттерны attention
 
+    # v4: новые параметры
+    weight_tying: bool = True    # разделять веса tok_emb и head
+    use_gumbel: bool = False     # Gumbel-Softmax вместо soft quantization
+    commitment_weight: float = 0.25  # вес commitment loss
+    use_gradient_ckpt: bool = False  # gradient checkpointing
+    multi_scale_quant: bool = False  # разная размерность квантизации по слоям
+    quant_dim_schedule: Optional[list] = None  # [6, 6, 8, 8, ...] размерности по слоям
+
     # Архитектурные расширения
     use_rope: bool = True        # Rotary Position Embeddings
     use_swiglu: bool = True      # SwiGLU вместо GELU FFN

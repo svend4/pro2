@@ -2,20 +2,22 @@
 YiJing-Transformer: трансформер с геометрической регуляризацией
 на основе гиперкубов {-1,+1}^n (64 гексаграмм, 256 октограмм).
 
-v3: RoPE, SwiGLU, адаптивная температура, MoE на триграммах, FlashAttention,
-    иерархическая/деформируемая квантизация, октограммы, гексаграммные attention паттерны.
+v4: KV-cache, weight tying, Gumbel-Softmax, commitment loss,
+    multi-scale quantization, gradient checkpointing, mixed precision.
 """
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as grad_checkpoint
 
 from .geometry import (
     get_trigrams,
     FactoredYiJingQuantizer,
     HierarchicalQuantizer,
     DeformableQuantizer,
+    GumbelQuantizer,
     BianGuaTransform,
     HexagramAttentionPattern,
     RotaryEmbedding,
@@ -50,6 +52,14 @@ def build_quantizer(cfg):
             total_dim=cfg.quant_total_dim,
             group_dim=cfg.quant_group_dim,
             temp=cfg.temp,
+        )
+    elif cfg.quantizer_type == 'gumbel':
+        return GumbelQuantizer(
+            total_dim=cfg.quant_total_dim,
+            group_dim=cfg.quant_group_dim,
+            temp=cfg.temp,
+            hard=cfg.use_gumbel,
+            commitment_weight=cfg.commitment_weight,
         )
     else:
         raise ValueError(f"Unknown quantizer_type: {cfg.quantizer_type}")
@@ -96,20 +106,32 @@ class YiJingAttention(nn.Module):
                 torch.tril(torch.ones(1, 1, cfg.block_size, cfg.block_size))
             )
 
-    def forward(self, x):
+    def forward(self, x, kv_cache=None):
         B, T, C = x.shape
         qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)  # each: (B, H, T, D)
 
-        # Применяем RoPE
+        # Применяем RoPE (с учётом позиции при KV-cache)
         if self.use_rope:
-            cos, sin = self.rotary(T)
-            q = apply_rotary_emb(q, cos, sin)
-            k = apply_rotary_emb(k, cos, sin)
+            offset = 0
+            if kv_cache is not None:
+                offset = kv_cache[0].size(2)  # длина кэшированных ключей
+            cos, sin = self.rotary(T + offset)
+            # Для q — только текущие позиции
+            q = apply_rotary_emb(q, cos[offset:offset+T], sin[offset:offset+T])
+            k = apply_rotary_emb(k, cos[offset:offset+T], sin[offset:offset+T])
 
-        if self.use_flash and hasattr(F, 'scaled_dot_product_attention'):
-            # PyTorch 2.0+ SDPA (включает FlashAttention v2 на CUDA)
+        # KV-cache: конкатенируем с кэшированными k, v
+        new_kv_cache = (k, v)
+        if kv_cache is not None:
+            k = torch.cat([kv_cache[0], k], dim=2)
+            v = torch.cat([kv_cache[1], v], dim=2)
+
+        S = k.size(2)  # полная длина последовательности (с кэшем)
+
+        if self.use_flash and hasattr(F, 'scaled_dot_product_attention') and kv_cache is None:
+            # SDPA только без кэша (is_causal=True не работает с разными размерами q/k)
             out = F.scaled_dot_product_attention(
                 q, k, v, is_causal=True, dropout_p=self.dropout.p if self.training else 0.0
             )
@@ -120,7 +142,6 @@ class YiJingAttention(nn.Module):
                 q_proj = torch.einsum('bhtd,hd->bht', q3, self.head_dirs)
                 k_proj = torch.einsum('bhtd,hd->bht', k3, self.head_dirs)
                 geo_correction = q_proj.unsqueeze(-1) * k_proj.unsqueeze(-2)
-                # Causal mask
                 causal = torch.tril(torch.ones(T, T, device=x.device, dtype=torch.bool))
                 geo_correction = geo_correction.masked_fill(~causal, 0.0)
                 geo_attn = F.softmax(
@@ -129,12 +150,14 @@ class YiJingAttention(nn.Module):
                 )
                 geo_out = geo_attn @ v
                 scales = self.head_scales.view(1, -1, 1, 1)
-                out = out + scales * (geo_out - out).detach()  # мягкая коррекция
+                out = out + scales * (geo_out - out).detach()
         else:
             scores = (q @ k.transpose(-2, -1)) * self.scale
-            scores = scores.masked_fill(
-                self.causal_mask[:, :, :T, :T] == 0, float('-inf')
-            )
+            # Causal mask с учётом разных размеров q и k при KV-cache
+            causal = torch.tril(torch.ones(S, S, device=x.device))
+            # Берём только строки, соответствующие текущим позициям
+            causal = causal[S-T:S, :S].unsqueeze(0).unsqueeze(0)
+            scores = scores.masked_fill(causal == 0, float('-inf'))
 
             # Геометрический bias из триграмм
             if self.head_dim >= 3:
@@ -150,7 +173,7 @@ class YiJingAttention(nn.Module):
             out = attn @ v
 
         out = out.transpose(1, 2).reshape(B, T, C)
-        return self.out(out)
+        return self.out(out), new_kv_cache
 
 
 class YiJingTransformerLayer(nn.Module):
@@ -162,18 +185,27 @@ class YiJingTransformerLayer(nn.Module):
     3. 变卦 трансформация (опционально)
     4. FFN (SwiGLU или GELU) или MoE на триграммах
     """
-    def __init__(self, cfg):
+    def __init__(self, cfg, layer_quant_dim=None):
         super().__init__()
         # Attention
         self.ln_attn = nn.LayerNorm(cfg.d_model)
         self.attn = YiJingAttention(cfg)
 
         # Квантизация к вершинам гиперкуба (bottleneck)
-        self.quant_dim = cfg.quant_total_dim
+        # Multi-scale: layer_quant_dim overrides cfg.quant_total_dim
+        quant_dim = layer_quant_dim if layer_quant_dim is not None else cfg.quant_total_dim
+        self.quant_dim = quant_dim
         self.ln_hex = nn.LayerNorm(cfg.d_model)
-        self.to_qd = nn.Linear(cfg.d_model, self.quant_dim, bias=False)
-        self.from_qd = nn.Linear(self.quant_dim, cfg.d_model, bias=False)
-        self.quantizer = build_quantizer(cfg)
+        self.to_qd = nn.Linear(cfg.d_model, quant_dim, bias=False)
+        self.from_qd = nn.Linear(quant_dim, cfg.d_model, bias=False)
+
+        # Для multi-scale: создаём временный cfg с правильным quant_total_dim
+        if layer_quant_dim is not None and layer_quant_dim != cfg.quant_total_dim:
+            from dataclasses import replace
+            layer_cfg = replace(cfg, quant_total_dim=quant_dim)
+            self.quantizer = build_quantizer(layer_cfg)
+        else:
+            self.quantizer = build_quantizer(cfg)
         self.hex_scale = nn.Parameter(torch.tensor(cfg.hex_strength))
 
         # 变卦 (трансформация гексаграмм)
@@ -204,9 +236,10 @@ class YiJingTransformerLayer(nn.Module):
                 nn.Dropout(cfg.dropout),
             )
 
-    def forward(self, x):
-        # 1. Attention с триграммным bias
-        x = x + self.attn(self.ln_attn(x))
+    def forward(self, x, kv_cache=None):
+        # 1. Attention с триграммным bias (+ KV-cache)
+        attn_out, new_kv = self.attn(self.ln_attn(x), kv_cache=kv_cache)
+        x = x + attn_out
 
         # 2. Квантизация к вершинам гиперкуба
         h = self.ln_hex(x)
@@ -231,7 +264,7 @@ class YiJingTransformerLayer(nn.Module):
             x = x + self.ffn(h_ffn)
             self._aux_loss = 0.0
 
-        return x
+        return x, new_kv
 
 
 class YiJingTransformer(nn.Module):
@@ -239,21 +272,43 @@ class YiJingTransformer(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.layers = nn.ModuleList(
-            [YiJingTransformerLayer(cfg) for _ in range(cfg.n_layers)]
-        )
+
+        # Multi-scale quantization: разная размерность по слоям
+        if cfg.multi_scale_quant and cfg.quant_dim_schedule is not None:
+            assert len(cfg.quant_dim_schedule) == cfg.n_layers, \
+                f"quant_dim_schedule length {len(cfg.quant_dim_schedule)} != n_layers {cfg.n_layers}"
+            self.layers = nn.ModuleList([
+                YiJingTransformerLayer(cfg, layer_quant_dim=dim)
+                for dim in cfg.quant_dim_schedule
+            ])
+        else:
+            self.layers = nn.ModuleList(
+                [YiJingTransformerLayer(cfg) for _ in range(cfg.n_layers)]
+            )
         self.final_norm = nn.LayerNorm(cfg.d_model)
 
-    def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
-        return self.final_norm(x)
+    def forward(self, x, kv_cache=None):
+        new_kv_cache = []
+        for i, layer in enumerate(self.layers):
+            layer_cache = kv_cache[i] if kv_cache is not None else None
+            if self.cfg.use_gradient_ckpt and self.training and kv_cache is None:
+                # Gradient checkpointing (только при обучении без KV-cache)
+                x, new_kv = grad_checkpoint(
+                    layer, x, layer_cache, use_reentrant=False
+                )
+            else:
+                x, new_kv = layer(x, kv_cache=layer_cache)
+            new_kv_cache.append(new_kv)
+        return self.final_norm(x), new_kv_cache
 
     def get_aux_loss(self):
-        """Собирает aux loss со всех MoE слоёв."""
+        """Собирает aux loss со всех MoE слоёв + commitment loss."""
         total = 0.0
         for layer in self.layers:
             total = total + layer._aux_loss
+            # Commitment loss от Gumbel квантизатора
+            if hasattr(layer.quantizer, 'get_commitment_loss'):
+                total = total + layer.quantizer.get_commitment_loss()
         return total
 
 
@@ -274,6 +329,10 @@ class YiJingGPT(nn.Module):
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
 
+        # Weight tying: share weights between embedding and output head
+        if cfg.weight_tying:
+            self.head.weight = self.tok_emb.weight
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             nn.init.trunc_normal_(module.weight, std=0.02)
@@ -282,13 +341,16 @@ class YiJingGPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.trunc_normal_(module.weight, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, kv_cache=None):
         b, t = idx.size()
         x = self.tok_emb(idx)
         if self.pos_emb is not None:
-            x = x + self.pos_emb[:, :t, :]
+            offset = 0
+            if kv_cache is not None and kv_cache[0] is not None:
+                offset = kv_cache[0][0].size(2)
+            x = x + self.pos_emb[:, offset:offset+t, :]
 
-        hidden = self.core(x)
+        hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)
 
         loss = None
@@ -302,12 +364,18 @@ class YiJingGPT(nn.Module):
             if isinstance(aux, torch.Tensor):
                 loss = loss + aux
 
-        return logits, loss
+        return logits, loss, new_kv_cache
 
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, use_cache=True):
+        kv_cache = None
         for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.cfg.block_size else idx[:, -self.cfg.block_size:]
-            logits, _ = self(idx_cond)
+            if use_cache and kv_cache is not None:
+                # Только последний токен через модель
+                idx_input = idx[:, -1:]
+            else:
+                idx_input = idx if idx.size(1) <= self.cfg.block_size else idx[:, -self.cfg.block_size:]
+
+            logits, _, kv_cache = self(idx_input, kv_cache=kv_cache if use_cache else None)
             logits = logits[:, -1, :] / temperature
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
@@ -315,6 +383,12 @@ class YiJingGPT(nn.Module):
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
+
+            # Обрезаем кэш если превышаем block_size
+            if use_cache and kv_cache is not None:
+                cache_len = kv_cache[0][0].size(2)
+                if cache_len >= self.cfg.block_size:
+                    kv_cache = None  # сбрасываем, пересчитываем
         return idx
 
     def count_parameters(self):

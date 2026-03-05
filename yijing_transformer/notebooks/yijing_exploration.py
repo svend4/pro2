@@ -128,7 +128,7 @@ def overfit_test(model_cls, cfg, name, steps=50):
     losses = []
     model.train()
     for step in range(steps):
-        _, loss = model(x, y)
+        _, loss, _ = model(x, y)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
