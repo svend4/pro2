@@ -77,6 +77,11 @@ class YiJingConfig:
     gradient_noise_eta: float = 0.0  # gradient noise scale (0 = выкл)
     cosine_restarts: int = 0         # число warm restarts (0 = обычный cosine)
 
+    # v12: Mixture of Depths, µP, dynamic temperature
+    mod_capacity: float = 1.0        # MoD capacity ratio (1.0 = все токены, 0.5 = 50%)
+    use_mup: bool = False            # µP инициализация для width scaling
+    mup_base_width: int = 128        # базовая ширина для µP
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

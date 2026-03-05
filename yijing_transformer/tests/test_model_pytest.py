@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.nn.functional as F
 import sys
 import os
 
@@ -1797,3 +1798,288 @@ class TestV11Integration:
             with torch.no_grad():
                 logits, _, _ = model(x)
             assert logits.shape == (1, 4, cfg.vocab_size)
+
+
+# ==================== V12 TESTS ====================
+
+class TestV12MixtureOfDepths:
+    """Тесты для Mixture of Depths."""
+
+    def test_mod_forward(self):
+        """MoD forward: mod_capacity < 1.0."""
+        cfg = make_cfg(mod_capacity=0.5)
+        model = YiJingGPT(cfg)
+        model.train()
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        y = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, loss, _ = model(x, y)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+        assert loss is not None
+
+    def test_mod_backward(self):
+        """MoD backward."""
+        cfg = make_cfg(mod_capacity=0.5)
+        model = YiJingGPT(cfg)
+        model.train()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+    def test_mod_eval_no_routing(self):
+        """MoD в eval режиме: все токены проходят (нет routing)."""
+        cfg = make_cfg(mod_capacity=0.5)
+        model = YiJingGPT(cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        with torch.no_grad():
+            logits, _, _ = model(x)
+        assert logits.shape == (1, 8, cfg.vocab_size)
+
+    def test_mod_capacity_1(self):
+        """mod_capacity=1.0 → все токены, нет router."""
+        cfg = make_cfg(mod_capacity=1.0)
+        model = YiJingGPT(cfg)
+        assert model.core.mod_routers is None
+
+    def test_mod_has_routers(self):
+        """mod_capacity < 1.0 → есть routers."""
+        cfg = make_cfg(mod_capacity=0.75)
+        model = YiJingGPT(cfg)
+        assert model.core.mod_routers is not None
+        assert len(model.core.mod_routers) == cfg.n_layers
+
+
+class TestV12MuP:
+    """Тесты для µP инициализации."""
+
+    def test_mup_init(self):
+        """µP инициализация не ломает forward."""
+        from training.utils_v12 import apply_mup_init
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        apply_mup_init(model, base_width=32)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 8, cfg.vocab_size)
+
+    def test_mup_scales_with_width(self):
+        """µP: более широкие модели получают меньшие init."""
+        from training.utils_v12 import apply_mup_init
+        cfg_narrow = make_cfg(d_model=64, n_heads=4)
+        cfg_wide = make_cfg(d_model=128, n_heads=8)
+        model_n = YiJingGPT(cfg_narrow)
+        model_w = YiJingGPT(cfg_wide)
+        apply_mup_init(model_n, base_width=64)
+        apply_mup_init(model_w, base_width=64)
+        # Широкая модель: weights std должен быть меньше
+        for (n1, p1), (n2, p2) in zip(
+            model_n.named_parameters(), model_w.named_parameters()
+        ):
+            if 'q_proj.weight' in n1:
+                assert p2.std() <= p1.std() + 0.01
+                break
+
+    def test_mup_param_groups(self):
+        """µP param groups создают разные lr."""
+        from training.utils_v12 import get_mup_param_groups
+        cfg = make_cfg(weight_tying=False)
+        model = YiJingGPT(cfg)
+        groups = get_mup_param_groups(model, base_lr=1e-3, base_width=32)
+        assert len(groups) >= 1
+        # Output group lr меньше base lr
+        if len(groups) > 1:
+            assert groups[1]['lr'] < groups[0]['lr']
+
+
+class TestV12DynamicTemperature:
+    """Тесты для Dynamic Temperature."""
+
+    def test_basic(self):
+        """Dynamic temperature возвращает правильную форму."""
+        from training.utils_v12 import dynamic_temperature
+        logits = torch.randn(4, 1000)
+        temp = dynamic_temperature(logits)
+        assert temp.shape == (4, 1)
+
+    def test_confident_low_temp(self):
+        """Уверенные предсказания → низкая температура."""
+        from training.utils_v12 import dynamic_temperature
+        # Очень уверенный logits (один класс доминирует)
+        logits_confident = torch.zeros(1, 100)
+        logits_confident[0, 0] = 100.0
+        temp_c = dynamic_temperature(logits_confident)
+
+        # Неуверенный logits (равномерно)
+        logits_uniform = torch.ones(1, 100)
+        temp_u = dynamic_temperature(logits_uniform)
+
+        assert temp_c.item() < temp_u.item()
+
+    def test_bounds(self):
+        """Temperature ограничена min/max."""
+        from training.utils_v12 import dynamic_temperature
+        logits = torch.randn(8, 500)
+        temp = dynamic_temperature(logits, min_temp=0.5, max_temp=1.5)
+        assert (temp >= 0.5).all()
+        assert (temp <= 1.5).all()
+
+
+class TestV12CheckpointManager:
+    """Тесты для Checkpoint Manager."""
+
+    def test_save_and_track(self):
+        """Сохранение чекпоинтов."""
+        import tempfile
+        from training.utils_v12 import CheckpointManager
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = CheckpointManager(tmpdir, max_keep=2, mode='min')
+            cfg = make_cfg()
+            model = YiJingGPT(cfg)
+            opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+            p1 = mgr.save(model, opt, step=100, metric=2.5)
+            assert p1 is not None
+            p2 = mgr.save(model, opt, step=200, metric=2.0)
+            assert p2 is not None
+            p3 = mgr.save(model, opt, step=300, metric=1.5)
+            assert p3 is not None
+
+            # Только 2 лучших сохранены
+            assert len(mgr.list_checkpoints()) == 2
+
+    def test_get_best(self):
+        """Получение лучшего чекпоинта."""
+        import tempfile
+        from training.utils_v12 import CheckpointManager
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = CheckpointManager(tmpdir, max_keep=3, mode='min')
+            cfg = make_cfg()
+            model = YiJingGPT(cfg)
+            opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+            mgr.save(model, opt, step=100, metric=2.5)
+            mgr.save(model, opt, step=200, metric=1.5)
+            mgr.save(model, opt, step=300, metric=2.0)
+
+            best = mgr.get_best()
+            assert '1.5' in best
+
+    def test_should_save(self):
+        """should_save правильно фильтрует."""
+        import tempfile
+        from training.utils_v12 import CheckpointManager
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = CheckpointManager(tmpdir, max_keep=1, mode='min')
+            cfg = make_cfg()
+            model = YiJingGPT(cfg)
+            opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+            mgr.save(model, opt, step=100, metric=1.0)
+            # Хуже чем 1.0 → не сохраняем
+            assert not mgr.should_save(2.0)
+            # Лучше → сохраняем
+            assert mgr.should_save(0.5)
+
+    def test_max_mode(self):
+        """Max mode (accuracy)."""
+        import tempfile
+        from training.utils_v12 import CheckpointManager
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = CheckpointManager(tmpdir, max_keep=2, mode='max')
+            cfg = make_cfg()
+            model = YiJingGPT(cfg)
+            opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+            mgr.save(model, opt, step=100, metric=0.8)
+            mgr.save(model, opt, step=200, metric=0.9)
+            mgr.save(model, opt, step=300, metric=0.7)
+
+            # best = 0.9
+            best = mgr.get_best()
+            assert '0.9' in best
+
+
+class TestV12Perplexity:
+    """Тесты для perplexity evaluator."""
+
+    def test_basic_perplexity(self):
+        """Perplexity вычисляется на синтетических данных."""
+        from training.utils_v12 import evaluate_perplexity
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+
+        # Создаём простой dataloader
+        data = [torch.randint(0, cfg.vocab_size, (4, 16)) for _ in range(3)]
+        # Каждый batch: x=data[:, :-1], y=data[:, 1:]
+        loader = [(d[:, :-1], d[:, 1:]) for d in data]
+
+        result = evaluate_perplexity(model, loader)
+        assert 'perplexity' in result
+        assert result['perplexity'] > 1.0
+        assert result['n_tokens'] > 0
+
+    def test_perplexity_max_batches(self):
+        """max_batches ограничивает число batch'ей."""
+        from training.utils_v12 import evaluate_perplexity
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        data = [torch.randint(0, cfg.vocab_size, (4, 16)) for _ in range(10)]
+        loader = [(d[:, :-1], d[:, 1:]) for d in data]
+
+        r1 = evaluate_perplexity(model, loader, max_batches=2)
+        r2 = evaluate_perplexity(model, loader, max_batches=5)
+        assert r2['n_tokens'] > r1['n_tokens']
+
+    def test_perplexity_single_tensor_batch(self):
+        """Perplexity с batch = single tensor (auto shift)."""
+        from training.utils_v12 import evaluate_perplexity
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        loader = [torch.randint(0, cfg.vocab_size, (2, 16)) for _ in range(3)]
+        result = evaluate_perplexity(model, loader)
+        assert result['perplexity'] > 1.0
+
+
+class TestV12Integration:
+    """Интеграционные тесты v12."""
+
+    def test_mod_with_alibi(self):
+        """MoD + ALiBi."""
+        cfg = make_cfg(mod_capacity=0.5, use_rope=False, use_alibi=True)
+        model = YiJingGPT(cfg)
+        model.train()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+    def test_mup_with_training(self):
+        """µP init + training step."""
+        from training.utils_v12 import apply_mup_init, get_mup_param_groups
+        cfg = make_cfg(weight_tying=False)
+        model = YiJingGPT(cfg)
+        apply_mup_init(model, base_width=32)
+        groups = get_mup_param_groups(model, base_lr=1e-3, base_width=32)
+        opt = torch.optim.AdamW(groups)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        opt.step()
+
+    def test_dynamic_temp_in_generate(self):
+        """Dynamic temperature при генерации."""
+        from training.utils_v12 import dynamic_temperature
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 4))
+        with torch.no_grad():
+            logits, _, _ = model(x)
+            last_logits = logits[:, -1, :]
+            temp = dynamic_temperature(last_logits)
+            scaled_logits = last_logits / temp
+            probs = F.softmax(scaled_logits, dim=-1)
+            assert probs.shape == (1, cfg.vocab_size)
+            assert abs(probs.sum().item() - 1.0) < 1e-5

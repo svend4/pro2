@@ -343,28 +343,74 @@ class YiJingTransformer(nn.Module):
             )
         self.final_norm = nn.LayerNorm(cfg.d_model)
 
+        # Mixture of Depths: router для пропуска слоёв
+        self.mod_capacity = getattr(cfg, 'mod_capacity', 1.0)
+        if self.mod_capacity < 1.0:
+            # Один router на слой: скаляр per-token решение
+            self.mod_routers = nn.ModuleList([
+                nn.Linear(cfg.d_model, 1, bias=False) for _ in range(cfg.n_layers)
+            ])
+        else:
+            self.mod_routers = None
+
     def forward(self, x, kv_cache=None):
         new_kv_cache = []
         for i, layer in enumerate(self.layers):
             layer_cache = kv_cache[i] if kv_cache is not None else None
-            if self.cfg.use_gradient_ckpt and self.training and kv_cache is None:
-                # Gradient checkpointing (только при обучении без KV-cache)
-                x, new_kv = grad_checkpoint(
-                    layer, x, layer_cache, use_reentrant=False
-                )
+
+            # Mixture of Depths: часть токенов пропускает слой
+            if self.mod_routers is not None and self.training:
+                B, T, D = x.shape
+                router_logits = self.mod_routers[i](x).squeeze(-1)  # (B, T)
+                k = max(1, int(T * self.mod_capacity))
+
+                # Top-k токенов проходят через слой
+                _, top_idx = router_logits.topk(k, dim=-1)  # (B, k)
+
+                # Собираем выбранные токены
+                top_idx_sorted, _ = top_idx.sort(dim=-1)
+                batch_idx = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, k)
+                x_selected = x[batch_idx, top_idx_sorted]  # (B, k, D)
+
+                # Прогоняем через слой (без KV-cache при MoD)
+                out_selected, new_kv = layer(x_selected, kv_cache=None)
+
+                # Записываем обратно (residual для пропущенных токенов = identity)
+                x_out = x.clone()
+                x_out[batch_idx, top_idx_sorted] = out_selected
+                x = x_out
+                new_kv_cache.append(new_kv)
+
+                # Сохраняем router loss (balance)
+                layer._mod_loss = self._compute_mod_balance_loss(router_logits, k)
             else:
-                x, new_kv = layer(x, kv_cache=layer_cache)
-            new_kv_cache.append(new_kv)
+                if self.cfg.use_gradient_ckpt and self.training and kv_cache is None:
+                    x, new_kv = grad_checkpoint(
+                        layer, x, layer_cache, use_reentrant=False
+                    )
+                else:
+                    x, new_kv = layer(x, kv_cache=layer_cache)
+                new_kv_cache.append(new_kv)
         return self.final_norm(x), new_kv_cache
 
+    @staticmethod
+    def _compute_mod_balance_loss(router_logits, k):
+        """Balance loss для MoD router — стимулирует равномерный выбор."""
+        probs = torch.sigmoid(router_logits)  # (B, T)
+        target = k / router_logits.shape[1]
+        return ((probs.mean(dim=-1) - target) ** 2).mean() * 0.01
+
     def get_aux_loss(self):
-        """Собирает aux loss со всех MoE слоёв + commitment loss."""
+        """Собирает aux loss со всех MoE слоёв + commitment loss + MoD loss."""
         total = 0.0
         for layer in self.layers:
             total = total + layer._aux_loss
             # Commitment loss от Gumbel квантизатора
             if hasattr(layer.quantizer, 'get_commitment_loss'):
                 total = total + layer.quantizer.get_commitment_loss()
+            # MoD balance loss
+            if hasattr(layer, '_mod_loss'):
+                total = total + layer._mod_loss
         return total
 
 
