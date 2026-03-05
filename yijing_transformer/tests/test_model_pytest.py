@@ -2902,3 +2902,191 @@ class TestV15Integration:
         _, loss, _ = model(x, y)
         loss.backward()
         opt.step()
+
+
+# ==================== V16 TESTS ====================
+
+class TestV16StructuredPruning:
+    """Тесты для structured pruning."""
+
+    def test_compute_importance(self):
+        from training.utils_v16 import StructuredPruner
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        pruner = StructuredPruner(model, prune_ratio=0.3)
+        imp = pruner.compute_importance()
+        assert len(imp) == cfg.n_layers
+        assert imp[0]['importance'] is not None
+
+    def test_apply_masks(self):
+        from training.utils_v16 import StructuredPruner
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        pruner = StructuredPruner(model, prune_ratio=0.3)
+        stats = pruner.apply_masks()
+        assert stats['total_pruned'] > 0
+
+    def test_pruned_model_forward(self):
+        from training.utils_v16 import StructuredPruner
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        StructuredPruner(model, prune_ratio=0.5).apply_masks()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        logits, _, _ = model(x)
+        assert logits.shape == (1, 8, cfg.vocab_size)
+
+    def test_zero_prune(self):
+        from training.utils_v16 import StructuredPruner
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        stats = StructuredPruner(model, prune_ratio=0.0).apply_masks()
+        assert stats['total_pruned'] == 0
+
+
+class TestV16ContrastiveLoss:
+    """Тесты для contrastive loss."""
+
+    def test_basic(self):
+        from training.utils_v16 import contrastive_loss
+        loss = contrastive_loss(torch.randn(8, 64), torch.randn(8, 64))
+        assert loss.item() > 0
+
+    def test_similar_lower(self):
+        from training.utils_v16 import contrastive_loss
+        z = torch.randn(8, 64)
+        l_same = contrastive_loss(z, z + torch.randn_like(z) * 0.01)
+        l_diff = contrastive_loss(z, torch.randn_like(z))
+        assert l_same.item() < l_diff.item()
+
+    def test_gradient(self):
+        from training.utils_v16 import contrastive_loss
+        z1 = torch.randn(4, 32, requires_grad=True)
+        contrastive_loss(z1, torch.randn(4, 32)).backward()
+        assert z1.grad is not None
+
+
+class TestV16SequencePacking:
+    """Тесты для sequence packing."""
+
+    def test_basic(self):
+        from training.utils_v16 import SequencePacker
+        packer = SequencePacker(max_seq_len=20)
+        batches = packer.pack([[1, 2, 3], [4, 5], [6, 7, 8, 9]])
+        assert len(batches) >= 1
+        assert batches[0]['input_ids'].shape[0] == 20
+
+    def test_overflow(self):
+        from training.utils_v16 import SequencePacker
+        packer = SequencePacker(max_seq_len=5)
+        batches = packer.pack([[1, 2, 3], [4, 5, 6], [7, 8]])
+        assert len(batches) >= 2
+
+    def test_mask(self):
+        from training.utils_v16 import SequencePacker
+        doc_ids = torch.tensor([0, 0, 0, 1, 1, -1])
+        mask = SequencePacker.create_packing_mask(doc_ids)
+        assert mask[2, 0].item() == True   # same doc
+        assert mask[3, 0].item() == False  # diff doc
+        assert mask[5, 0].item() == False  # padding
+
+    def test_separator(self):
+        from training.utils_v16 import SequencePacker
+        packer = SequencePacker(max_seq_len=20, sep_id=99)
+        batches = packer.pack([[1, 2], [3, 4]])
+        assert 99 in batches[0]['input_ids'].tolist()
+
+
+class TestV16PCGrad:
+    """Тесты для PCGrad."""
+
+    def test_basic(self):
+        from training.utils_v16 import PCGrad
+        model = torch.nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        pcgrad = PCGrad(opt)
+        x = torch.randn(4, 10)
+        pcgrad.step([model(x)[:, :3].sum(), model(x)[:, 3:].sum()])
+
+    def test_conflicting(self):
+        from training.utils_v16 import PCGrad
+        model = torch.nn.Linear(10, 2, bias=False)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        pcgrad = PCGrad(opt)
+        x = torch.randn(4, 10)
+        # Partially conflicting tasks (different outputs)
+        w_before = model.weight.data.clone()
+        pcgrad.step([model(x)[:, 0].sum(), model(x)[:, 1].mean()])
+        assert not torch.equal(w_before, model.weight.data)
+
+
+class TestV16ModelMerging:
+    """Тесты для model merging."""
+
+    def test_average(self):
+        from training.utils_v16 import merge_models_average
+        cfg = make_cfg()
+        m1, m2 = YiJingGPT(cfg), YiJingGPT(cfg)
+        sd = merge_models_average([m1, m2])
+        m1.load_state_dict(sd)
+        logits, _, _ = m1(torch.randint(0, cfg.vocab_size, (1, 8)))
+        assert not torch.isnan(logits).any()
+
+    def test_weighted(self):
+        from training.utils_v16 import merge_models_average
+        cfg = make_cfg()
+        m1, m2 = YiJingGPT(cfg), YiJingGPT(cfg)
+        sd = merge_models_average([m1, m2], weights=[0.7, 0.3])
+        m1.load_state_dict(sd)
+        assert not torch.isnan(m1(torch.randint(0, cfg.vocab_size, (1, 4)))[0]).any()
+
+    def test_slerp(self):
+        from training.utils_v16 import merge_models_slerp
+        cfg = make_cfg()
+        m1, m2 = YiJingGPT(cfg), YiJingGPT(cfg)
+        sd = merge_models_slerp(m1, m2, t=0.5)
+        m1.load_state_dict(sd)
+        assert not torch.isnan(m1(torch.randint(0, cfg.vocab_size, (1, 8)))[0]).any()
+
+    def test_slerp_t0(self):
+        from training.utils_v16 import merge_models_slerp
+        cfg = make_cfg()
+        m1, m2 = YiJingGPT(cfg), YiJingGPT(cfg)
+        sd = merge_models_slerp(m1, m2, t=0.0)
+        for key in sd:
+            assert torch.allclose(sd[key].float(), m1.state_dict()[key].float(), atol=1e-5)
+
+    def test_ties(self):
+        from training.utils_v16 import merge_models_ties
+        cfg = make_cfg()
+        base, ft1, ft2 = YiJingGPT(cfg), YiJingGPT(cfg), YiJingGPT(cfg)
+        with torch.no_grad():
+            for p in ft1.parameters():
+                p.add_(torch.randn_like(p) * 0.01)
+            for p in ft2.parameters():
+                p.add_(torch.randn_like(p) * 0.01)
+        sd = merge_models_ties([ft1, ft2], base_model=base, density=0.5)
+        base.load_state_dict(sd)
+        assert not torch.isnan(base(torch.randint(0, cfg.vocab_size, (1, 8)))[0]).any()
+
+
+class TestV16Integration:
+    """Интеграционные тесты v16."""
+
+    def test_prune_then_merge(self):
+        from training.utils_v16 import StructuredPruner, merge_models_average
+        cfg = make_cfg()
+        m1, m2 = YiJingGPT(cfg), YiJingGPT(cfg)
+        StructuredPruner(m1, 0.3).apply_masks()
+        StructuredPruner(m2, 0.3).apply_masks()
+        sd = merge_models_average([m1, m2])
+        m1.load_state_dict(sd)
+        assert not torch.isnan(m1(torch.randint(0, cfg.vocab_size, (1, 8)))[0]).any()
+
+    def test_packing_with_model(self):
+        from training.utils_v16 import SequencePacker
+        packer = SequencePacker(max_seq_len=16)
+        batches = packer.pack([[1, 2, 3, 4], [5, 6, 7], [8, 9]])
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        logits, _, _ = model(batches[0]['input_ids'].unsqueeze(0))
+        assert logits.shape[1] == 16
