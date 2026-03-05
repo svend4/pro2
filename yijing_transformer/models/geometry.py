@@ -364,6 +364,74 @@ def apply_rotary_emb(x, cos, sin):
     return x * cos + rotate_half(x) * sin
 
 
+# ==================== ALiBi ====================
+
+class ALiBi(nn.Module):
+    """
+    Attention with Linear Biases (ALiBi).
+
+    Добавляет линейный bias к attention scores на основе расстояния:
+        bias[h, i, j] = -m_h * |i - j|
+
+    Каждая голова получает свой slope m_h = 2^(-8h/H).
+    Не требует позиционных эмбеддингов. Хорошо экстраполирует на длинные контексты.
+
+    Ref: Press et al., "Train Short, Test Long" (2022)
+    """
+    def __init__(self, n_heads: int, max_seq_len: int = 4096):
+        super().__init__()
+        self.n_heads = n_heads
+
+        # Slopes: geometric sequence 2^(-8/H), 2^(-16/H), ..., 2^(-8)
+        slopes = self._get_slopes(n_heads)
+        self.register_buffer('slopes', slopes)  # (H,)
+        self._build_cache(max_seq_len)
+
+    @staticmethod
+    def _get_slopes(n_heads):
+        """Генерирует slopes для ALiBi."""
+        def _get_slopes_power_of_2(n):
+            start = 2 ** (-(2 ** -(torch.tensor(float(n)).log2().floor().item() - 3)))
+            ratio = start
+            return [start * (ratio ** i) for i in range(n)]
+
+        if n_heads & (n_heads - 1) == 0:  # power of 2
+            slopes = _get_slopes_power_of_2(n_heads)
+        else:
+            closest_power = 2 ** int(torch.tensor(float(n_heads)).log2().floor().item())
+            slopes = _get_slopes_power_of_2(closest_power)
+            extra = _get_slopes_power_of_2(2 * closest_power)
+            slopes = slopes + extra[0::2][:n_heads - closest_power]
+
+        return torch.tensor(slopes, dtype=torch.float32)
+
+    def _build_cache(self, seq_len):
+        # Матрица расстояний: |i - j|
+        positions = torch.arange(seq_len)
+        distances = positions.unsqueeze(0) - positions.unsqueeze(1)  # (T, T)
+        distances = distances.abs().float()
+        self.register_buffer('_distances', distances, persistent=False)
+
+    def forward(self, seq_len, offset=0):
+        """
+        Возвращает ALiBi bias: (1, H, T, S) для attention scores.
+
+        Args:
+            seq_len: длина query
+            offset: смещение для KV-cache (S = seq_len + offset)
+        """
+        total_len = seq_len + offset
+        if total_len > self._distances.shape[0]:
+            self._build_cache(total_len)
+
+        # Расстояния для текущего окна
+        distances = self._distances[offset:offset + seq_len, :total_len]  # (T, S)
+
+        # Bias: -slope * distance, per head
+        bias = -self.slopes.view(1, -1, 1, 1) * distances.unsqueeze(0).unsqueeze(0)
+        return bias  # (1, H, T, S)
+
+
 # ==================== SwiGLU FFN ====================
 
 class SwiGLU(nn.Module):
@@ -719,3 +787,113 @@ class HexagramAttentionPattern(nn.Module):
         bias = torch.einsum('bk,kij->bij', hex_weights, patterns)  # (B, T, T)
 
         return self.scale * bias.unsqueeze(1)  # (B, 1, T, T)
+
+
+# ==================== Grouped Quantization ====================
+
+class GroupedQuantizer(nn.Module):
+    """
+    Grouped (per-channel) quantization с обучаемыми scales.
+
+    Делит d_model на группы, каждая группа квантизуется независимо
+    со своим масштабом и zero-point. Подход аналогичен GPTQ/AWQ.
+
+    Это позволяет сохранить точность при INT8 квантизации,
+    учитывая разный диапазон значений в разных каналах.
+
+    Args:
+        d_model: размерность модели
+        group_size: размер группы (128 по умолчанию, как в GPTQ)
+        n_bits: число бит квантизации (8 = INT8)
+        symmetric: симметричная квантизация (без zero-point)
+    """
+    def __init__(self, d_model, group_size=128, n_bits=8, symmetric=True):
+        super().__init__()
+        self.d_model = d_model
+        self.group_size = min(group_size, d_model)
+        self.n_bits = n_bits
+        self.symmetric = symmetric
+        self.n_groups = (d_model + self.group_size - 1) // self.group_size
+
+        # Диапазон квантизации
+        if symmetric:
+            self.qmin = -(2 ** (n_bits - 1))
+            self.qmax = 2 ** (n_bits - 1) - 1
+        else:
+            self.qmin = 0
+            self.qmax = 2 ** n_bits - 1
+
+        # Обучаемые scales и zero points
+        self.scales = nn.Parameter(torch.ones(self.n_groups))
+        if not symmetric:
+            self.zero_points = nn.Parameter(torch.zeros(self.n_groups))
+
+    def _reshape_to_groups(self, x):
+        """Reshape последнее измерение в (n_groups, group_size)."""
+        *batch, d = x.shape
+        pad = (self.group_size - d % self.group_size) % self.group_size
+        if pad > 0:
+            x = F.pad(x, (0, pad))
+        return x.view(*batch, self.n_groups, self.group_size)
+
+    def _unreshape(self, x, orig_d):
+        """Обратно из (n_groups, group_size) → (d,)."""
+        *batch, ng, gs = x.shape
+        return x.reshape(*batch, ng * gs)[..., :orig_d]
+
+    def quantize(self, x):
+        """
+        Квантизует тензор с per-group scales.
+
+        Использует STE (Straight-Through Estimator) для backprop.
+        """
+        orig_d = x.shape[-1]
+        x_g = self._reshape_to_groups(x)  # (..., n_groups, group_size)
+
+        scales = self.scales.abs().clamp(min=1e-8)
+        scales = scales.view(*([1] * (x_g.dim() - 2)), self.n_groups, 1)
+
+        if self.symmetric:
+            x_scaled = x_g / scales
+            x_quant = x_scaled.round().clamp(self.qmin, self.qmax)
+            x_dequant = x_quant * scales
+        else:
+            zp = self.zero_points.round()
+            zp = zp.view(*([1] * (x_g.dim() - 2)), self.n_groups, 1)
+            x_scaled = x_g / scales + zp
+            x_quant = x_scaled.round().clamp(self.qmin, self.qmax)
+            x_dequant = (x_quant - zp) * scales
+
+        # STE: gradient проходит через quantize как identity
+        result = x_g + (x_dequant - x_g).detach()
+        return self._unreshape(result, orig_d)
+
+    def forward(self, x):
+        """Quantize-dequantize forward pass."""
+        if self.training:
+            return self.quantize(x)
+        else:
+            return self.quantize(x)
+
+    def calibrate(self, x):
+        """
+        Калибровка scales на основе наблюдаемых данных (для PTQ).
+
+        Args:
+            x: тензор для калибровки (..., d_model)
+        """
+        with torch.no_grad():
+            x_g = self._reshape_to_groups(x)
+            if self.symmetric:
+                amax = x_g.abs().amax(dim=-1).mean(dim=tuple(range(x_g.dim() - 2)))
+                self.scales.data = amax / self.qmax
+            else:
+                vmin = x_g.amin(dim=-1).mean(dim=tuple(range(x_g.dim() - 2)))
+                vmax = x_g.amax(dim=-1).mean(dim=tuple(range(x_g.dim() - 2)))
+                self.scales.data = (vmax - vmin) / (self.qmax - self.qmin)
+                self.zero_points.data = (self.qmin - vmin / self.scales.data).round()
+
+    def extra_repr(self):
+        return (f"d_model={self.d_model}, groups={self.n_groups}, "
+                f"group_size={self.group_size}, bits={self.n_bits}, "
+                f"symmetric={self.symmetric}")

@@ -24,6 +24,7 @@ from .geometry import (
     HexagramAttentionPattern,
     RotaryEmbedding,
     apply_rotary_emb,
+    ALiBi,
     SwiGLU,
     TrigramMoE,
 )
@@ -91,9 +92,11 @@ class YiJingAttention(nn.Module):
         self.n_heads = cfg.n_heads
         self.head_dim = cfg.d_model // cfg.n_heads
         self.scale = 1.0 / math.sqrt(self.head_dim)
-        self.use_rope = cfg.use_rope
+        self.use_rope = cfg.use_rope and not getattr(cfg, 'use_alibi', False)
+        self.use_alibi = getattr(cfg, 'use_alibi', False)
         self.use_flash = cfg.use_flash_attn
         self.sliding_window = cfg.sliding_window
+        self.attention_sinks = getattr(cfg, 'attention_sinks', 0)
 
         # GQA: число KV голов (None = MHA, т.е. n_kv_heads = n_heads)
         self.n_kv_heads = cfg.n_kv_heads if cfg.n_kv_heads is not None else cfg.n_heads
@@ -115,6 +118,10 @@ class YiJingAttention(nn.Module):
                 scaling=getattr(cfg, 'rope_scaling', None),
                 scaling_factor=getattr(cfg, 'rope_scaling_factor', 1.0),
             )
+
+        # ALiBi (альтернатива RoPE)
+        if self.use_alibi:
+            self.alibi = ALiBi(cfg.n_heads, max_seq_len=cfg.block_size)
 
         # 8 триграмм как направления для голов
         trigrams = get_trigrams()  # (8, 3)
@@ -181,6 +188,12 @@ class YiJingAttention(nn.Module):
         else:
             scores = (q @ k.transpose(-2, -1)) * self.scale
 
+            # ALiBi bias
+            if self.use_alibi:
+                offset = S - T
+                alibi_bias = self.alibi(T, offset=offset)
+                scores = scores + alibi_bias
+
             # Causal mask с учётом KV-cache
             causal = torch.tril(torch.ones(S, S, device=x.device))
             causal = causal[S-T:S, :S]
@@ -190,7 +203,14 @@ class YiJingAttention(nn.Module):
                 for i in range(T):
                     pos = S - T + i  # абсолютная позиция в последовательности
                     window_start = max(0, pos - self.sliding_window + 1)
-                    causal[i, :window_start] = 0.0
+                    # Attention sinks: всегда видим первые N токенов
+                    if self.attention_sinks > 0:
+                        causal[i, :min(self.attention_sinks, window_start)] = 1.0
+                    causal[i, min(self.attention_sinks, S):window_start] = 0.0
+            elif self.attention_sinks > 0:
+                # Attention sinks без sliding window: первые N всегда видны
+                # (уже видны благодаря causal mask, но полезно при стриминге)
+                pass
 
             causal = causal.unsqueeze(0).unsqueeze(0)
             scores = scores.masked_fill(causal == 0, float('-inf'))

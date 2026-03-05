@@ -16,8 +16,10 @@ from .geometry import (
     E8Quantizer,
     HexagramAttentionPattern,
     RotaryEmbedding,
+    ALiBi,
     SwiGLU,
     TrigramMoE,
+    GroupedQuantizer,
 )
 from .lora import (
     LoRALinear,

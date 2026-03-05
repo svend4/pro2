@@ -64,6 +64,13 @@ class YiJingConfig:
     distill_alpha: float = 0.5   # баланс hard/soft loss (1.0 = только soft)
     distill_temp: float = 2.0    # температура для soft targets
 
+    # v10: ALiBi, attention sinks, EMA
+    use_alibi: bool = False      # ALiBi вместо RoPE (нельзя с use_rope=True)
+    attention_sinks: int = 0     # число «sink» токенов для streaming (0 = выкл)
+    use_ema: bool = False        # EMA model averaging
+    ema_decay: float = 0.999     # EMA decay rate
+    early_stop_patience: int = 0 # early stopping (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

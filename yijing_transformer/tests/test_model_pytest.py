@@ -1140,3 +1140,366 @@ class TestV9CharTokenizerSaveLoad:
             assert tok.encode("Hello") == tok2.encode("Hello")
         finally:
             os.remove(path)
+
+
+# ==================== V10 TESTS ====================
+
+class TestV10ALiBi:
+    """Тесты для ALiBi позиционного bias."""
+
+    def test_alibi_slopes(self):
+        """ALiBi slopes — убывающая геометрическая последовательность."""
+        from models.geometry import ALiBi
+        alibi = ALiBi(n_heads=8)
+        slopes = alibi.slopes
+        assert slopes.shape == (8,)
+        for i in range(len(slopes) - 1):
+            assert slopes[i] > slopes[i + 1]
+
+    def test_alibi_bias_shape(self):
+        """ALiBi bias имеет правильную форму."""
+        from models.geometry import ALiBi
+        alibi = ALiBi(n_heads=4, max_seq_len=64)
+        bias = alibi(seq_len=16)
+        assert bias.shape == (1, 4, 16, 16)
+
+    def test_alibi_bias_with_offset(self):
+        """ALiBi bias с KV-cache offset."""
+        from models.geometry import ALiBi
+        alibi = ALiBi(n_heads=4, max_seq_len=64)
+        bias = alibi(seq_len=1, offset=15)
+        assert bias.shape == (1, 4, 1, 16)
+
+    def test_alibi_bias_causal_property(self):
+        """ALiBi bias: ближние позиции получают меньший штраф."""
+        from models.geometry import ALiBi
+        alibi = ALiBi(n_heads=4, max_seq_len=32)
+        bias = alibi(seq_len=8)
+        for h in range(4):
+            for i in range(8):
+                assert bias[0, h, i, i].item() == 0.0
+        assert (bias[0, 0, 5, 0] < 0).item()
+
+    def test_alibi_non_power_of_2_heads(self):
+        """ALiBi работает с не-степенью-2 числом голов."""
+        from models.geometry import ALiBi
+        alibi = ALiBi(n_heads=6, max_seq_len=32)
+        bias = alibi(seq_len=8)
+        assert bias.shape == (1, 6, 8, 8)
+
+    def test_model_with_alibi(self):
+        """Модель с ALiBi (без RoPE) работает."""
+        cfg = make_cfg(use_rope=False, use_alibi=True)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_alibi_backward(self):
+        """Backward через ALiBi."""
+        cfg = make_cfg(use_rope=False, use_alibi=True)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+    def test_alibi_cache_extension(self):
+        """ALiBi автоматически расширяет кэш при длинных последовательностях."""
+        from models.geometry import ALiBi
+        alibi = ALiBi(n_heads=4, max_seq_len=16)
+        bias = alibi(seq_len=32)
+        assert bias.shape == (1, 4, 32, 32)
+
+
+class TestV10AttentionSinks:
+    """Тесты для attention sinks."""
+
+    def test_model_with_sinks(self):
+        """Модель с attention sinks forward."""
+        cfg = make_cfg(attention_sinks=2, sliding_window=8)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_sinks_preserve_first_tokens(self):
+        """Attention sinks сохраняют видимость первых токенов при sliding window."""
+        cfg = make_cfg(attention_sinks=2, sliding_window=4)
+        attn = YiJingAttention(cfg)
+        x = torch.randn(1, 12, cfg.d_model)
+        out, _ = attn(x)
+        assert out.shape == x.shape
+
+    def test_sinks_without_sliding_window(self):
+        """Attention sinks без sliding window — работает нормально."""
+        cfg = make_cfg(attention_sinks=2, sliding_window=None)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 8, cfg.vocab_size)
+
+    def test_sinks_backward(self):
+        """Backward через attention sinks."""
+        cfg = make_cfg(attention_sinks=2, sliding_window=6)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+
+class TestV10EMA:
+    """Тесты для EMA model averaging."""
+
+    def test_ema_init(self):
+        """EMA инициализируется копией параметров."""
+        from training.ema import EMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = EMA(model, decay=0.99)
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                assert name in ema.shadow
+                assert torch.equal(ema.shadow[name], param.data)
+
+    def test_ema_update(self):
+        """EMA обновляет shadow параметры."""
+        from training.ema import EMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = EMA(model, decay=0.9)
+        old_shadows = {n: s.clone() for n, s in ema.shadow.items()}
+        with torch.no_grad():
+            for p in model.parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+        ema.update()
+        changed = False
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in ema.shadow:
+                if not torch.equal(ema.shadow[name], old_shadows[name]):
+                    changed = True
+                assert not torch.equal(ema.shadow[name], param.data)
+        assert changed
+
+    def test_ema_context_manager(self):
+        """Context manager переключает и восстанавливает параметры."""
+        from training.ema import EMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = EMA(model, decay=0.9)
+        with torch.no_grad():
+            for p in model.parameters():
+                p.add_(1.0)
+        ema.update()
+        originals = {n: p.data.clone() for n, p in model.named_parameters()}
+        with ema.average_parameters():
+            for name, param in model.named_parameters():
+                if param.requires_grad and name in ema.shadow:
+                    assert torch.equal(param.data, ema.shadow[name])
+        for name, param in model.named_parameters():
+            if name in originals:
+                assert torch.equal(param.data, originals[name])
+
+    def test_ema_state_dict(self):
+        """EMA state_dict сохраняется и загружается."""
+        from training.ema import EMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = EMA(model, decay=0.995)
+        state = ema.state_dict()
+        assert 'shadow' in state
+        assert state['decay'] == 0.995
+
+
+class TestV10EarlyStopping:
+    """Тесты для early stopping."""
+
+    def test_no_stop_improving(self):
+        """Не останавливается при улучшении."""
+        from training.ema import EarlyStopping
+        es = EarlyStopping(patience=3, mode='min')
+        assert not es(1.0)
+        assert not es(0.9)
+        assert not es(0.8)
+        assert not es(0.7)
+
+    def test_stop_stagnant(self):
+        """Останавливается при отсутствии улучшений."""
+        from training.ema import EarlyStopping
+        es = EarlyStopping(patience=3, mode='min')
+        assert not es(1.0)
+        assert not es(1.1)
+        assert not es(1.2)
+        assert es(1.3)
+
+    def test_stop_max_mode(self):
+        """Max mode: останавливается при падении accuracy."""
+        from training.ema import EarlyStopping
+        es = EarlyStopping(patience=2, mode='max')
+        assert not es(0.8)
+        assert not es(0.9)
+        assert not es(0.85)
+        assert es(0.85)
+
+    def test_min_delta(self):
+        """min_delta: мелкие улучшения не считаются."""
+        from training.ema import EarlyStopping
+        es = EarlyStopping(patience=2, min_delta=0.1, mode='min')
+        assert not es(1.0)
+        assert not es(0.95)
+        assert es(0.92)
+
+    def test_reset(self):
+        """Reset сбрасывает состояние."""
+        from training.ema import EarlyStopping
+        es = EarlyStopping(patience=2, mode='min')
+        es(1.0)
+        es(1.1)
+        es.reset()
+        assert es.counter == 0
+        assert es.best_score is None
+        assert not es.should_stop
+
+
+class TestV10GroupedQuantizer:
+    """Тесты для Grouped Quantization."""
+
+    def test_basic_shape(self):
+        """Grouped quantizer сохраняет shape."""
+        from models.geometry import GroupedQuantizer
+        gq = GroupedQuantizer(d_model=256, group_size=64, n_bits=8)
+        x = torch.randn(2, 16, 256)
+        y = gq(x)
+        assert y.shape == x.shape
+
+    def test_small_group(self):
+        """Маленький group_size."""
+        from models.geometry import GroupedQuantizer
+        gq = GroupedQuantizer(d_model=64, group_size=16, n_bits=8)
+        assert gq.n_groups == 4
+        x = torch.randn(4, 64)
+        y = gq(x)
+        assert y.shape == x.shape
+
+    def test_asymmetric(self):
+        """Асимметричная квантизация с zero-point."""
+        from models.geometry import GroupedQuantizer
+        gq = GroupedQuantizer(d_model=128, group_size=32, n_bits=8, symmetric=False)
+        assert hasattr(gq, 'zero_points')
+        x = torch.randn(2, 8, 128)
+        y = gq(x)
+        assert y.shape == x.shape
+
+    def test_ste_gradient(self):
+        """STE: градиенты проходят через квантизацию."""
+        from models.geometry import GroupedQuantizer
+        gq = GroupedQuantizer(d_model=64, group_size=32, n_bits=8)
+        x = torch.randn(2, 64, requires_grad=True)
+        y = gq(x)
+        loss = y.sum()
+        loss.backward()
+        assert x.grad is not None
+        assert x.grad.shape == x.shape
+
+    def test_calibrate(self):
+        """Калибровка scales на данных."""
+        from models.geometry import GroupedQuantizer
+        gq = GroupedQuantizer(d_model=128, group_size=64, n_bits=8)
+        x = torch.randn(100, 128) * 5.0
+        gq.calibrate(x)
+        assert (gq.scales > 0).all()
+
+    def test_group_size_larger_than_d(self):
+        """Group size > d_model → одна группа."""
+        from models.geometry import GroupedQuantizer
+        gq = GroupedQuantizer(d_model=32, group_size=128, n_bits=8)
+        assert gq.n_groups == 1
+        x = torch.randn(4, 32)
+        y = gq(x)
+        assert y.shape == x.shape
+
+    def test_4bit_quantization(self):
+        """4-bit квантизация."""
+        from models.geometry import GroupedQuantizer
+        gq = GroupedQuantizer(d_model=64, group_size=32, n_bits=4)
+        assert gq.qmin == -8
+        assert gq.qmax == 7
+        x = torch.randn(2, 64)
+        y = gq(x)
+        assert y.shape == x.shape
+
+
+class TestV10ActivationMemory:
+    """Тесты для activation memory profiler."""
+
+    def test_basic_profile(self):
+        """Профилирование активационной памяти."""
+        from training.ema import compute_activation_memory
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        mem = compute_activation_memory(model, batch_size=2, seq_len=16)
+        assert 'total' in mem
+        assert 'total_mb' in mem
+        assert 'per_layer' in mem
+        assert mem['total'] > 0
+
+    def test_memory_scales_with_batch(self):
+        """Память растёт линейно с batch_size."""
+        from training.ema import compute_activation_memory
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        mem1 = compute_activation_memory(model, batch_size=1, seq_len=16)
+        mem2 = compute_activation_memory(model, batch_size=2, seq_len=16)
+        assert mem2['total'] == 2 * mem1['total']
+
+    def test_memory_scales_with_seq_len(self):
+        """Память растёт квадратично с seq_len (из-за attention)."""
+        from training.ema import compute_activation_memory
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        mem1 = compute_activation_memory(model, batch_size=1, seq_len=16)
+        mem2 = compute_activation_memory(model, batch_size=1, seq_len=32)
+        assert mem2['total'] > 2 * mem1['total']
+
+
+class TestV10Integration:
+    """Интеграционные тесты v10."""
+
+    def test_alibi_with_sinks_and_sliding(self):
+        """ALiBi + attention sinks + sliding window."""
+        cfg = make_cfg(
+            use_rope=False, use_alibi=True,
+            attention_sinks=2, sliding_window=8
+        )
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        y = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, loss, _ = model(x, y)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+        loss.backward()
+
+    def test_alibi_kv_cache(self):
+        """ALiBi с KV-cache генерацией."""
+        cfg = make_cfg(use_rope=False, use_alibi=True)
+        model = YiJingGPT(cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 4))
+        with torch.no_grad():
+            logits, _, _ = model(x)
+        assert logits.shape[0] == 1
+
+    def test_ema_with_training_step(self):
+        """EMA обновляется при обучении."""
+        from training.ema import EMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = EMA(model, decay=0.99)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        ema.update()
