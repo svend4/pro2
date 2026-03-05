@@ -2,8 +2,8 @@
 YiJing-Transformer: трансформер с геометрической регуляризацией
 на основе гиперкубов {-1,+1}^n (64 гексаграмм, 256 октограмм).
 
-v5: GQA (Grouped Query Attention), sliding window attention,
-    AMP support, quantization analytics.
+v7: LoRA adapters, speculative decoding, model presets, data loading,
+    improved SDPA/Flash Attention support.
 """
 
 import math

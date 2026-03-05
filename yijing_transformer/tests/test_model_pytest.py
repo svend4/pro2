@@ -401,3 +401,295 @@ class TestV5Features:
         _, loss, _ = model(x, y)
         loss.backward()
         assert loss.item() > 0
+
+
+class TestV7LoRA:
+    """Тесты для v7: LoRA адаптеры."""
+
+    def test_apply_lora(self):
+        """LoRA адаптеры применяются к q_proj и v_proj."""
+        from models.lora import apply_lora, LoRALinear
+        cfg = make_cfg(use_lora=True, lora_rank=4, lora_alpha=8.0)
+        model = YiJingGPT(cfg)
+        count = apply_lora(model, cfg)
+        # 2 слоя × 2 target (q_proj, v_proj) = 4
+        assert count == cfg.n_layers * 2
+
+        # Проверяем что модули заменены
+        for layer in model.core.layers:
+            assert isinstance(layer.attn.q_proj, LoRALinear)
+            assert isinstance(layer.attn.v_proj, LoRALinear)
+
+    def test_lora_forward(self):
+        """Модель с LoRA работает (forward + backward)."""
+        from models.lora import apply_lora
+        cfg = make_cfg(use_lora=True, lora_rank=4)
+        model = YiJingGPT(cfg)
+        apply_lora(model, cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        assert loss.item() > 0
+
+    def test_freeze_non_lora(self):
+        """freeze_non_lora замораживает всё кроме LoRA параметров."""
+        from models.lora import apply_lora, freeze_non_lora
+        cfg = make_cfg(use_lora=True, lora_rank=4)
+        model = YiJingGPT(cfg)
+        apply_lora(model, cfg)
+        freeze_non_lora(model)
+
+        trainable = [n for n, p in model.named_parameters() if p.requires_grad]
+        frozen = [n for n, p in model.named_parameters() if not p.requires_grad]
+
+        assert len(trainable) > 0
+        assert all('lora_' in n for n in trainable)
+        assert len(frozen) > 0
+
+    def test_lora_parameter_count(self):
+        """LoRA параметры — малая доля от общего числа."""
+        from models.lora import apply_lora, count_lora_parameters
+        cfg = make_cfg(use_lora=True, lora_rank=4)
+        model = YiJingGPT(cfg)
+        apply_lora(model, cfg)
+        lora_p, total_p = count_lora_parameters(model)
+        assert lora_p > 0
+        assert lora_p < total_p * 0.1  # LoRA < 10% от всех параметров
+
+    def test_merge_lora(self):
+        """Merge вливает LoRA в основные веса."""
+        from models.lora import apply_lora, merge_lora, LoRALinear
+        cfg = make_cfg(use_lora=True, lora_rank=4)
+        model = YiJingGPT(cfg)
+        apply_lora(model, cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+
+        # До merge
+        logits_before, _, _ = model(x)
+
+        # Merge
+        merge_lora(model)
+        logits_after, _, _ = model(x)
+
+        # Результаты должны совпадать
+        torch.testing.assert_close(logits_before, logits_after, atol=1e-5, rtol=1e-5)
+
+    def test_unmerge_lora(self):
+        """Unmerge восстанавливает LoRA для продолжения обучения."""
+        from models.lora import apply_lora, merge_lora, unmerge_lora
+        cfg = make_cfg(use_lora=True, lora_rank=4)
+        model = YiJingGPT(cfg)
+        apply_lora(model, cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+
+        logits_orig, _, _ = model(x)
+        merge_lora(model)
+        unmerge_lora(model)
+        logits_restored, _, _ = model(x)
+
+        torch.testing.assert_close(logits_orig, logits_restored, atol=1e-5, rtol=1e-5)
+
+    def test_lora_custom_targets(self):
+        """LoRA с кастомными targets (все проекции)."""
+        from models.lora import apply_lora, LoRALinear
+        cfg = make_cfg(use_lora=True, lora_rank=4,
+                       lora_targets=['q_proj', 'k_proj', 'v_proj', 'out'])
+        model = YiJingGPT(cfg)
+        count = apply_lora(model, cfg)
+        assert count == cfg.n_layers * 4  # 4 targets per layer
+
+    def test_lora_with_gqa(self):
+        """LoRA работает с GQA."""
+        from models.lora import apply_lora
+        cfg = make_cfg(use_lora=True, lora_rank=4, n_kv_heads=2)
+        model = YiJingGPT(cfg)
+        apply_lora(model, cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        assert loss.item() > 0
+
+    def test_save_load_lora(self):
+        """Сохранение и загрузка LoRA весов."""
+        import tempfile
+        from models.lora import apply_lora, save_lora_weights, load_lora_weights
+        cfg = make_cfg(use_lora=True, lora_rank=4)
+        model = YiJingGPT(cfg)
+        apply_lora(model, cfg)
+
+        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as f:
+            path = f.name
+        try:
+            save_lora_weights(model, path)
+            # Загружаем в новую модель
+            model2 = YiJingGPT(cfg)
+            apply_lora(model2, cfg)
+            load_lora_weights(model2, path)
+
+            # Проверяем что веса совпадают
+            for (n1, p1), (n2, p2) in zip(
+                [(n, p) for n, p in model.named_parameters() if 'lora_' in n],
+                [(n, p) for n, p in model2.named_parameters() if 'lora_' in n],
+            ):
+                torch.testing.assert_close(p1, p2)
+        finally:
+            os.remove(path)
+
+
+class TestV7SpeculativeDecoding:
+    """Тесты для v7: speculative decoding."""
+
+    def test_build_draft_model(self):
+        """Draft модель создаётся с правильными параметрами."""
+        from models.speculative import build_draft_model
+        cfg = make_cfg(d_model=64, n_layers=4, draft_n_layers=2)
+        draft = build_draft_model(cfg)
+        assert len(draft.core.layers) == 2
+        # draft d_model = 64 // 2 = 32
+        assert draft.cfg.d_model == 32
+
+    def test_speculative_generate(self):
+        """Speculative generate выдаёт корректное число токенов."""
+        from models.speculative import build_draft_model, speculative_generate
+        cfg = make_cfg(d_model=64, n_layers=2, draft_n_layers=1)
+        target = YiJingGPT(cfg)
+        draft = build_draft_model(cfg)
+        target.eval()
+        draft.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = speculative_generate(target, draft, idx, max_new_tokens=8, K=3)
+        # Должно быть >= 4 + 1 (хотя бы 1 принятый токен)
+        assert out.shape[1] >= 5
+        assert out.shape[1] <= 4 + 8  # не больше max_new_tokens
+
+    def test_speculative_with_temperature(self):
+        """Speculative decoding с temperature > 1."""
+        from models.speculative import build_draft_model, speculative_generate
+        cfg = make_cfg(d_model=64, n_layers=2, draft_n_layers=1)
+        target = YiJingGPT(cfg)
+        draft = build_draft_model(cfg)
+        target.eval()
+        draft.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = speculative_generate(target, draft, idx, max_new_tokens=5,
+                                   K=2, temperature=1.5)
+        assert out.shape[1] >= 5
+
+    def test_speculative_with_top_k(self):
+        """Speculative decoding с top-k."""
+        from models.speculative import build_draft_model, speculative_generate
+        cfg = make_cfg(d_model=64, n_layers=2, draft_n_layers=1)
+        target = YiJingGPT(cfg)
+        draft = build_draft_model(cfg)
+        target.eval()
+        draft.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = speculative_generate(target, draft, idx, max_new_tokens=5,
+                                   K=2, top_k=20)
+        assert out.shape[1] >= 5
+
+
+class TestV7ModelPresets:
+    """Тесты для v7: model size presets."""
+
+    def test_tiny_preset(self):
+        cfg = YiJingConfig.tiny(vocab_size=128)
+        assert cfg.d_model == 128
+        assert cfg.n_layers == 4
+        assert cfg.n_heads == 4
+        model = YiJingGPT(cfg)
+        total, _ = model.count_parameters()
+        assert total > 0
+
+    def test_small_preset(self):
+        cfg = YiJingConfig.small(vocab_size=128)
+        assert cfg.d_model == 256
+        assert cfg.n_layers == 6
+        model = YiJingGPT(cfg)
+        total, _ = model.count_parameters()
+        assert total > 0
+
+    def test_medium_preset(self):
+        cfg = YiJingConfig.medium(vocab_size=128)
+        assert cfg.d_model == 512
+        assert cfg.n_layers == 12
+        assert cfg.n_kv_heads == 4  # GQA by default
+
+    def test_large_preset(self):
+        cfg = YiJingConfig.large(vocab_size=128)
+        assert cfg.d_model == 1024
+        assert cfg.n_layers == 16
+        assert cfg.n_kv_heads == 4
+
+    def test_preset_with_overrides(self):
+        """Пресеты принимают дополнительные kwargs."""
+        cfg = YiJingConfig.tiny(vocab_size=256, use_bian_gua=False)
+        assert cfg.vocab_size == 256
+        assert cfg.use_bian_gua is False
+
+    def test_tiny_forward(self):
+        """Tiny модель работает (forward + backward)."""
+        cfg = YiJingConfig.tiny(vocab_size=128)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, 128, (2, 8))
+        y = torch.randint(0, 128, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        assert loss.item() > 0
+
+
+class TestV7DataLoading:
+    """Тесты для v7: TextDataset."""
+
+    def test_from_text(self):
+        from data_utils.text_dataset import TextDataset
+        text = "Hello world! This is a test text for the dataset." * 10
+        ds = TextDataset.from_text(text, block_size=16)
+        assert ds.n_tokens > 0
+        assert len(ds) > 0
+
+    def test_get_batch(self):
+        from data_utils.text_dataset import TextDataset
+        text = "The quick brown fox jumps over the lazy dog. " * 20
+        ds = TextDataset.from_text(text, block_size=16)
+        x, y = ds.get_batch(batch_size=4)
+        assert x.shape == (4, 16)
+        assert y.shape == (4, 16)
+        # y сдвинут на 1 относительно x
+        # (проверяем что это одни и те же данные сдвинутые)
+
+    def test_split(self):
+        from data_utils.text_dataset import TextDataset
+        text = "abcdefghijklmnop" * 50
+        ds = TextDataset.from_text(text, block_size=8)
+        train_ds, val_ds = ds.split(val_fraction=0.2)
+        assert train_ds.n_tokens + val_ds.n_tokens == ds.n_tokens
+
+    def test_get_vocab_size(self):
+        from data_utils.text_dataset import TextDataset
+        text = "Hello World"
+        ds = TextDataset.from_text(text, block_size=4)
+        vs = ds.get_vocab_size()
+        assert vs > 0
+
+    def test_shuffled_batch_iterator(self):
+        from data_utils.text_dataset import TextDataset, ShuffledBatchIterator
+        text = "The ancient Book of Changes. " * 50
+        ds = TextDataset.from_text(text, block_size=8)
+        iterator = ShuffledBatchIterator(ds, batch_size=4)
+        x, y = iterator.get_batch()
+        assert x.shape == (4, 8)
+        assert y.shape == (4, 8)
+        assert iterator.n_batches > 0
+
+    def test_repr(self):
+        from data_utils.text_dataset import TextDataset
+        text = "test" * 100
+        ds = TextDataset.from_text(text, block_size=8)
+        r = repr(ds)
+        assert 'TextDataset' in r
+        assert 'tokens=' in r

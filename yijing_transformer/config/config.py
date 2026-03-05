@@ -44,6 +44,18 @@ class YiJingConfig:
     sliding_window: Optional[int] = None  # размер окна sliding window attention
     use_amp: bool = False        # mixed precision training (AMP)
 
+    # v7: LoRA адаптеры
+    use_lora: bool = False       # включить LoRA адаптеры
+    lora_rank: int = 8           # ранг LoRA
+    lora_alpha: float = 16.0     # scaling factor
+    lora_dropout: float = 0.0    # dropout на LoRA
+    lora_targets: Optional[list] = None  # целевые модули: ['q_proj', 'v_proj', ...], None = все
+
+    # v7: Speculative decoding
+    draft_n_layers: int = 2      # число слоёв в draft модели
+    draft_d_model: Optional[int] = None  # d_model для draft (None = cfg.d_model // 2)
+    speculative_k: int = 4       # число токенов для спекулятивной генерации
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
@@ -66,6 +78,30 @@ class YiJingConfig:
     use_tensorboard: bool = False
     project_name: str = "yijing-transformer"
     run_name: Optional[str] = None
+
+    @classmethod
+    def tiny(cls, vocab_size=2048, **kwargs):
+        """Tiny preset: ~2M params, быстрые эксперименты."""
+        return cls(vocab_size=vocab_size, d_model=128, n_layers=4, n_heads=4,
+                   block_size=256, **kwargs)
+
+    @classmethod
+    def small(cls, vocab_size=2048, **kwargs):
+        """Small preset: ~15M params, для обучения на CPU/одном GPU."""
+        return cls(vocab_size=vocab_size, d_model=256, n_layers=6, n_heads=8,
+                   block_size=512, **kwargs)
+
+    @classmethod
+    def medium(cls, vocab_size=32000, **kwargs):
+        """Medium preset: ~85M params, для серьёзных экспериментов."""
+        return cls(vocab_size=vocab_size, d_model=512, n_layers=12, n_heads=8,
+                   block_size=1024, n_kv_heads=4, **kwargs)
+
+    @classmethod
+    def large(cls, vocab_size=32000, **kwargs):
+        """Large preset: ~300M params, для полноценного обучения."""
+        return cls(vocab_size=vocab_size, d_model=1024, n_layers=16, n_heads=16,
+                   block_size=2048, n_kv_heads=4, **kwargs)
 
     @property
     def head_dim(self):
