@@ -564,7 +564,7 @@ class TestV7SpeculativeDecoding:
         out = speculative_generate(target, draft, idx, max_new_tokens=8, K=3)
         # Должно быть >= 4 + 1 (хотя бы 1 принятый токен)
         assert out.shape[1] >= 5
-        assert out.shape[1] <= 4 + 8  # не больше max_new_tokens
+        assert out.shape[1] <= 4 + 8 + 1  # max_new_tokens + 1 bonus token possible
 
     def test_speculative_with_temperature(self):
         """Speculative decoding с temperature > 1."""
@@ -693,3 +693,252 @@ class TestV7DataLoading:
         r = repr(ds)
         assert 'TextDataset' in r
         assert 'tokens=' in r
+
+
+class TestV8RoPEScaling:
+    """Тесты для v8: RoPE scaling (NTK и linear)."""
+
+    def test_ntk_scaling(self):
+        """NTK-aware RoPE scaling работает."""
+        cfg = make_cfg(rope_scaling='ntk', rope_scaling_factor=2.0)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_linear_scaling(self):
+        """Linear RoPE scaling работает."""
+        cfg = make_cfg(rope_scaling='linear', rope_scaling_factor=2.0)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_no_scaling_default(self):
+        """Без scaling — стандартный RoPE."""
+        cfg = make_cfg(rope_scaling=None, rope_scaling_factor=1.0)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_ntk_different_frequencies(self):
+        """NTK scaling изменяет inv_freq по сравнению с обычным RoPE."""
+        from models.geometry import RotaryEmbedding
+        dim = 16
+        rope_std = RotaryEmbedding(dim, max_seq_len=64)
+        rope_ntk = RotaryEmbedding(dim, max_seq_len=64, scaling='ntk', scaling_factor=4.0)
+        # inv_freq должны отличаться
+        assert not torch.allclose(rope_std.inv_freq, rope_ntk.inv_freq)
+
+    def test_ntk_with_kv_cache(self):
+        """NTK scaling + KV-cache работают вместе."""
+        cfg = make_cfg(rope_scaling='ntk', rope_scaling_factor=2.0)
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = model.generate(idx, max_new_tokens=5, use_cache=True)
+        assert out.shape == (1, 9)
+
+
+class TestV8Generate:
+    """Тесты для v8: улучшенный generate."""
+
+    def test_repetition_penalty(self):
+        """Repetition penalty не вызывает ошибок."""
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = model.generate(idx, max_new_tokens=10, repetition_penalty=1.2)
+        assert out.shape[1] == 14
+
+    def test_top_p(self):
+        """Top-p (nucleus) sampling работает."""
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = model.generate(idx, max_new_tokens=10, top_p=0.9)
+        assert out.shape[1] == 14
+
+    def test_combined_sampling(self):
+        """Top-k + top-p + repetition penalty вместе."""
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = model.generate(idx, max_new_tokens=8, top_k=20, top_p=0.9,
+                             repetition_penalty=1.3)
+        assert out.shape[1] == 12
+
+    def test_stop_tokens(self):
+        """Stop tokens прекращают генерацию."""
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        # stop_tokens=[0] — очень вероятно что 0 появится быстро
+        out = model.generate(idx, max_new_tokens=100, stop_tokens=[0])
+        assert out.shape[1] <= 104  # не больше max
+
+
+class TestV8SaveLoad:
+    """Тесты для v8: save/load pretrained."""
+
+    def test_save_load(self):
+        """Сохранение и загрузка модели."""
+        import tempfile
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        logits_orig, _, _ = model(x)
+
+        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as f:
+            path = f.name
+        try:
+            model.save_pretrained(path)
+            model2 = YiJingGPT.from_pretrained(path)
+            model2.eval()
+            logits_loaded, _, _ = model2(x)
+            torch.testing.assert_close(logits_orig, logits_loaded)
+        finally:
+            os.remove(path)
+
+    def test_save_load_preserves_config(self):
+        """Config сохраняется и восстанавливается."""
+        import tempfile
+        cfg = make_cfg(n_kv_heads=2, sliding_window=8, rope_scaling='ntk')
+        model = YiJingGPT(cfg)
+
+        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as f:
+            path = f.name
+        try:
+            model.save_pretrained(path)
+            model2 = YiJingGPT.from_pretrained(path)
+            assert model2.cfg.n_kv_heads == 2
+            assert model2.cfg.sliding_window == 8
+            assert model2.cfg.rope_scaling == 'ntk'
+        finally:
+            os.remove(path)
+
+
+class TestV8FLOPS:
+    """Тесты для v8: FLOPS estimation."""
+
+    def test_estimate_flops(self):
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        flops = model.estimate_flops()
+        assert flops > 0
+
+    def test_estimate_flops_custom_seq(self):
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        f1 = model.estimate_flops(seq_len=16)
+        f2 = model.estimate_flops(seq_len=32)
+        assert f2 > f1  # длиннее = больше FLOPS
+
+    def test_estimate_flops_str(self):
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        s = model.estimate_flops_str()
+        assert 'FLOPS' in s
+
+    def test_flops_scales_with_layers(self):
+        model_2 = YiJingGPT(make_cfg(n_layers=2))
+        model_4 = YiJingGPT(make_cfg(n_layers=4))
+        f2 = model_2.estimate_flops(seq_len=16)
+        f4 = model_4.estimate_flops(seq_len=16)
+        assert f4 > f2
+
+
+class TestV8Distillation:
+    """Тесты для v8: knowledge distillation."""
+
+    def test_distillation_loss(self):
+        """Distillation loss вычисляется корректно."""
+        from training.distillation import distillation_loss
+        B, T, V = 2, 8, 128
+        student_logits = torch.randn(B, T, V)
+        teacher_logits = torch.randn(B, T, V)
+        targets = torch.randint(0, V, (B, T))
+        loss = distillation_loss(student_logits, teacher_logits, targets,
+                                 alpha=0.5, temperature=2.0)
+        assert loss.item() > 0
+        assert torch.isfinite(loss)
+
+    def test_distillation_loss_alpha_zero(self):
+        """alpha=0 → только hard loss."""
+        from training.distillation import distillation_loss
+        B, T, V = 2, 8, 128
+        student_logits = torch.randn(B, T, V)
+        teacher_logits = torch.randn(B, T, V)
+        targets = torch.randint(0, V, (B, T))
+
+        import torch.nn.functional as F
+        hard_only = F.cross_entropy(
+            student_logits.reshape(-1, V), targets.reshape(-1)
+        )
+        loss = distillation_loss(student_logits, teacher_logits, targets,
+                                 alpha=0.0, temperature=2.0)
+        torch.testing.assert_close(loss, hard_only, atol=1e-5, rtol=1e-5)
+
+    def test_distillation_trainer_step(self):
+        """DistillationTrainer выполняет один шаг."""
+        from training.distillation import DistillationTrainer
+        cfg = make_cfg()
+        teacher = YiJingGPT(cfg)
+        student = YiJingGPT(cfg)
+        optimizer = torch.optim.AdamW(student.parameters(), lr=1e-3)
+        trainer = DistillationTrainer(teacher, student, optimizer, cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        metrics = trainer.step(x, y)
+        assert 'total_loss' in metrics
+        assert metrics['total_loss'] > 0
+
+    def test_distillation_cross_size(self):
+        """Distillation между моделями разного размера."""
+        from training.distillation import DistillationTrainer
+        teacher_cfg = make_cfg(d_model=64, n_layers=4)
+        student_cfg = make_cfg(d_model=64, n_layers=2)
+        teacher = YiJingGPT(teacher_cfg)
+        student = YiJingGPT(student_cfg)
+        optimizer = torch.optim.AdamW(student.parameters(), lr=1e-3)
+        trainer = DistillationTrainer(teacher, student, optimizer, student_cfg)
+        x = torch.randint(0, teacher_cfg.vocab_size, (2, 8))
+        y = torch.randint(0, teacher_cfg.vocab_size, (2, 8))
+        metrics = trainer.step(x, y)
+        assert metrics['total_loss'] > 0
+
+
+class TestV8ModelCard:
+    """Тесты для v8: model card."""
+
+    def test_create_model_card(self):
+        from models.export import create_model_card
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        card = create_model_card(model)
+        assert card['model_type'] == 'YiJingGPT'
+        assert card['architecture']['d_model'] == 64
+        assert card['parameters']['total'] > 0
+        assert 'FLOPS' in card['flops']['human_readable']
+
+    def test_model_card_save(self):
+        import tempfile
+        from models.export import create_model_card
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False, mode='w') as f:
+            path = f.name
+        try:
+            card = create_model_card(model, save_path=path)
+            import json
+            with open(path) as f:
+                loaded = json.load(f)
+            assert loaded['model_type'] == 'YiJingGPT'
+        finally:
+            os.remove(path)

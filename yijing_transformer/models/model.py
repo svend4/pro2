@@ -2,8 +2,9 @@
 YiJing-Transformer: трансформер с геометрической регуляризацией
 на основе гиперкубов {-1,+1}^n (64 гексаграмм, 256 октограмм).
 
-v7: LoRA adapters, speculative decoding, model presets, data loading,
-    improved SDPA/Flash Attention support.
+v8: RoPE scaling (NTK/linear), distillation, FLOPS profiler,
+    improved generate (rep penalty, top-p, stop tokens),
+    ONNX/TorchScript export, save/load pretrained.
 """
 
 import math
@@ -107,10 +108,12 @@ class YiJingAttention(nn.Module):
         self.out = nn.Linear(cfg.d_model, cfg.d_model, bias=cfg.bias)
         self.dropout = nn.Dropout(cfg.dropout)
 
-        # RoPE
+        # RoPE (с поддержкой scaling для расширения контекста)
         if self.use_rope:
             self.rotary = RotaryEmbedding(
-                self.head_dim, max_seq_len=cfg.block_size, base=cfg.rope_base
+                self.head_dim, max_seq_len=cfg.block_size, base=cfg.rope_base,
+                scaling=getattr(cfg, 'rope_scaling', None),
+                scaling_factor=getattr(cfg, 'rope_scaling_factor', 1.0),
             )
 
         # 8 триграмм как направления для голов
@@ -399,29 +402,75 @@ class YiJingGPT(nn.Module):
 
         return logits, loss, new_kv_cache
 
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, use_cache=True):
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None, top_p=None,
+                 repetition_penalty=1.0, repetition_window=64, stop_tokens=None,
+                 use_cache=True):
+        """
+        Авторегрессивная генерация с KV-cache.
+
+        Args:
+            idx: (B, T) начальная последовательность
+            max_new_tokens: максимум новых токенов
+            temperature: температура сэмплирования
+            top_k: top-k фильтрация
+            top_p: nucleus sampling (top-p)
+            repetition_penalty: штраф за повторения (1.0 = нет штрафа)
+            repetition_window: окно для repetition penalty
+            stop_tokens: list[int] — стоп-токены (генерация прекращается)
+            use_cache: использовать KV-cache
+        """
         kv_cache = None
         for _ in range(max_new_tokens):
             if use_cache and kv_cache is not None:
-                # Только последний токен через модель
                 idx_input = idx[:, -1:]
             else:
                 idx_input = idx if idx.size(1) <= self.cfg.block_size else idx[:, -self.cfg.block_size:]
 
             logits, _, kv_cache = self(idx_input, kv_cache=kv_cache if use_cache else None)
-            logits = logits[:, -1, :] / temperature
+            logits = logits[:, -1, :]  # (B, V)
+
+            # Repetition penalty
+            if repetition_penalty != 1.0:
+                past = idx[:, -repetition_window:]
+                for b in range(idx.size(0)):
+                    seen = past[b].unique()
+                    for token_id in seen:
+                        if logits[b, token_id] > 0:
+                            logits[b, token_id] /= repetition_penalty
+                        else:
+                            logits[b, token_id] *= repetition_penalty
+
+            logits = logits / temperature
+
+            # Top-k
             if top_k is not None:
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float('Inf')
+
+            # Top-p (nucleus sampling)
+            if top_p is not None and 0.0 < top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                # Убираем токены с cumulative > top_p
+                sorted_mask = cumulative_probs - F.softmax(sorted_logits, dim=-1) >= top_p
+                for b in range(logits.size(0)):
+                    indices_to_remove = sorted_indices[b][sorted_mask[b]]
+                    logits[b, indices_to_remove] = -float('Inf')
+
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
+
+            # Stop tokens
+            if stop_tokens is not None:
+                if idx_next.item() in stop_tokens:
+                    break
 
             # Обрезаем кэш если превышаем block_size
             if use_cache and kv_cache is not None:
                 cache_len = kv_cache[0][0].size(2)
                 if cache_len >= self.cfg.block_size:
-                    kv_cache = None  # сбрасываем, пересчитываем
+                    kv_cache = None
         return idx
 
     def count_parameters(self):
@@ -434,6 +483,88 @@ class YiJingGPT(nn.Module):
             if any(k in name for k in hex_keys):
                 hex_params += p.numel()
         return total, hex_params
+
+    def save_pretrained(self, path):
+        """Сохраняет модель + config в один файл."""
+        import os
+        os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
+        torch.save({
+            'config': self.cfg,
+            'model_state_dict': self.state_dict(),
+        }, path)
+
+    @classmethod
+    def from_pretrained(cls, path, device='cpu'):
+        """Загружает модель из файла."""
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+        cfg = ckpt['config']
+        model = cls(cfg).to(device)
+        model.load_state_dict(ckpt['model_state_dict'])
+        return model
+
+    def estimate_flops(self, seq_len=None):
+        """
+        Оценка FLOPS для одного forward pass.
+
+        Считает основные операции:
+        - Attention: QKV projections + attention scores + output projection
+        - FFN: 2-3 линейных слоя
+        - Quantizer: projection + softmax
+        """
+        if seq_len is None:
+            seq_len = self.cfg.block_size
+        d = self.cfg.d_model
+        h = self.cfg.n_heads
+        hd = self.cfg.head_dim
+        L = self.cfg.n_layers
+        V = self.cfg.vocab_size
+        T = seq_len
+        ffn_h = self.cfg.ffn_hidden
+        kv_h = self.cfg.n_kv_heads or h
+
+        flops = 0
+
+        # Embedding lookup (negligible) + per layer:
+        for _ in range(L):
+            # Q, K, V projections
+            flops += 2 * T * d * (h * hd)          # Q
+            flops += 2 * T * d * (kv_h * hd)       # K
+            flops += 2 * T * d * (kv_h * hd)       # V
+
+            # Attention scores: Q @ K^T
+            flops += 2 * T * T * h * hd
+
+            # Attention @ V
+            flops += 2 * T * T * h * hd
+
+            # Output projection
+            flops += 2 * T * d * d
+
+            # FFN
+            if self.cfg.use_swiglu:
+                flops += 2 * T * d * ffn_h * 3  # w1, w2, w3
+            else:
+                flops += 2 * T * d * ffn_h * 2  # up + down
+
+            # Quantizer projection (small)
+            qd = self.cfg.quant_total_dim
+            flops += 2 * T * d * qd * 2  # to_qd + from_qd
+
+        # LM head
+        flops += 2 * T * d * V
+
+        return flops
+
+    def estimate_flops_str(self, seq_len=None):
+        """Человекочитаемая строка с FLOPS."""
+        flops = self.estimate_flops(seq_len)
+        if flops >= 1e12:
+            return f"{flops/1e12:.2f} TFLOPS"
+        elif flops >= 1e9:
+            return f"{flops/1e9:.2f} GFLOPS"
+        elif flops >= 1e6:
+            return f"{flops/1e6:.2f} MFLOPS"
+        return f"{flops:.0f} FLOPS"
 
     @torch.no_grad()
     def quantization_analytics(self):

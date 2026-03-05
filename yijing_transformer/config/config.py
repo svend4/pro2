@@ -56,6 +56,14 @@ class YiJingConfig:
     draft_d_model: Optional[int] = None  # d_model для draft (None = cfg.d_model // 2)
     speculative_k: int = 4       # число токенов для спекулятивной генерации
 
+    # v8: RoPE scaling для расширения контекста
+    rope_scaling: Optional[str] = None  # None, 'ntk', 'linear'
+    rope_scaling_factor: float = 1.0    # множитель расширения контекста
+
+    # v8: Distillation
+    distill_alpha: float = 0.5   # баланс hard/soft loss (1.0 = только soft)
+    distill_temp: float = 2.0    # температура для soft targets
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

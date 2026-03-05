@@ -309,15 +309,37 @@ class BianGuaTransform(nn.Module):
 # ==================== ROTARY POSITION EMBEDDINGS ====================
 
 class RotaryEmbedding(nn.Module):
-    """RoPE: вращение пар измерений в зависимости от позиции."""
-    def __init__(self, dim: int, max_seq_len: int = 4096, base: float = 10000.0):
+    """
+    RoPE: вращение пар измерений в зависимости от позиции.
+
+    Поддерживает scaling для расширения контекста:
+    - None: стандартный RoPE
+    - 'linear': линейная интерполяция позиций (позволяет extrapolation)
+    - 'ntk': NTK-aware scaling (изменяет base, лучше сохраняет различимость)
+    """
+    def __init__(self, dim: int, max_seq_len: int = 4096, base: float = 10000.0,
+                 scaling: str = None, scaling_factor: float = 1.0):
         super().__init__()
+        self.dim = dim
+        self.base = base
+        self.scaling = scaling
+        self.scaling_factor = scaling_factor
+
+        if scaling == 'ntk' and scaling_factor > 1.0:
+            # NTK-aware: увеличиваем base пропорционально scaling_factor
+            base = base * (scaling_factor ** (dim / (dim - 2)))
+
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)
         self._build_cache(max_seq_len)
 
     def _build_cache(self, seq_len: int):
         t = torch.arange(seq_len, dtype=self.inv_freq.dtype)
+
+        if self.scaling == 'linear' and self.scaling_factor > 1.0:
+            # Линейная интерполяция: сжимаем позиции
+            t = t / self.scaling_factor
+
         freqs = torch.outer(t, self.inv_freq)
         emb = torch.cat([freqs, freqs], dim=-1)
         self.register_buffer('cos_cached', emb.cos(), persistent=False)
