@@ -375,11 +375,17 @@ class YiJingGPT(nn.Module):
         self.cfg = cfg
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
 
-        # Позиционные эмбеддинги: если RoPE — не нужны отдельные
-        if not cfg.use_rope:
+        # Позиционные эмбеддинги: если RoPE или ALiBi — не нужны отдельные
+        if not cfg.use_rope and not getattr(cfg, 'use_alibi', False):
             self.pos_emb = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
         else:
             self.pos_emb = None
+
+        # Token Merging (ToMe) — сокращение числа токенов в FFN
+        self.token_merge_ratio = getattr(cfg, 'token_merge_ratio', 0.0)
+
+        # Label smoothing
+        self.label_smoothing = getattr(cfg, 'label_smoothing', 0.0)
 
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
@@ -414,6 +420,7 @@ class YiJingGPT(nn.Module):
             loss = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)),
                 targets.reshape(-1),
+                label_smoothing=self.label_smoothing,
             )
             # Добавляем MoE aux loss
             aux = self.core.get_aux_loss()

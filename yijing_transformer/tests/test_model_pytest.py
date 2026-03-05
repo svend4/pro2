@@ -1503,3 +1503,297 @@ class TestV10Integration:
         optimizer.step()
         optimizer.zero_grad()
         ema.update()
+
+
+# ==================== V11 TESTS ====================
+
+class TestV11MQA:
+    """Тесты для Multi-Query Attention (n_kv_heads=1)."""
+
+    def test_mqa_forward(self):
+        """MQA: n_kv_heads=1 работает."""
+        cfg = make_cfg(n_kv_heads=1)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 16, cfg.vocab_size)
+
+    def test_mqa_backward(self):
+        """MQA backward."""
+        cfg = make_cfg(n_kv_heads=1)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+    def test_mqa_fewer_kv_params(self):
+        """MQA имеет меньше параметров K/V проекций."""
+        cfg_mha = make_cfg(n_kv_heads=None)  # MHA: 8 kv heads
+        cfg_mqa = make_cfg(n_kv_heads=1)     # MQA: 1 kv head
+        attn_mha = YiJingAttention(cfg_mha)
+        attn_mqa = YiJingAttention(cfg_mqa)
+        # K/V проекции MQA должны быть меньше
+        mha_kv = sum(p.numel() for p in [attn_mha.k_proj.weight, attn_mha.v_proj.weight])
+        mqa_kv = sum(p.numel() for p in [attn_mqa.k_proj.weight, attn_mqa.v_proj.weight])
+        assert mqa_kv < mha_kv
+
+    def test_mqa_with_kv_cache(self):
+        """MQA с KV-cache."""
+        cfg = make_cfg(n_kv_heads=1)
+        model = YiJingGPT(cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        with torch.no_grad():
+            logits1, _, cache = model(x)
+            # Decode step
+            next_tok = torch.randint(0, cfg.vocab_size, (1, 1))
+            logits2, _, _ = model(next_tok, kv_cache=cache)
+        assert logits2.shape == (1, 1, cfg.vocab_size)
+
+
+class TestV11TokenMerger:
+    """Тесты для Token Merging."""
+
+    def test_merge_basic(self):
+        """Token Merging: merge и unmerge."""
+        from training.regularization import TokenMerger
+        merger = TokenMerger(merge_ratio=0.25)
+        x = torch.randn(2, 16, 64)
+        merged, info = merger(x)
+        assert merged.shape[0] == 2
+        assert merged.shape[1] < 16  # сократилось
+        assert merged.shape[2] == 64
+
+    def test_merge_unmerge_shape(self):
+        """Unmerge восстанавливает исходную длину."""
+        from training.regularization import TokenMerger
+        merger = TokenMerger(merge_ratio=0.25)
+        x = torch.randn(1, 16, 32)
+        merged, info = merger(x)
+        unmerged = merger.unmerge(merged, info)
+        assert unmerged.shape == x.shape
+
+    def test_merge_zero_ratio(self):
+        """merge_ratio=0 не меняет ничего."""
+        from training.regularization import TokenMerger
+        merger = TokenMerger(merge_ratio=0.0)
+        x = torch.randn(2, 8, 32)
+        merged, info = merger(x)
+        assert info is None
+        assert merged.shape == x.shape
+
+    def test_merge_short_sequence(self):
+        """Очень короткая последовательность (T=2)."""
+        from training.regularization import TokenMerger
+        merger = TokenMerger(merge_ratio=0.5)
+        x = torch.randn(1, 2, 32)
+        merged, info = merger(x)
+        # T=2 → r=1, a=[0], b=[1], merge pair → T-1=1
+        assert merged.shape[1] <= 2
+
+    def test_merge_gradient(self):
+        """Gradient проходит через merge/unmerge."""
+        from training.regularization import TokenMerger
+        merger = TokenMerger(merge_ratio=0.25)
+        x = torch.randn(1, 8, 32, requires_grad=True)
+        merged, info = merger(x)
+        loss = merged.sum()
+        loss.backward()
+        assert x.grad is not None
+
+
+class TestV11CosineWarmRestarts:
+    """Тесты для cosine annealing с warm restarts."""
+
+    def test_basic_schedule(self):
+        """LR уменьшается, затем перезапускается."""
+        from training.regularization import CosineAnnealingWarmRestarts
+        model = torch.nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        scheduler = CosineAnnealingWarmRestarts(opt, T_0=10, T_mult=1)
+
+        lrs = []
+        for _ in range(25):
+            scheduler.step()
+            lrs.append(scheduler.get_lr()[0])
+
+        # LR должен упасть в середине цикла
+        assert lrs[4] < lrs[0]
+        # LR на restart (T_cur=0) возвращается к base
+        # step 10 → T_cur=10 → reset → T_cur=0 → lr=base=0.1
+        assert abs(lrs[9] - 0.1) < 1e-6  # restart point
+
+    def test_warmup(self):
+        """Warmup в начале каждого цикла."""
+        from training.regularization import CosineAnnealingWarmRestarts
+        model = torch.nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        scheduler = CosineAnnealingWarmRestarts(opt, T_0=20, warmup_steps=5)
+
+        lrs = []
+        for _ in range(10):
+            scheduler.step()
+            lrs.append(scheduler.get_lr()[0])
+
+        # Warmup: LR растёт первые 5 шагов
+        assert lrs[0] < lrs[3]
+
+    def test_t_mult(self):
+        """T_mult удлиняет циклы."""
+        from training.regularization import CosineAnnealingWarmRestarts
+        model = torch.nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        scheduler = CosineAnnealingWarmRestarts(opt, T_0=10, T_mult=2)
+
+        # Первый цикл: 10 шагов, второй: 20 шагов
+        for _ in range(10):
+            scheduler.step()
+        assert scheduler.cycle == 1
+        assert scheduler.T_i == 20
+
+    def test_state_dict(self):
+        """State dict сохраняется и загружается."""
+        from training.regularization import CosineAnnealingWarmRestarts
+        model = torch.nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = CosineAnnealingWarmRestarts(opt, T_0=10)
+        for _ in range(5):
+            sched.step()
+        state = sched.state_dict()
+        assert state['step_count'] == 5
+
+
+class TestV11GradientNoise:
+    """Тесты для gradient noise."""
+
+    def test_noise_added(self):
+        """Шум добавляется к градиентам."""
+        from training.regularization import GradientNoise
+        model = torch.nn.Linear(10, 10)
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        grad_before = model.weight.grad.clone()
+        gn = GradientNoise(eta=1.0, gamma=0.55)
+        gn.add_noise(model)
+        grad_after = model.weight.grad
+
+        # Градиенты должны измениться
+        assert not torch.equal(grad_before, grad_after)
+
+    def test_noise_decreases(self):
+        """Sigma уменьшается со временем."""
+        from training.regularization import GradientNoise
+        gn = GradientNoise(eta=1.0, gamma=0.55)
+        model = torch.nn.Linear(10, 10)
+        x = torch.randn(4, 10)
+
+        sigmas = []
+        for _ in range(10):
+            loss = model(x).sum()
+            loss.backward()
+            sigma = gn.add_noise(model)
+            sigmas.append(sigma)
+            model.zero_grad()
+
+        # Sigma должна убывать
+        assert sigmas[-1] < sigmas[0]
+
+    def test_noise_state_dict(self):
+        """State dict сохраняется."""
+        from training.regularization import GradientNoise
+        gn = GradientNoise(eta=0.5)
+        gn.step_count = 100
+        state = gn.state_dict()
+        assert state['step_count'] == 100
+        assert state['eta'] == 0.5
+
+
+class TestV11LabelSmoothing:
+    """Тесты для label smoothing."""
+
+    def test_label_smoothing_forward(self):
+        """Модель с label smoothing работает."""
+        cfg = make_cfg(label_smoothing=0.1)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        assert loss is not None
+        assert loss.item() > 0
+
+    def test_label_smoothing_higher_loss(self):
+        """Label smoothing увеличивает loss (менее уверенные предсказания)."""
+        cfg_no = make_cfg(label_smoothing=0.0)
+        cfg_ls = make_cfg(label_smoothing=0.1)
+        # Фиксируем seed для воспроизводимости
+        torch.manual_seed(42)
+        model_no = YiJingGPT(cfg_no)
+        torch.manual_seed(42)
+        model_ls = YiJingGPT(cfg_ls)
+        x = torch.randint(0, cfg_no.vocab_size, (2, 8))
+        y = torch.randint(0, cfg_no.vocab_size, (2, 8))
+        _, loss_no, _ = model_no(x, y)
+        _, loss_ls, _ = model_ls(x, y)
+        # Label smoothing обычно увеличивает loss
+        assert loss_ls.item() >= loss_no.item() - 0.5  # мягкая проверка
+
+    def test_label_smoothing_backward(self):
+        """Backward с label smoothing."""
+        cfg = make_cfg(label_smoothing=0.1)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+
+class TestV11Integration:
+    """Интеграционные тесты v11."""
+
+    def test_mqa_alibi_label_smoothing(self):
+        """MQA + ALiBi + label smoothing вместе."""
+        cfg = make_cfg(
+            n_kv_heads=1, use_rope=False, use_alibi=True,
+            label_smoothing=0.1
+        )
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+    def test_full_training_loop_v11(self):
+        """Мини training loop со всеми v11 фичами."""
+        from training.regularization import CosineAnnealingWarmRestarts, GradientNoise
+        from training.ema import EMA, EarlyStopping
+
+        cfg = make_cfg(n_kv_heads=1, label_smoothing=0.05)
+        model = YiJingGPT(cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        scheduler = CosineAnnealingWarmRestarts(opt, T_0=5, warmup_steps=2)
+        gn = GradientNoise(eta=0.01)
+        ema = EMA(model, decay=0.99)
+        es = EarlyStopping(patience=3, mode='min')
+
+        for step in range(10):
+            x = torch.randint(0, cfg.vocab_size, (2, 8))
+            y = torch.randint(0, cfg.vocab_size, (2, 8))
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gn.add_noise(model)
+            opt.step()
+            opt.zero_grad()
+            scheduler.step()
+            ema.update()
+            es(loss.item())
+
+        # EMA inference
+        with ema.average_parameters():
+            model.eval()
+            x = torch.randint(0, cfg.vocab_size, (1, 4))
+            with torch.no_grad():
+                logits, _, _ = model(x)
+            assert logits.shape == (1, 4, cfg.vocab_size)

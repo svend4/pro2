@@ -71,6 +71,12 @@ class YiJingConfig:
     ema_decay: float = 0.999     # EMA decay rate
     early_stop_patience: int = 0 # early stopping (0 = выкл)
 
+    # v11: Token Merging, label smoothing, gradient noise, cosine restarts
+    token_merge_ratio: float = 0.0   # доля токенов для слияния (0 = выкл, 0.25 = 25%)
+    label_smoothing: float = 0.0     # label smoothing (0 = выкл, 0.1 = типично)
+    gradient_noise_eta: float = 0.0  # gradient noise scale (0 = выкл)
+    cosine_restarts: int = 0         # число warm restarts (0 = обычный cosine)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
