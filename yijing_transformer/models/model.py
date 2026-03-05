@@ -473,6 +473,53 @@ class YiJingGPT(nn.Module):
                     kv_cache = None
         return idx
 
+    @torch.no_grad()
+    def beam_search(self, idx, max_new_tokens, beam_width=4, temperature=1.0,
+                    length_penalty=0.6):
+        """
+        Beam search decoding.
+
+        Args:
+            idx: (1, T) начальная последовательность (batch=1)
+            max_new_tokens: максимум новых токенов
+            beam_width: ширина пучка
+            temperature: температура для logits
+            length_penalty: штраф за длину (α в score/len^α)
+
+        Returns:
+            best_sequence: (1, T+generated) лучшая последовательность
+        """
+        assert idx.size(0) == 1, "Beam search supports batch_size=1"
+        device = idx.device
+
+        # Инициализация: beam_width копий
+        beams = [(idx, 0.0)]  # (sequence, log_prob)
+
+        def _score(seq, score):
+            length = seq.size(1) - idx.size(1)
+            return score / (length ** length_penalty) if length > 0 else score
+
+        for step in range(max_new_tokens):
+            candidates = []
+            for seq, score in beams:
+                seq_input = seq if seq.size(1) <= self.cfg.block_size else seq[:, -self.cfg.block_size:]
+                logits, _, _ = self(seq_input)
+                logits = logits[:, -1, :] / temperature
+                log_probs = F.log_softmax(logits, dim=-1).squeeze(0)
+
+                top_log_probs, top_indices = torch.topk(log_probs, beam_width)
+                for i in range(beam_width):
+                    token = top_indices[i].unsqueeze(0).unsqueeze(0)
+                    new_seq = torch.cat([seq, token], dim=1)
+                    new_score = score + top_log_probs[i].item()
+                    candidates.append((new_seq, new_score))
+
+            candidates.sort(key=lambda x: _score(x[0], x[1]), reverse=True)
+            beams = candidates[:beam_width]
+
+        best_seq, _ = max(beams, key=lambda x: _score(x[0], x[1]))
+        return best_seq
+
     def count_parameters(self):
         total = sum(p.numel() for p in self.parameters())
         hex_params = 0

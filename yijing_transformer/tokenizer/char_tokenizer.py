@@ -1,7 +1,10 @@
 """
-Простой char-level токенизатор для работы без sentencepiece.
+Токенизаторы для YiJing-Transformer.
 
-Позволяет запускать обучение и инференс без внешних зависимостей.
+Включает:
+- CharTokenizer: char-level, все уникальные символы из текста
+- ByteTokenizer: byte-level, 256 фиксированных токенов + спец.токены
+- Оба работают без внешних зависимостей.
 """
 
 
@@ -51,3 +54,65 @@ class CharTokenizer:
         with open(path, 'r', encoding='utf-8') as f:
             text = f.read()
         return cls.from_text(text)
+
+    def save(self, path: str):
+        """Сохраняет словарь в файл."""
+        with open(path, 'w', encoding='utf-8') as f:
+            for c in self.chars:
+                f.write(f"{ord(c)}\n")
+
+    @classmethod
+    def load(cls, path: str):
+        """Загружает словарь из файла."""
+        with open(path, 'r', encoding='utf-8') as f:
+            chars = [chr(int(line.strip())) for line in f if line.strip()]
+        return cls(chars)
+
+
+class ByteTokenizer:
+    """
+    Byte-level tokenizer: кодирует текст как последовательность байтов.
+
+    Фиксированный словарь 256 + 3 спец.токена = 259.
+    Не требует подготовки словаря, работает с любым текстом.
+    Использует UTF-8 байты.
+
+    Специальные токены:
+    - 0: PAD
+    - 1: BOS (begin of sequence)
+    - 2: EOS (end of sequence)
+    - 3-258: байты 0x00-0xFF
+    """
+    SPECIAL_OFFSET = 3  # PAD=0, BOS=1, EOS=2
+
+    def __init__(self):
+        pass
+
+    def encode(self, text: str) -> list:
+        """Кодирует текст в байтовые токены."""
+        return [b + self.SPECIAL_OFFSET for b in text.encode('utf-8')]
+
+    def decode(self, ids: list) -> str:
+        """Декодирует токены обратно в текст."""
+        bytes_list = []
+        for i in ids:
+            if i >= self.SPECIAL_OFFSET:
+                bytes_list.append(i - self.SPECIAL_OFFSET)
+            # Пропускаем спец.токены
+        try:
+            return bytes(bytes_list).decode('utf-8', errors='replace')
+        except Exception:
+            return bytes(bytes_list).decode('latin-1')
+
+    def get_piece_size(self) -> int:
+        return 256 + self.SPECIAL_OFFSET  # 259
+
+    def bos_id(self) -> int:
+        return 1
+
+    def eos_id(self) -> int:
+        return 2
+
+    def encode_with_special(self, text: str) -> list:
+        """Кодирует с BOS и EOS."""
+        return [self.bos_id()] + self.encode(text) + [self.eos_id()]

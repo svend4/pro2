@@ -942,3 +942,201 @@ class TestV8ModelCard:
             assert loaded['model_type'] == 'YiJingGPT'
         finally:
             os.remove(path)
+
+
+class TestV9BeamSearch:
+    """Тесты для v9: beam search decoding."""
+
+    def test_beam_search_basic(self):
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = model.beam_search(idx, max_new_tokens=5, beam_width=3)
+        assert out.shape[0] == 1
+        assert out.shape[1] == 9  # 4 + 5
+
+    def test_beam_search_deterministic(self):
+        """Beam search должен быть детерминистичным."""
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out1 = model.beam_search(idx.clone(), max_new_tokens=5, beam_width=3)
+        out2 = model.beam_search(idx.clone(), max_new_tokens=5, beam_width=3)
+        assert torch.equal(out1, out2)
+
+    def test_beam_search_width_1(self):
+        """Beam width=1 = greedy search."""
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        out = model.beam_search(idx, max_new_tokens=5, beam_width=1)
+        assert out.shape[1] == 9
+
+    def test_beam_search_length_penalty(self):
+        """Length penalty влияет на результат."""
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        idx = torch.randint(0, cfg.vocab_size, (1, 4))
+        # Разные length_penalty могут дать разные результаты
+        out1 = model.beam_search(idx.clone(), max_new_tokens=8, beam_width=3,
+                                  length_penalty=0.0)
+        out2 = model.beam_search(idx.clone(), max_new_tokens=8, beam_width=3,
+                                  length_penalty=1.0)
+        # Оба валидны по длине
+        assert out1.shape[1] == 12
+        assert out2.shape[1] == 12
+
+
+class TestV9LLRD:
+    """Тесты для v9: Layer-wise LR Decay и advanced optimizer."""
+
+    def test_build_optimizer_basic(self):
+        from training.optim import build_optimizer
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = build_optimizer(model, cfg)
+        assert len(opt.param_groups) > 0
+
+    def test_llrd_creates_groups(self):
+        """LLRD создаёт разные LR для разных слоёв."""
+        from training.optim import build_optimizer
+        cfg = make_cfg(n_layers=4)
+        model = YiJingGPT(cfg)
+        opt = build_optimizer(model, cfg, llrd_factor=0.8)
+        # Должно быть несколько групп с разными LR
+        lrs = set(pg['lr'] for pg in opt.param_groups)
+        assert len(lrs) > 1  # не все одинаковые
+
+    def test_llrd_lr_ordering(self):
+        """Верхние слои имеют больший LR при LLRD."""
+        from training.optim import build_optimizer, _get_layer_idx
+        cfg = make_cfg(n_layers=4)
+        model = YiJingGPT(cfg)
+        opt = build_optimizer(model, cfg, llrd_factor=0.7)
+        # Собираем LR по слоям
+        layer_lrs = {}
+        for pg in opt.param_groups:
+            for p in pg['params']:
+                for name, param in model.named_parameters():
+                    if param is p:
+                        idx = _get_layer_idx(name, cfg.n_layers)
+                        if idx is not None:
+                            layer_lrs.setdefault(idx, set()).add(pg['lr'])
+        # Верхний слой (3) >= нижний слой (0)
+        if layer_lrs and 0 in layer_lrs and 3 in layer_lrs:
+            assert max(layer_lrs[3]) >= max(layer_lrs[0])
+
+    def test_cosine_schedule(self):
+        from training.optim import get_cosine_schedule
+        # Warmup: линейный рост
+        lr_0 = get_cosine_schedule(0, 100, 1000, 1e-3)
+        lr_50 = get_cosine_schedule(50, 100, 1000, 1e-3)
+        lr_100 = get_cosine_schedule(100, 100, 1000, 1e-3)
+        assert lr_0 < lr_50 < lr_100
+        assert abs(lr_100 - 1e-3) < 1e-6  # peak
+
+        # Decay: убывает к 0
+        lr_end = get_cosine_schedule(1000, 100, 1000, 1e-3)
+        assert lr_end < lr_100
+
+    def test_wsd_schedule(self):
+        from training.optim import get_warmup_stable_decay_schedule
+        lr = get_warmup_stable_decay_schedule(
+            50, warmup_steps=100, stable_steps=200,
+            decay_steps=300, max_lr=1e-3
+        )
+        assert 0 < lr < 1e-3  # in warmup
+
+        lr_stable = get_warmup_stable_decay_schedule(
+            200, warmup_steps=100, stable_steps=200,
+            decay_steps=300, max_lr=1e-3
+        )
+        assert abs(lr_stable - 1e-3) < 1e-6  # stable phase
+
+    def test_training_step_with_llrd(self):
+        """Один шаг обучения с LLRD работает."""
+        from training.optim import build_optimizer, get_cosine_schedule
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = build_optimizer(model, cfg, llrd_factor=0.85)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        model.train()
+        _, loss, _ = model(x, y)
+        loss.backward()
+        opt.step()
+        assert loss.item() > 0
+
+
+class TestV9ByteTokenizer:
+    """Тесты для v9: ByteTokenizer."""
+
+    def test_encode_decode(self):
+        from tokenizer.char_tokenizer import ByteTokenizer
+        tok = ByteTokenizer()
+        text = "Hello, world!"
+        ids = tok.encode(text)
+        decoded = tok.decode(ids)
+        assert decoded == text
+
+    def test_unicode(self):
+        """ByteTokenizer обрабатывает Unicode."""
+        from tokenizer.char_tokenizer import ByteTokenizer
+        tok = ByteTokenizer()
+        text = "Привет мир! 你好世界"
+        ids = tok.encode(text)
+        decoded = tok.decode(ids)
+        assert decoded == text
+
+    def test_vocab_size(self):
+        from tokenizer.char_tokenizer import ByteTokenizer
+        tok = ByteTokenizer()
+        assert tok.get_piece_size() == 259  # 256 bytes + 3 special
+
+    def test_special_tokens(self):
+        from tokenizer.char_tokenizer import ByteTokenizer
+        tok = ByteTokenizer()
+        assert tok.bos_id() == 1
+        assert tok.eos_id() == 2
+
+    def test_encode_with_special(self):
+        from tokenizer.char_tokenizer import ByteTokenizer
+        tok = ByteTokenizer()
+        ids = tok.encode_with_special("Hi")
+        assert ids[0] == 1  # BOS
+        assert ids[-1] == 2  # EOS
+        assert len(ids) == 4  # BOS + H + i + EOS
+
+    def test_byte_tokenizer_with_model(self):
+        """ByteTokenizer работает с моделью."""
+        from tokenizer.char_tokenizer import ByteTokenizer
+        tok = ByteTokenizer()
+        cfg = make_cfg(vocab_size=tok.get_piece_size())
+        model = YiJingGPT(cfg)
+        text = "Hello"
+        ids = tok.encode(text)
+        x = torch.tensor([ids], dtype=torch.long)
+        logits, _, _ = model(x)
+        assert logits.shape == (1, len(ids), tok.get_piece_size())
+
+
+class TestV9CharTokenizerSaveLoad:
+    """Тесты для v9: сохранение/загрузка CharTokenizer."""
+
+    def test_save_load(self):
+        import tempfile
+        from tokenizer.char_tokenizer import CharTokenizer
+        tok = CharTokenizer.from_text("Hello World 123!")
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w') as f:
+            path = f.name
+        try:
+            tok.save(path)
+            tok2 = CharTokenizer.load(path)
+            assert tok.get_piece_size() == tok2.get_piece_size()
+            assert tok.encode("Hello") == tok2.encode("Hello")
+        finally:
+            os.remove(path)
