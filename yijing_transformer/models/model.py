@@ -18,6 +18,7 @@ from .geometry import (
     HierarchicalQuantizer,
     DeformableQuantizer,
     GumbelQuantizer,
+    E8Quantizer,
     BianGuaTransform,
     HexagramAttentionPattern,
     RotaryEmbedding,
@@ -52,6 +53,11 @@ def build_quantizer(cfg):
             total_dim=cfg.quant_total_dim,
             group_dim=cfg.quant_group_dim,
             temp=cfg.temp,
+        )
+    elif cfg.quantizer_type == 'e8':
+        return E8Quantizer(
+            temp=cfg.temp,
+            adaptive_temp=cfg.adaptive_temp,
         )
     elif cfg.quantizer_type == 'gumbel':
         return GumbelQuantizer(

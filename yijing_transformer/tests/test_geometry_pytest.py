@@ -13,12 +13,15 @@ from models.geometry import (
     generate_octograms,
     generate_tetragrams,
     generate_hypercube,
+    generate_e8_roots,
+    compare_e8_vs_hypercube,
     verify_yijing_properties,
     YiJingQuantizer,
     FactoredYiJingQuantizer,
     HierarchicalQuantizer,
     DeformableQuantizer,
     GumbelQuantizer,
+    E8Quantizer,
     HexagramAttentionPattern,
     BianGuaTransform,
     RotaryEmbedding,
@@ -461,3 +464,66 @@ class TestGumbelQuantizer:
         gq = GumbelQuantizer(total_dim=6, group_dim=3, temp=1.0)
         assert hasattr(gq, 'log_temp')
         assert gq.current_temp.item() > 0
+
+
+class TestE8Lattice:
+    """Тесты решётки E8 и E8Quantizer."""
+
+    def test_e8_roots_count(self):
+        e8 = generate_e8_roots()
+        assert e8.shape == (240, 8)
+
+    def test_e8_norms(self):
+        """Все корни E8 имеют норму √2."""
+        e8 = generate_e8_roots()
+        norms = torch.norm(e8, dim=1)
+        assert torch.allclose(norms, torch.tensor(2.0).sqrt(), atol=1e-5)
+
+    def test_e8_unique(self):
+        e8 = generate_e8_roots()
+        unique = torch.unique(e8, dim=0)
+        assert unique.shape[0] == 240
+
+    def test_e8_centered(self):
+        """E8 корни центрированы (сумма = 0)."""
+        e8 = generate_e8_roots()
+        center = e8.mean(dim=0)
+        assert torch.norm(center).item() < 1e-5
+
+    def test_e8_min_distance(self):
+        """Минимальное расстояние между корнями E8 = √2."""
+        e8 = generate_e8_roots()
+        dists = torch.cdist(e8, e8)
+        mask = ~torch.eye(240, dtype=torch.bool)
+        min_dist = dists[mask].min()
+        assert abs(min_dist.item() - 2.0**0.5) < 0.01
+
+    def test_e8_quantizer_shape(self):
+        eq = E8Quantizer(temp=0.3)
+        x = torch.randn(2, 4, 8)
+        out = eq(x)
+        assert out.shape == (2, 4, 8)
+
+    def test_e8_quantizer_gradient(self):
+        eq = E8Quantizer(temp=0.3, adaptive_temp=True)
+        x = torch.randn(2, 4, 8, requires_grad=True)
+        out = eq(x)
+        out.sum().backward()
+        assert x.grad is not None
+
+    def test_e8_hard_quantize(self):
+        eq = E8Quantizer(temp=0.3)
+        x = torch.randn(2, 4, 8)
+        hard = eq.hard_quantize(x)
+        assert hard.shape == x.shape
+        # Результат должен быть корнем E8
+        norms = torch.norm(hard.reshape(-1, 8), dim=1)
+        assert torch.allclose(norms, torch.tensor(2.0).sqrt(), atol=1e-5)
+
+    def test_compare_e8_vs_hypercube(self):
+        results = compare_e8_vs_hypercube()
+        assert 'E8 (240 roots)' in results
+        assert 'Hexagrams {-1,+1}⁶' in results
+        assert 'Octograms {-1,+1}⁸' in results
+        # E8 имеет меньший минимальный зазор чем октограммы
+        assert results['E8 (240 roots)']['min_dist'] < results['Octograms {-1,+1}⁸']['min_dist']

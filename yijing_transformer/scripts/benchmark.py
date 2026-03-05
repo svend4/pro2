@@ -154,6 +154,10 @@ def main():
     parser.add_argument('--block-size', type=int, default=128)
     parser.add_argument('--ablation', action='store_true', default=False,
                         help='Run ablation study')
+    parser.add_argument('--quantizers', action='store_true', default=False,
+                        help='Compare all quantizer types (incl. E8)')
+    parser.add_argument('--gqa', action='store_true', default=False,
+                        help='Compare GQA configurations')
     parser.add_argument('--save-results', type=str, default=None,
                         help='Save results to JSON')
     args = parser.parse_args()
@@ -186,6 +190,36 @@ def main():
         for name, overrides in configs.items():
             cfg = YiJingConfig(**base_cfg, **overrides)
             results[name] = run_single(name, cfg, args.steps, device)
+
+    elif args.quantizers:
+        # Сравнение всех квантизаторов
+        configs = {
+            'Factored 6D': dict(quantizer_type='factored6', quant_total_dim=6, use_bian_gua=True),
+            'Hierarchical 6D': dict(quantizer_type='hierarchical', quant_total_dim=6, quant_group_dim=2, use_bian_gua=True),
+            'Octogram 8D': dict(quantizer_type='octogram', quant_total_dim=8, use_bian_gua=True),
+            'E8 (240 roots)': dict(quantizer_type='e8', quant_total_dim=8, use_bian_gua=True),
+            'Gumbel 6D': dict(quantizer_type='gumbel', quant_total_dim=6, quant_group_dim=3, use_bian_gua=True),
+            'Deformable 6D': dict(quantizer_type='deformable', quant_total_dim=6, quant_group_dim=3, use_bian_gua=True),
+        }
+
+        for name, overrides in configs.items():
+            cfg = YiJingConfig(**base_cfg, use_rope=True, use_swiglu=True,
+                               adaptive_temp=True, **overrides)
+            results[name] = run_single(name, cfg, args.steps, device)
+
+        # Добавляем Vanilla для сравнения
+        cfg_vn = YiJingConfig(**base_cfg, use_rope=True, use_swiglu=True)
+        results['Vanilla'] = run_single('Vanilla', cfg_vn, args.steps, device)
+
+    elif args.gqa:
+        # Сравнение GQA конфигураций
+        for n_kv in [None, 4, 2, 1]:
+            name = f"MHA" if n_kv is None else f"GQA-{n_kv}kv"
+            cfg = YiJingConfig(**base_cfg, use_rope=True, use_swiglu=True,
+                               use_bian_gua=True, adaptive_temp=True,
+                               n_kv_heads=n_kv)
+            results[name] = run_single(name, cfg, args.steps, device)
+
     else:
         # Стандартное сравнение
         cfg_yj = YiJingConfig(**base_cfg, use_rope=True, use_swiglu=True,

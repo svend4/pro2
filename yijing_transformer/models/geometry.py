@@ -59,6 +59,71 @@ def generate_tetragrams() -> torch.Tensor:
     return generate_hypercube(4)  # (16, 4)
 
 
+def generate_e8_roots() -> torch.Tensor:
+    """
+    240 корней решётки E8 в R⁸.
+
+    Два типа корней:
+    1) 112 векторов: все перестановки (±1, ±1, 0, 0, 0, 0, 0, 0)
+    2) 128 векторов: (±½, ±½, ..., ±½) с чётным числом минусов
+
+    Все корни имеют норму √2. Сравни с октограммами {-1,+1}⁸ (256 точек, норма √8).
+    """
+    roots = []
+
+    # Тип 1: 112 корней — пары ±1 во всех позициях
+    for i in range(8):
+        for j in range(i + 1, 8):
+            for si in [-1.0, 1.0]:
+                for sj in [-1.0, 1.0]:
+                    v = [0.0] * 8
+                    v[i] = si
+                    v[j] = sj
+                    roots.append(v)
+
+    # Тип 2: 128 корней — (±½)⁸ с чётным числом минусов
+    for signs in itertools.product([-0.5, 0.5], repeat=8):
+        n_neg = sum(1 for s in signs if s < 0)
+        if n_neg % 2 == 0:
+            roots.append(list(signs))
+
+    e8 = torch.tensor(roots, dtype=torch.float32)
+    assert e8.shape == (240, 8), f"E8: ожидалось (240, 8), получено {e8.shape}"
+    # Проверка: все нормы = √2
+    norms = torch.norm(e8, dim=1)
+    assert torch.allclose(norms, torch.tensor(2.0).sqrt(), atol=1e-6), "E8: неверные нормы"
+    return e8
+
+
+def compare_e8_vs_hypercube():
+    """
+    Сравнение E8 решётки с гиперкубами по ключевым метрикам.
+
+    Возвращает dict с метриками: число точек, размерность, нормы,
+    минимальное/среднее расстояние, packing density.
+    """
+    configs = {
+        'E8 (240 roots)': generate_e8_roots(),
+        'Hexagrams {-1,+1}⁶': generate_hexagrams(),
+        'Octograms {-1,+1}⁸': generate_octograms(),
+    }
+    results = {}
+    for name, points in configs.items():
+        dists = torch.cdist(points, points)
+        mask = ~torch.eye(len(points), dtype=torch.bool)
+        d_vals = dists[mask]
+        results[name] = {
+            'n_points': len(points),
+            'dim': points.shape[1],
+            'norm': points[0].norm().item(),
+            'min_dist': d_vals.min().item(),
+            'mean_dist': d_vals.mean().item(),
+            'max_dist': d_vals.max().item(),
+            'bits': torch.tensor(float(len(points))).log2().item(),
+        }
+    return results
+
+
 def verify_yijing_properties(trigrams: torch.Tensor, hexagrams: torch.Tensor):
     """Проверка математических свойств."""
     assert trigrams.shape == (8, 3), f"Триграммы: ожидалось (8,3), получено {trigrams.shape}"
@@ -121,6 +186,48 @@ class YiJingQuantizer(nn.Module):
     def hard_quantize(self, x):
         """sign(x) — тривиальная квантизация к ближайшей вершине гиперкуба."""
         return torch.sign(x)
+
+
+class E8Quantizer(nn.Module):
+    """
+    Квантизация к 240 корням решётки E8 в R⁸.
+
+    Для прямого сравнения с гиперкубными квантизаторами.
+    Сложность: softmax(240) — без факторизации (brute force).
+    """
+    def __init__(self, temp=0.3, adaptive_temp=False):
+        super().__init__()
+        self.adaptive_temp = adaptive_temp
+        if adaptive_temp:
+            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+        else:
+            self.temp = temp
+        e8 = generate_e8_roots()
+        self.register_buffer('codebook', e8)  # (240, 8)
+        self.register_buffer('codebook_norm_sq', (e8 ** 2).sum(dim=1))
+
+    @property
+    def current_temp(self):
+        if self.adaptive_temp:
+            return self.log_temp.exp().clamp(min=0.01, max=5.0)
+        return self.temp
+
+    def forward(self, x):
+        # x: (..., 8)
+        x_norm_sq = (x * x).sum(dim=-1, keepdim=True)
+        cross = x @ self.codebook.T
+        dists_sq = x_norm_sq - 2 * cross + self.codebook_norm_sq
+        weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
+        quantized = weights @ self.codebook
+        if self.adaptive_temp:
+            return quantized
+        return x + (quantized - x).detach()
+
+    def hard_quantize(self, x):
+        """Ближайший корень E8."""
+        dists = torch.cdist(x.reshape(-1, 8), self.codebook)
+        idx = dists.argmin(dim=-1)
+        return self.codebook[idx].reshape(x.shape)
 
 
 class FactoredYiJingQuantizer(nn.Module):

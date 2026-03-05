@@ -391,3 +391,13 @@ class TestV5Features:
         _, loss, _ = model(x, y)
         loss.backward()
         assert loss.item() > 0
+
+    def test_e8_quantizer_model(self):
+        """E8 квантизатор в полной модели."""
+        cfg = make_cfg(quantizer_type='e8', quant_total_dim=8)
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        assert loss.item() > 0
