@@ -82,6 +82,10 @@ class YiJingConfig:
     use_mup: bool = False            # µP инициализация для width scaling
     mup_base_width: int = 128        # базовая ширина для µP
 
+    # v13: selective checkpointing, weight decay scheduling
+    checkpoint_every: int = 0        # selective checkpoint каждые N слоёв (0 = выкл)
+    wd_end: float = 0.01             # конечный weight decay (для scheduling)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

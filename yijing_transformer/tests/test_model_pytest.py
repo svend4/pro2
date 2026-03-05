@@ -2083,3 +2083,283 @@ class TestV12Integration:
             probs = F.softmax(scaled_logits, dim=-1)
             assert probs.shape == (1, cfg.vocab_size)
             assert abs(probs.sum().item() - 1.0) < 1e-5
+
+
+# ==================== V13 TESTS ====================
+
+class TestV13BPETokenizer:
+    """Тесты для BPE tokenizer."""
+
+    def test_train_and_encode(self):
+        """BPE обучается и кодирует текст."""
+        from tokenizer.char_tokenizer import BPETokenizer
+        bpe = BPETokenizer()
+        corpus = "hello world hello world hello world foo bar foo bar" * 10
+        bpe.train(corpus, vocab_size=280)
+        ids = bpe.encode("hello world")
+        assert len(ids) > 0
+        assert all(isinstance(i, int) for i in ids)
+
+    def test_roundtrip(self):
+        """Encode → decode даёт исходный текст."""
+        from tokenizer.char_tokenizer import BPETokenizer
+        bpe = BPETokenizer()
+        corpus = "the quick brown fox jumps over the lazy dog " * 50
+        bpe.train(corpus, vocab_size=300)
+        text = "the quick brown fox"
+        ids = bpe.encode(text)
+        decoded = bpe.decode(ids)
+        assert decoded == text
+
+    def test_compression(self):
+        """BPE сжимает текст (меньше токенов чем байтов)."""
+        from tokenizer.char_tokenizer import BPETokenizer
+        bpe = BPETokenizer()
+        corpus = "abcabc " * 200
+        bpe.train(corpus, vocab_size=300)
+        ids = bpe.encode("abcabc abcabc")
+        byte_len = len("abcabc abcabc".encode('utf-8'))
+        assert len(ids) < byte_len
+
+    def test_special_tokens(self):
+        """Спец-токены BOS/EOS."""
+        from tokenizer.char_tokenizer import BPETokenizer
+        bpe = BPETokenizer()
+        bpe.train("hello " * 100, vocab_size=270)
+        ids = bpe.encode_with_special("hello")
+        assert ids[0] == bpe.BOS_ID
+        assert ids[-1] == bpe.EOS_ID
+
+    def test_save_load(self):
+        """Сохранение и загрузка BPE модели."""
+        import tempfile
+        from tokenizer.char_tokenizer import BPETokenizer
+        bpe = BPETokenizer()
+        bpe.train("test data test data " * 50, vocab_size=280)
+        text = "test data"
+        ids_before = bpe.encode(text)
+
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=False, mode='w') as f:
+            path = f.name
+        try:
+            bpe.save(path)
+            bpe2 = BPETokenizer.load(path)
+            ids_after = bpe2.encode(text)
+            assert ids_before == ids_after
+        finally:
+            os.remove(path)
+
+    def test_unicode(self):
+        """BPE работает с Unicode текстом."""
+        from tokenizer.char_tokenizer import BPETokenizer
+        bpe = BPETokenizer()
+        corpus = "привет мир " * 50
+        bpe.train(corpus, vocab_size=300)
+        ids = bpe.encode("привет")
+        decoded = bpe.decode(ids)
+        assert decoded == "привет"
+
+    def test_with_model(self):
+        """BPE tokenizer работает с моделью."""
+        from tokenizer.char_tokenizer import BPETokenizer
+        bpe = BPETokenizer()
+        bpe.train("hello world " * 100, vocab_size=280)
+        cfg = make_cfg(vocab_size=bpe.get_piece_size())
+        model = YiJingGPT(cfg)
+        ids = bpe.encode("hello")
+        x = torch.tensor([ids], dtype=torch.long)
+        logits, _, _ = model(x)
+        assert logits.shape == (1, len(ids), bpe.get_piece_size())
+
+
+class TestV13RingAttention:
+    """Тесты для Ring Attention scaffold."""
+
+    def test_config(self):
+        """Ring Attention конфигурация."""
+        from training.utils_v13 import RingAttentionConfig
+        cfg = RingAttentionConfig(world_size=4, segment_len=256)
+        assert cfg.total_len == 1024
+        start, end = cfg.get_rank_range(2)
+        assert start == 512
+        assert end == 768
+
+    def test_kv_source(self):
+        """KV source ranks для ring communication."""
+        from training.utils_v13 import RingAttentionConfig
+        cfg = RingAttentionConfig(world_size=4, segment_len=128)
+        # Step 0: свои KV
+        assert cfg.get_kv_source_ranks(2, 0) == 2
+        # Step 1: от rank-1
+        assert cfg.get_kv_source_ranks(2, 1) == 1
+
+    def test_simulate(self):
+        """Симуляция Ring Attention."""
+        from training.utils_v13 import simulate_ring_attention
+        result = simulate_ring_attention(seq_len=1024, n_gpus=4)
+        assert result['n_segments'] == 4
+        assert result['memory_per_gpu_tokens'] == 256
+        assert result['total_blocks'] > 0
+
+    def test_simulate_single_gpu(self):
+        """Симуляция на 1 GPU = обычный attention."""
+        from training.utils_v13 import simulate_ring_attention
+        result = simulate_ring_attention(seq_len=512, n_gpus=1)
+        assert result['n_segments'] == 1
+        assert result['total_blocks'] == 1
+
+
+class TestV13SelectiveCheckpointing:
+    """Тесты для selective activation checkpointing."""
+
+    def test_every_2(self):
+        """Checkpoint каждый 2-й слой."""
+        from training.utils_v13 import SelectiveCheckpointing
+        sc = SelectiveCheckpointing(n_layers=8, checkpoint_every=2)
+        layers = sc.get_checkpoint_layers()
+        assert layers == [1, 3, 5, 7]
+
+    def test_every_1(self):
+        """Checkpoint все слои."""
+        from training.utils_v13 import SelectiveCheckpointing
+        sc = SelectiveCheckpointing(n_layers=4, checkpoint_every=1)
+        assert len(sc.get_checkpoint_layers()) == 4
+
+    def test_disabled(self):
+        """Checkpoint отключён."""
+        from training.utils_v13 import SelectiveCheckpointing
+        sc = SelectiveCheckpointing(n_layers=4, checkpoint_every=0)
+        assert len(sc.get_checkpoint_layers()) == 0
+
+    def test_should_checkpoint(self):
+        """should_checkpoint правильно фильтрует."""
+        from training.utils_v13 import SelectiveCheckpointing
+        sc = SelectiveCheckpointing(n_layers=6, checkpoint_every=3)
+        assert not sc.should_checkpoint(0)
+        assert not sc.should_checkpoint(1)
+        assert sc.should_checkpoint(2)
+        assert not sc.should_checkpoint(3)
+        assert not sc.should_checkpoint(4)
+        assert sc.should_checkpoint(5)
+
+    def test_memory_saving(self):
+        """Оценка экономии памяти."""
+        from training.utils_v13 import SelectiveCheckpointing
+        sc2 = SelectiveCheckpointing(n_layers=8, checkpoint_every=2)
+        sc4 = SelectiveCheckpointing(n_layers=8, checkpoint_every=4)
+        assert sc2.estimate_memory_saving() == 0.5
+        assert sc4.estimate_memory_saving() == 0.25
+
+
+class TestV13WeightDecayScheduler:
+    """Тесты для weight decay scheduling."""
+
+    def test_linear_decay(self):
+        """WD убывает линейно."""
+        from training.utils_v13 import WeightDecayScheduler
+        model = torch.nn.Linear(10, 10)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1)
+        wds = WeightDecayScheduler(opt, wd_start=0.1, wd_end=0.01, total_steps=100)
+
+        wds.step()
+        wd1 = wds.get_wd()
+        for _ in range(49):
+            wds.step()
+        wd50 = wds.get_wd()
+        for _ in range(50):
+            wds.step()
+        wd100 = wds.get_wd()
+
+        assert wd1 > wd50 > wd100
+        assert abs(wd50 - 0.055) < 0.01
+        assert abs(wd100 - 0.01) < 0.001
+
+    def test_wd_applied_to_optimizer(self):
+        """WD обновляется в param groups optimizer."""
+        from training.utils_v13 import WeightDecayScheduler
+        model = torch.nn.Linear(10, 10)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1)
+        wds = WeightDecayScheduler(opt, wd_start=0.1, wd_end=0.01, total_steps=10)
+
+        for _ in range(10):
+            wds.step()
+
+        for pg in opt.param_groups:
+            assert abs(pg['weight_decay'] - 0.01) < 0.001
+
+
+class TestV13Throughput:
+    """Тесты для throughput benchmark."""
+
+    def test_estimate_flops(self):
+        """FLOPS estimation."""
+        from training.utils_v13 import estimate_model_flops
+        cfg = make_cfg()
+        flops = estimate_model_flops(cfg, seq_len=16)
+        assert flops['total'] > 0
+        assert 'total_gflops' in flops
+        assert flops['total_gflops'] > 0
+
+    def test_benchmark_throughput(self):
+        """Throughput benchmark на CPU."""
+        from training.utils_v13 import benchmark_throughput
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        result = benchmark_throughput(model, cfg, batch_size=2, seq_len=8, n_steps=3)
+        assert result['tokens_per_sec'] > 0
+        assert result['ms_per_step'] > 0
+
+    def test_flops_scales_with_layers(self):
+        """Больше слоёв → больше FLOPS."""
+        from training.utils_v13 import estimate_model_flops
+        cfg2 = make_cfg(n_layers=2)
+        cfg4 = make_cfg(n_layers=4)
+        f2 = estimate_model_flops(cfg2, seq_len=16)
+        f4 = estimate_model_flops(cfg4, seq_len=16)
+        assert f4['total'] > f2['total']
+
+
+class TestV13Integration:
+    """Интеграционные тесты v13."""
+
+    def test_bpe_train_evaluate(self):
+        """BPE tokenizer → train → evaluate perplexity."""
+        from tokenizer.char_tokenizer import BPETokenizer
+        from training.utils_v12 import evaluate_perplexity
+
+        bpe = BPETokenizer()
+        corpus = "the cat sat on the mat " * 100
+        bpe.train(corpus, vocab_size=280)
+
+        cfg = make_cfg(vocab_size=bpe.get_piece_size())
+        model = YiJingGPT(cfg)
+
+        # Создаём данные
+        ids = bpe.encode(corpus)
+        chunks = [ids[i:i+16] for i in range(0, len(ids) - 16, 16)][:5]
+        loader = [
+            (torch.tensor([c[:-1]]), torch.tensor([c[1:]]))
+            for c in chunks
+        ]
+
+        result = evaluate_perplexity(model, loader)
+        assert result['perplexity'] > 1.0
+
+    def test_wd_scheduler_with_training(self):
+        """WD scheduler в training loop."""
+        from training.utils_v13 import WeightDecayScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.1)
+        wds = WeightDecayScheduler(opt, wd_start=0.1, wd_end=0.01, total_steps=10)
+
+        for _ in range(5):
+            x = torch.randint(0, cfg.vocab_size, (2, 8))
+            y = torch.randint(0, cfg.vocab_size, (2, 8))
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            opt.zero_grad()
+            wds.step()
+
+        assert wds.get_wd() < 0.1
