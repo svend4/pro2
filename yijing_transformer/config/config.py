@@ -91,6 +91,10 @@ class YiJingConfig:
     quantize_kv_cache: bool = False  # INT8 KV-cache
     layerwise_lr_decay: float = 1.0  # LR decay per layer (1.0 = выкл)
 
+    # v17: Prefix Tuning, Multi-Token Prediction
+    prefix_len: int = 0              # Prefix tuning длина (0 = выкл)
+    mtp_n_future: int = 0            # Multi-Token Prediction горизонт (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

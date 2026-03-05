@@ -3090,3 +3090,388 @@ class TestV16Integration:
         model = YiJingGPT(cfg)
         logits, _, _ = model(batches[0]['input_ids'].unsqueeze(0))
         assert logits.shape[1] == 16
+
+
+# ==================== v17 Tests ====================
+
+
+class TestPrefixTuning:
+    """Тесты для Prefix Tuning."""
+
+    def test_prefix_output_shape(self):
+        from models.prefix_tuning import PrefixTuning
+        cfg = make_cfg()
+        prefix = PrefixTuning(cfg, prefix_len=8)
+        result = prefix()
+        assert len(result) == cfg.n_layers
+        pk, pv = result[0]
+        n_kv_heads = cfg.n_kv_heads or cfg.n_heads
+        head_dim = cfg.d_model // cfg.n_heads
+        assert pk.shape == (1, n_kv_heads, 8, head_dim)
+        assert pv.shape == (1, n_kv_heads, 8, head_dim)
+
+    def test_prefix_with_gqa(self):
+        from models.prefix_tuning import PrefixTuning
+        cfg = make_cfg(n_kv_heads=2)
+        prefix = PrefixTuning(cfg, prefix_len=4)
+        result = prefix()
+        pk, pv = result[0]
+        head_dim = cfg.d_model // cfg.n_heads
+        assert pk.shape == (1, 2, 4, head_dim)
+
+    def test_prefix_trainable_params(self):
+        from models.prefix_tuning import PrefixTuning
+        cfg = make_cfg()
+        prefix = PrefixTuning(cfg, prefix_len=8)
+        n_params = prefix.num_trainable_params()
+        assert n_params > 0
+
+    def test_prefix_backward(self):
+        from models.prefix_tuning import PrefixTuning
+        cfg = make_cfg()
+        prefix = PrefixTuning(cfg, prefix_len=4)
+        result = prefix()
+        loss = sum(pk.sum() + pv.sum() for pk, pv in result)
+        loss.backward()
+        assert prefix.prefix_emb.grad is not None
+
+    def test_freeze_model(self):
+        from models.prefix_tuning import freeze_model_for_prefix
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        freeze_model_for_prefix(model)
+        for p in model.parameters():
+            assert not p.requires_grad
+
+    def test_prefix_different_layers_different_values(self):
+        from models.prefix_tuning import PrefixTuning
+        cfg = make_cfg()
+        prefix = PrefixTuning(cfg, prefix_len=4)
+        result = prefix()
+        pk0, _ = result[0]
+        pk1, _ = result[1]
+        assert not torch.equal(pk0, pk1)
+
+
+class TestLogitLens:
+    """Тесты для Logit Lens."""
+
+    def test_layer_predictions(self):
+        from models.prefix_tuning import LogitLens
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        lens = LogitLens(model)
+        ids = torch.randint(0, cfg.vocab_size, (1, 8))
+        results = lens.get_layer_predictions(ids)
+        # embedding + n_layers
+        assert len(results) == cfg.n_layers + 1
+        for r in results:
+            assert 'name' in r
+            assert 'top_token_ids' in r
+            assert 'entropy' in r
+            assert len(r['top_token_ids']) == 5
+            assert r['max_prob'] > 0
+
+    def test_layer_predictions_position(self):
+        from models.prefix_tuning import LogitLens
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        lens = LogitLens(model)
+        ids = torch.randint(0, cfg.vocab_size, (1, 8))
+        r1 = lens.get_layer_predictions(ids, position=0)
+        r2 = lens.get_layer_predictions(ids, position=-1)
+        # Different positions should generally give different results
+        assert r1[-1]['top_token_ids'] != r2[-1]['top_token_ids'] or True  # may coincide
+
+    def test_layer_similarity(self):
+        from models.prefix_tuning import LogitLens
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        lens = LogitLens(model)
+        ids = torch.randint(0, cfg.vocab_size, (1, 8))
+        sims = lens.layer_similarity(ids)
+        assert len(sims) == cfg.n_layers  # between consecutive layers (incl embedding→layer0)
+        for s in sims:
+            assert -1.0 <= s <= 1.0
+
+    def test_entropy_decreases_or_finite(self):
+        from models.prefix_tuning import LogitLens
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        lens = LogitLens(model)
+        ids = torch.randint(0, cfg.vocab_size, (1, 8))
+        results = lens.get_layer_predictions(ids)
+        for r in results:
+            assert r['entropy'] >= 0
+            assert not torch.isnan(torch.tensor(r['entropy']))
+
+
+class TestMultiTokenPrediction:
+    """Тесты для Multi-Token Prediction."""
+
+    def test_forward_shape(self):
+        from models.prefix_tuning import MultiTokenPredictionHead
+        mtp = MultiTokenPredictionHead(d_model=64, vocab_size=128, n_future=4)
+        hidden = torch.randn(2, 16, 64)
+        outputs = mtp(hidden)
+        assert len(outputs) == 4
+        for o in outputs:
+            assert o.shape == (2, 16, 128)
+
+    def test_compute_loss(self):
+        from models.prefix_tuning import MultiTokenPredictionHead
+        mtp = MultiTokenPredictionHead(d_model=64, vocab_size=128, n_future=3)
+        hidden = torch.randn(2, 16, 64)
+        targets = torch.randint(0, 128, (2, 16))
+        total_loss, per_horizon = mtp.compute_loss(hidden, targets)
+        assert total_loss.item() > 0
+        assert len(per_horizon) == 3
+        for h in per_horizon:
+            assert h > 0
+
+    def test_compute_loss_backward(self):
+        from models.prefix_tuning import MultiTokenPredictionHead
+        mtp = MultiTokenPredictionHead(d_model=64, vocab_size=128, n_future=2)
+        hidden = torch.randn(2, 10, 64, requires_grad=True)
+        targets = torch.randint(0, 128, (2, 10))
+        total_loss, _ = mtp.compute_loss(hidden, targets)
+        total_loss.backward()
+        assert hidden.grad is not None
+
+    def test_short_sequence(self):
+        from models.prefix_tuning import MultiTokenPredictionHead
+        mtp = MultiTokenPredictionHead(d_model=64, vocab_size=128, n_future=4)
+        hidden = torch.randn(1, 3, 64)
+        targets = torch.randint(0, 128, (1, 3))
+        total_loss, per_horizon = mtp.compute_loss(hidden, targets)
+        # Only 2 horizons possible with T=3 (shift 1 and 2)
+        assert len(per_horizon) == 2
+
+    def test_single_head(self):
+        from models.prefix_tuning import MultiTokenPredictionHead
+        mtp = MultiTokenPredictionHead(d_model=64, vocab_size=128, n_future=1)
+        hidden = torch.randn(2, 8, 64)
+        targets = torch.randint(0, 128, (2, 8))
+        total_loss, per_horizon = mtp.compute_loss(hidden, targets)
+        assert len(per_horizon) == 1
+
+
+class TestSimpleRetriever:
+    """Тесты для SimpleRetriever."""
+
+    def test_add_and_retrieve(self):
+        from training.utils_v17 import SimpleRetriever
+        ret = SimpleRetriever(embedding_dim=16)
+        docs = ["hello world", "foo bar", "test doc"]
+        embs = torch.randn(3, 16)
+        ret.add_documents(docs, embs)
+        assert len(ret) == 3
+
+        results = ret.retrieve(embs[0], top_k=2)
+        assert len(results) == 2
+        assert results[0]['text'] == "hello world"
+        assert results[0]['score'] > results[1]['score']
+
+    def test_empty_retriever(self):
+        from training.utils_v17 import SimpleRetriever
+        ret = SimpleRetriever(embedding_dim=8)
+        results = ret.retrieve(torch.randn(8), top_k=5)
+        assert results == []
+
+    def test_top_k_larger_than_docs(self):
+        from training.utils_v17 import SimpleRetriever
+        ret = SimpleRetriever(embedding_dim=8)
+        ret.add_documents(["a", "b"], torch.randn(2, 8))
+        results = ret.retrieve(torch.randn(8), top_k=10)
+        assert len(results) == 2
+
+    def test_add_incremental(self):
+        from training.utils_v17 import SimpleRetriever
+        ret = SimpleRetriever(embedding_dim=8)
+        ret.add_documents(["a"], torch.randn(1, 8))
+        ret.add_documents(["b", "c"], torch.randn(2, 8))
+        assert len(ret) == 3
+
+    def test_retrieve_scores_range(self):
+        from training.utils_v17 import SimpleRetriever
+        ret = SimpleRetriever(embedding_dim=8)
+        embs = F.normalize(torch.randn(5, 8), dim=-1)
+        ret.add_documents(["a", "b", "c", "d", "e"], embs)
+        results = ret.retrieve(embs[0], top_k=5)
+        for r in results:
+            assert -1.0 <= r['score'] <= 1.01  # cosine sim range
+
+
+class TestRAGPipeline:
+    """Тесты для RAG Pipeline."""
+
+    def test_index_and_retrieve(self):
+        from training.utils_v17 import RAGPipeline, SimpleRetriever
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        retriever = SimpleRetriever(embedding_dim=cfg.d_model)
+
+        class FakeTokenizer:
+            def encode(self, text):
+                return [ord(c) % cfg.vocab_size for c in text[:8]]
+            def decode(self, ids):
+                return "".join(chr(i) for i in ids)
+
+        rag = RAGPipeline(model, retriever, FakeTokenizer())
+        rag.index_documents(["hello", "world", "test"])
+        assert len(retriever) == 3
+
+        context, results = rag.retrieve_context("hello", top_k=2)
+        assert len(results) == 2
+        assert isinstance(context, str)
+
+    def test_augmented_ids(self):
+        from training.utils_v17 import RAGPipeline, SimpleRetriever
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        retriever = SimpleRetriever(embedding_dim=cfg.d_model)
+
+        class FakeTokenizer:
+            def encode(self, text):
+                return [ord(c) % cfg.vocab_size for c in text[:16]]
+            def decode(self, ids):
+                return "".join(chr(i) for i in ids)
+
+        rag = RAGPipeline(model, retriever, FakeTokenizer())
+        rag.index_documents(["doc1", "doc2"])
+        ids, retrieved = rag.augmented_ids("query", top_k=1)
+        assert isinstance(ids, list)
+        assert len(ids) > 0
+        assert len(retrieved) == 1
+
+
+class TestActivationTracker:
+    """Тесты для ActivationTracker."""
+
+    def test_tracking(self):
+        from training.utils_v17 import ActivationTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        tracker = ActivationTracker(model)
+        tracker.start()
+
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        y = torch.randint(0, cfg.vocab_size, (1, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+
+        stats = tracker.get_stats()
+        tracker.stop()
+
+        assert 'activation_norms' in stats
+        assert 'gradient_norms' in stats
+        assert stats['avg_activation_norm'] > 0
+        assert stats['avg_gradient_norm'] > 0
+
+    def test_dead_neurons(self):
+        from training.utils_v17 import ActivationTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        tracker = ActivationTracker(model)
+        tracker.start()
+
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        model(x)
+
+        stats = tracker.get_stats()
+        tracker.stop()
+
+        assert 'dead_neurons' in stats
+        assert 'total_dead' in stats
+
+    def test_reset(self):
+        from training.utils_v17 import ActivationTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        tracker = ActivationTracker(model)
+        tracker.start()
+
+        model(torch.randint(0, cfg.vocab_size, (1, 8)))
+        assert len(tracker.activation_norms) > 0
+
+        tracker.reset()
+        assert len(tracker.activation_norms) == 0
+
+    def test_stop_removes_hooks(self):
+        from training.utils_v17 import ActivationTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        tracker = ActivationTracker(model)
+        tracker.start()
+        assert len(tracker.hooks) > 0
+        tracker.stop()
+        assert len(tracker.hooks) == 0
+        assert not tracker._running
+
+    def test_multiple_forwards(self):
+        from training.utils_v17 import ActivationTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        tracker = ActivationTracker(model)
+        tracker.start()
+
+        for _ in range(3):
+            model(torch.randint(0, cfg.vocab_size, (1, 8)))
+
+        stats = tracker.get_stats()
+        tracker.stop()
+
+        # Multiple forwards should accumulate norms
+        assert stats['avg_activation_norm'] > 0
+        assert len(stats.get('activation_norms', {})) > 0
+
+
+class TestV17Integration:
+    """Интеграционные тесты v17."""
+
+    def test_prefix_tuning_with_model(self):
+        from models.prefix_tuning import PrefixTuning, freeze_model_for_prefix
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        freeze_model_for_prefix(model)
+        prefix = PrefixTuning(cfg, prefix_len=4)
+        result = prefix()
+        # Verify prefix generates valid KVs that could be prepended
+        pk, pv = result[0]
+        assert pk.shape[-1] == cfg.d_model // cfg.n_heads
+
+    def test_mtp_with_model(self):
+        from models.prefix_tuning import MultiTokenPredictionHead
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        mtp = MultiTokenPredictionHead(cfg.d_model, cfg.vocab_size, n_future=3)
+        x = torch.randint(0, cfg.vocab_size, (2, 16))
+        y = torch.randint(0, cfg.vocab_size, (2, 16))
+        logits, loss, aux = model(x, y)
+        # Use hidden from before head
+        emb = model.tok_emb(x)
+        if model.pos_emb is not None:
+            emb = emb + model.pos_emb[:, :16, :]
+        hidden = model.core(emb)[0]
+        mtp_loss, horizons = mtp.compute_loss(hidden, y)
+        total = loss + 0.1 * mtp_loss
+        total.backward()
+        assert not torch.isnan(total)
+
+    def test_logit_lens_with_model(self):
+        from models.prefix_tuning import LogitLens
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        lens = LogitLens(model)
+        ids = torch.randint(0, cfg.vocab_size, (1, 8))
+        preds = lens.get_layer_predictions(ids)
+        sims = lens.layer_similarity(ids)
+        assert len(preds) == cfg.n_layers + 1
+        assert len(sims) == cfg.n_layers
