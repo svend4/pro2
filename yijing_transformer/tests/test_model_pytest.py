@@ -5480,3 +5480,297 @@ class TestV23Integration:
             opt.step()
         stats = cs.get_curriculum_stats(10)
         assert stats['coverage'] == 1.0
+
+
+# ==================== v24 Tests ====================
+
+
+class TestLLRD:
+    """Тесты для Layer-wise Learning Rate Decay."""
+
+    def test_layer_lr(self):
+        from training.utils_v24 import LLRD
+        model = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 5))
+        llrd = LLRD(model, base_lr=1e-3, decay=0.5, n_layers=3)
+        # Top layer (idx=2): base_lr * 0.5^0 = 1e-3
+        # Mid layer (idx=1): base_lr * 0.5^1 = 5e-4
+        # Bot layer (idx=0): base_lr * 0.5^2 = 2.5e-4
+        assert abs(llrd.get_layer_lr(2) - 1e-3) < 1e-8
+        assert abs(llrd.get_layer_lr(1) - 5e-4) < 1e-8
+        assert abs(llrd.get_layer_lr(0) - 2.5e-4) < 1e-8
+
+    def test_lr_schedule(self):
+        from training.utils_v24 import LLRD
+        model = nn.Linear(10, 5)
+        llrd = LLRD(model, base_lr=0.01, decay=0.8, n_layers=4)
+        schedule = llrd.get_lr_schedule()
+        assert len(schedule) == 4
+        # LR should decrease with lower layers
+        assert schedule[3] > schedule[0]
+
+    def test_param_groups(self):
+        from training.utils_v24 import LLRD
+        model = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 5))
+        llrd = LLRD(model, base_lr=1e-3, decay=0.8, n_layers=2)
+        groups = llrd.get_param_groups()
+        assert len(groups) > 0
+        # All groups should have lr set
+        for g in groups:
+            assert 'lr' in g
+            assert g['lr'] > 0
+
+    def test_detect_layers(self):
+        from training.utils_v24 import LLRD
+        model = nn.Sequential(nn.Linear(10, 10), nn.Linear(10, 10), nn.Linear(10, 5))
+        llrd = LLRD(model, base_lr=1e-3, decay=0.8)
+        assert llrd.n_layers >= 1
+
+
+class TestGradAccumulationScheduler:
+    """Тесты для Gradient Accumulation Scheduler."""
+
+    def test_linear(self):
+        from training.utils_v24 import GradAccumulationScheduler
+        sched = GradAccumulationScheduler(start_accum=1, max_accum=8, warmup_steps=100, strategy='linear')
+        assert sched.get_accum_steps(0) == 1
+        assert sched.get_accum_steps(100) == 8
+        assert sched.get_accum_steps(200) == 8
+
+    def test_should_step(self):
+        from training.utils_v24 import GradAccumulationScheduler
+        sched = GradAccumulationScheduler(start_accum=1, max_accum=4, warmup_steps=0)
+        # max_accum=4, so should step every 4 micro-steps
+        assert not sched.should_step(0, 0)
+        assert not sched.should_step(1, 0)
+        assert not sched.should_step(2, 0)
+        assert sched.should_step(3, 0)
+
+    def test_scale(self):
+        from training.utils_v24 import GradAccumulationScheduler
+        sched = GradAccumulationScheduler(start_accum=1, max_accum=4, warmup_steps=0)
+        scale = sched.get_scale(100)
+        assert scale == 0.25
+
+    def test_stats(self):
+        from training.utils_v24 import GradAccumulationScheduler
+        sched = GradAccumulationScheduler(start_accum=2, max_accum=8, warmup_steps=100)
+        stats = sched.get_stats(50)
+        assert 'accum_steps' in stats
+        assert 'loss_scale' in stats
+
+    def test_step_strategy(self):
+        from training.utils_v24 import GradAccumulationScheduler
+        sched = GradAccumulationScheduler(start_accum=1, max_accum=8, warmup_steps=100, strategy='step')
+        a0 = sched.get_accum_steps(0)
+        a100 = sched.get_accum_steps(100)
+        assert a0 <= a100
+
+
+class TestAttentionEntropyMonitor:
+    """Тесты для Attention Entropy Monitor."""
+
+    def test_compute_entropy(self):
+        from training.utils_v24 import AttentionEntropyMonitor
+        monitor = AttentionEntropyMonitor()
+        # Uniform attention
+        attn = torch.ones(2, 4, 8, 8) / 8.0
+        result = monitor.compute_entropy(attn)
+        assert abs(result['mean'] - math.log(8)) < 0.01
+
+    def test_sharp_attention(self):
+        from training.utils_v24 import AttentionEntropyMonitor
+        monitor = AttentionEntropyMonitor()
+        # One-hot attention → entropy ≈ 0
+        attn = torch.zeros(2, 4, 8, 8)
+        attn[:, :, :, 0] = 1.0
+        result = monitor.compute_entropy(attn)
+        assert result['mean'] < 0.01
+
+    def test_update(self):
+        from training.utils_v24 import AttentionEntropyMonitor
+        monitor = AttentionEntropyMonitor()
+        attn = torch.softmax(torch.randn(2, 4, 8, 8), dim=-1)
+        monitor.update(attn, layer_idx=0)
+        monitor.update(attn, layer_idx=1)
+        summary = monitor.get_summary()
+        assert 0 in summary
+        assert 1 in summary
+
+    def test_detect_collapse(self):
+        from training.utils_v24 import AttentionEntropyMonitor
+        monitor = AttentionEntropyMonitor()
+        # Very sharp attention
+        attn = torch.zeros(1, 2, 4, 4)
+        attn[:, :, :, 0] = 1.0
+        monitor.update(attn, layer_idx=0)
+        collapsed = monitor.detect_collapse(threshold=0.1)
+        assert len(collapsed) > 0
+
+    def test_reset(self):
+        from training.utils_v24 import AttentionEntropyMonitor
+        monitor = AttentionEntropyMonitor()
+        monitor.update(torch.softmax(torch.randn(1, 2, 4, 4), dim=-1))
+        monitor.reset()
+        assert len(monitor.history) == 0
+
+
+class TestWeightDecayScheduler:
+    """Тесты для Weight Decay Scheduler."""
+
+    def test_constant(self):
+        from training.utils_v24 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+        sched = WeightDecayScheduler(opt, base_wd=0.01, strategy='constant')
+        wd = sched.step()
+        assert wd == 0.01
+
+    def test_linear_warmup(self):
+        from training.utils_v24 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        sched = WeightDecayScheduler(opt, base_wd=0.1, strategy='linear', warmup_steps=10)
+        # First step: 0.1 * 1/10 = 0.01
+        wd = sched.step()
+        assert wd < 0.1
+        # After warmup
+        for _ in range(20):
+            wd = sched.step()
+        assert wd == 0.1
+
+    def test_cosine(self):
+        from training.utils_v24 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        sched = WeightDecayScheduler(opt, base_wd=0.1, total_steps=100, strategy='cosine')
+        wd_start = sched.get_wd(0)
+        wd_mid = sched.get_wd(50)
+        wd_end = sched.get_wd(100)
+        assert wd_start > wd_mid
+        assert wd_mid > wd_end
+        assert abs(wd_end) < 0.001
+
+    def test_schedule(self):
+        from training.utils_v24 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters())
+        sched = WeightDecayScheduler(opt, base_wd=0.01, total_steps=100, strategy='cosine')
+        points = sched.get_schedule(n_points=5)
+        assert len(points) == 6  # 0..5
+
+
+class TestLossSpikeDetector:
+    """Тесты для Loss Spike Detector."""
+
+    def test_normal_training(self):
+        from training.utils_v24 import LossSpikeDetector
+        detector = LossSpikeDetector()
+        for i in range(50):
+            result = detector.update(2.0)
+        assert not result['is_spike']
+
+    def test_spike_detection(self):
+        from training.utils_v24 import LossSpikeDetector
+        detector = LossSpikeDetector(spike_threshold=2.0)
+        # Normal losses
+        for _ in range(50):
+            detector.update(1.0)
+        # Spike!
+        result = detector.update(100.0)
+        assert result['is_spike']
+        assert result['action'] != 'none'
+
+    def test_stats(self):
+        from training.utils_v24 import LossSpikeDetector
+        detector = LossSpikeDetector()
+        for i in range(10):
+            detector.update(float(i))
+        stats = detector.get_stats()
+        assert stats['n_steps'] == 10
+        assert stats['n_spikes'] >= 0
+
+    def test_is_diverging(self):
+        from training.utils_v24 import LossSpikeDetector
+        detector = LossSpikeDetector()
+        for i in range(20):
+            detector.update(float(i))  # monotonically increasing
+        assert detector.is_diverging(n_recent=10)
+
+    def test_not_diverging(self):
+        from training.utils_v24 import LossSpikeDetector
+        detector = LossSpikeDetector()
+        for i in range(20):
+            detector.update(10.0 - i * 0.1)  # decreasing
+        assert not detector.is_diverging()
+
+    def test_reset(self):
+        from training.utils_v24 import LossSpikeDetector
+        detector = LossSpikeDetector()
+        for i in range(10):
+            detector.update(float(i))
+        detector.reset()
+        assert detector._step == 0
+        assert detector.ema_loss is None
+
+    def test_spike_log(self):
+        from training.utils_v24 import LossSpikeDetector
+        detector = LossSpikeDetector(spike_threshold=2.0)
+        for _ in range(50):
+            detector.update(1.0)
+        detector.update(100.0)
+        log = detector.get_spike_log()
+        assert len(log) >= 1
+        assert log[0]['step'] > 0
+
+
+class TestV24Integration:
+    """Интеграционные тесты v24."""
+
+    def test_llrd_with_model(self):
+        from training.utils_v24 import LLRD
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        llrd = LLRD(model, base_lr=1e-3, decay=0.8, n_layers=cfg.n_layers)
+        groups = llrd.get_param_groups()
+        opt = torch.optim.Adam(groups)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        opt.zero_grad()
+        _, loss, _ = model(x, y)
+        loss.backward()
+        opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_loss_spike_training(self):
+        from training.utils_v24 import LossSpikeDetector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        detector = LossSpikeDetector()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            result = detector.update(loss.item())
+            loss.backward()
+            opt.step()
+        stats = detector.get_stats()
+        assert stats['n_steps'] == 10
+
+    def test_wd_schedule_training(self):
+        from training.utils_v24 import WeightDecayScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+        wd_sched = WeightDecayScheduler(opt, base_wd=0.01, total_steps=10, strategy='cosine')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            wd_sched.step()
+        assert opt.param_groups[0]['weight_decay'] >= 0

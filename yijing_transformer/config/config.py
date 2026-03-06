@@ -128,6 +128,11 @@ class YiJingConfig:
     grad_noise_eta: float = 0.0      # Gradient noise eta (0 = выкл)
     curriculum_strategy: str = 'none'  # Curriculum: none, linear, sqrt, step
 
+    # v24: LLRD, Weight Decay Scheduler, Loss Spike
+    llrd_decay: float = 0.0          # LLRD decay factor (0 = выкл, 0.8 типично)
+    wd_schedule: str = 'constant'    # Weight decay schedule: constant, linear, cosine
+    spike_threshold: float = 3.0     # Loss spike detection threshold (z-score)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
