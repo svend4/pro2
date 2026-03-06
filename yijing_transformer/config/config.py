@@ -116,6 +116,11 @@ class YiJingConfig:
     agc_clip_factor: float = 0.0     # AGC clip factor (0 = выкл, 0.01 типично)
     grad_ema_decay: float = 0.0      # GradEMA decay (0 = выкл, 0.95 типично)
 
+    # v22: Matryoshka, SWA, Reptile
+    matryoshka_dims: Optional[list] = None  # Matryoshka dimensions (None = выкл)
+    swa_start: int = 0               # SWA start step (0 = выкл)
+    swa_freq: int = 1                # SWA averaging frequency
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

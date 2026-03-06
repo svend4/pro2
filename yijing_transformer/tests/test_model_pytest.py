@@ -1,5 +1,6 @@
 """Pytest-тесты для моделей YiJing и Vanilla."""
 
+import math
 import pytest
 import torch
 import torch.nn as nn
@@ -4850,3 +4851,302 @@ class TestV21Integration:
         r8 = sim.estimate_memory(n_gpus=8)
         assert r8['savings_pct'] > 50
         assert sim.total_params > 0
+
+
+# ==================== v22 Tests ====================
+
+
+class TestMatryoshkaHead:
+    """Тесты для Matryoshka Embeddings."""
+
+    def test_forward_all_dims(self):
+        from training.utils_v22 import MatryoshkaHead
+        head = MatryoshkaHead(d_model=128, vocab_size=64, dims=[32, 64, 128])
+        hidden = torch.randn(2, 8, 128)
+        results = head(hidden)
+        assert len(results) == 3
+        assert results[32].shape == (2, 8, 64)
+        assert results[128].shape == (2, 8, 64)
+
+    def test_forward_single_dim(self):
+        from training.utils_v22 import MatryoshkaHead
+        head = MatryoshkaHead(d_model=128, vocab_size=64, dims=[32, 64, 128])
+        hidden = torch.randn(2, 8, 128)
+        out = head(hidden, dim=64)
+        assert out.shape == (2, 8, 64)
+
+    def test_compute_loss(self):
+        from training.utils_v22 import MatryoshkaHead
+        head = MatryoshkaHead(d_model=64, vocab_size=32, dims=[16, 32, 64])
+        hidden = torch.randn(2, 8, 64)
+        targets = torch.randint(0, 32, (2, 8))
+        total_loss, per_dim = head.compute_loss(hidden, targets)
+        assert total_loss.item() > 0
+        assert len(per_dim) == 3
+
+    def test_backward(self):
+        from training.utils_v22 import MatryoshkaHead
+        head = MatryoshkaHead(d_model=64, vocab_size=32, dims=[16, 32, 64])
+        hidden = torch.randn(2, 8, 64, requires_grad=True)
+        targets = torch.randint(0, 32, (2, 8))
+        loss, _ = head.compute_loss(hidden, targets)
+        loss.backward()
+        assert hidden.grad is not None
+
+    def test_default_dims(self):
+        from training.utils_v22 import MatryoshkaHead
+        head = MatryoshkaHead(d_model=256, vocab_size=32)
+        assert 64 in head.dims
+        assert 128 in head.dims
+        assert 256 in head.dims
+
+
+class TestGCProfiler:
+    """Тесты для Gradient Checkpointing Profiler."""
+
+    def test_profile_layer(self):
+        from training.utils_v22 import GCProfiler
+        model = nn.Linear(64, 64)
+        profiler = GCProfiler(model)
+        x = torch.randn(2, 8, 64)
+        result = profiler.profile_layer(model, x, name='linear')
+        assert result['name'] == 'linear'
+        assert result['activation_bytes'] > 0
+
+    def test_estimate_savings(self):
+        from training.utils_v22 import GCProfiler
+        profiler = GCProfiler(nn.Linear(10, 10))
+        result = profiler.estimate_savings(n_layers=24, activation_mb_per_layer=100)
+        assert result['no_checkpoint_mb'] == 2400
+        assert result['full_checkpoint_mb'] == 200
+        assert result['full_savings_pct'] > 90
+
+    def test_report(self):
+        from training.utils_v22 import GCProfiler
+        model = nn.Sequential(nn.Linear(32, 32), nn.Linear(32, 32))
+        profiler = GCProfiler(model)
+        profiler.profile_layer(model[0], torch.randn(1, 32), 'layer0')
+        profiler.profile_layer(model[1], torch.randn(1, 32), 'layer1')
+        report = profiler.get_report()
+        assert len(report) == 2
+
+    def test_reset(self):
+        from training.utils_v22 import GCProfiler
+        profiler = GCProfiler(nn.Linear(10, 10))
+        profiler.profile_layer(nn.Linear(10, 10), torch.randn(1, 10))
+        profiler.reset()
+        assert len(profiler.results) == 0
+
+
+class TestReptile:
+    """Тесты для Reptile Meta-Learning."""
+
+    def test_inner_loop(self):
+        from training.utils_v22 import Reptile
+        model = nn.Linear(10, 5)
+        reptile = Reptile(model, inner_lr=0.01, inner_steps=3)
+
+        def task_fn(m):
+            return F.mse_loss(m(torch.randn(4, 10)), torch.randn(4, 5))
+
+        result = reptile.inner_loop(task_fn)
+        assert len(result['inner_losses']) == 3
+
+    def test_meta_step(self):
+        from training.utils_v22 import Reptile
+        model = nn.Linear(10, 5)
+        w_before = model.weight.data.clone()
+        reptile = Reptile(model, inner_lr=0.01, meta_lr=0.1, inner_steps=3)
+
+        def make_task(seed):
+            def fn(m):
+                torch.manual_seed(seed)
+                return F.mse_loss(m(torch.randn(4, 10)), torch.randn(4, 5))
+            return fn
+
+        result = reptile.meta_step([make_task(i) for i in range(3)])
+        assert result['n_tasks'] == 3
+        assert not torch.equal(w_before, model.weight.data)
+
+    def test_single_task(self):
+        from training.utils_v22 import Reptile
+        model = nn.Linear(5, 2)
+        reptile = Reptile(model, inner_lr=0.01, meta_lr=0.5, inner_steps=5)
+
+        def task(m):
+            return m(torch.ones(1, 5)).sum()
+
+        result = reptile.meta_step([task])
+        assert result['n_tasks'] == 1
+
+    def test_model_valid_after(self):
+        from training.utils_v22 import Reptile
+        model = nn.Linear(10, 5)
+        reptile = Reptile(model, inner_steps=3)
+
+        def task(m):
+            return F.mse_loss(m(torch.randn(2, 10)), torch.randn(2, 5))
+
+        reptile.meta_step([task, task])
+        out = model(torch.randn(2, 10))
+        assert not torch.isnan(out).any()
+
+
+class TestTokenFrequencyTracker:
+    """Тесты для Token Frequency Tracker."""
+
+    def test_update(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        tracker = TokenFrequencyTracker(vocab_size=100)
+        tracker.update(torch.randint(0, 100, (2, 8)))
+        assert tracker.total_input_tokens == 16
+
+    def test_with_targets(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        tracker = TokenFrequencyTracker(vocab_size=100)
+        tracker.update(torch.randint(0, 100, (2, 8)), torch.randint(0, 100, (2, 8)))
+        assert tracker.total_target_tokens == 16
+
+    def test_coverage(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        tracker = TokenFrequencyTracker(vocab_size=10)
+        tracker.update(torch.arange(10).unsqueeze(0))
+        assert tracker.get_coverage() == 1.0
+
+    def test_top_k(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        tracker = TokenFrequencyTracker(vocab_size=100)
+        tracker.update(torch.tensor([[5, 5, 5, 1, 2, 3, 4, 5]]))
+        top = tracker.get_top_k(k=3)
+        assert top[0][0] == 5
+        assert top[0][1] == 4
+
+    def test_entropy(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        tracker = TokenFrequencyTracker(vocab_size=100)
+        tracker.update(torch.arange(10).unsqueeze(0))
+        entropy = tracker.get_entropy()
+        assert abs(entropy - math.log2(10)) < 0.01
+
+    def test_stats(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        tracker = TokenFrequencyTracker(vocab_size=50)
+        for _ in range(5):
+            tracker.update(torch.randint(0, 50, (4, 16)))
+        stats = tracker.get_stats()
+        assert stats['n_batches'] == 5
+        assert stats['total_input_tokens'] == 320
+
+    def test_reset(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        tracker = TokenFrequencyTracker(vocab_size=100)
+        tracker.update(torch.randint(0, 100, (2, 8)))
+        tracker.reset()
+        assert tracker.total_input_tokens == 0
+
+
+class TestSWA:
+    """Тесты для Stochastic Weight Averaging."""
+
+    def test_averaging(self):
+        from training.utils_v22 import SWA
+        model = nn.Linear(10, 5, bias=False)
+        swa = SWA(model, swa_start=0, swa_freq=1)
+        nn.init.ones_(model.weight)
+        swa.step()
+        nn.init.constant_(model.weight, 3.0)
+        swa.step()
+        assert swa.n_averaged == 2
+        swa.apply_average()
+        assert torch.allclose(model.weight.data, torch.full_like(model.weight, 2.0), atol=1e-5)
+
+    def test_swa_start(self):
+        from training.utils_v22 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=5, swa_freq=1)
+        for _ in range(4):
+            assert not swa.step()
+        assert swa.n_averaged == 0
+        assert swa.step()
+        assert swa.n_averaged == 1
+
+    def test_swa_freq(self):
+        from training.utils_v22 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=0, swa_freq=3)
+        for _ in range(9):
+            swa.step()
+        assert swa.n_averaged == 3
+
+    def test_state_dict(self):
+        from training.utils_v22 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=0)
+        swa.step()
+        swa.step()
+        sd = swa.state_dict()
+        assert sd['n_averaged'] == 2
+
+    def test_apply_valid(self):
+        from training.utils_v22 import SWA
+        model = nn.Linear(10, 5, bias=False)
+        swa = SWA(model, swa_start=0)
+        nn.init.ones_(model.weight)
+        swa.step()
+        swa.apply_average()
+        assert not torch.isnan(model(torch.ones(1, 10))).any()
+
+
+class TestV22Integration:
+    """Интеграционные тесты v22."""
+
+    def test_matryoshka_with_model(self):
+        from training.utils_v22 import MatryoshkaHead
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        head = MatryoshkaHead(cfg.d_model, cfg.vocab_size, dims=[16, 32, cfg.d_model])
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        emb = model.tok_emb(x)
+        if model.pos_emb is not None:
+            emb = emb + model.pos_emb[:, :8, :]
+        hidden = model.core(emb)[0]
+        loss, per_dim = head.compute_loss(hidden, y)
+        loss.backward()
+        assert not torch.isnan(loss)
+
+    def test_swa_training(self):
+        from training.utils_v22 import SWA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        swa = SWA(model, swa_start=3, swa_freq=2)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            swa.step()
+        swa.apply_average()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_token_tracker_during_training(self):
+        from training.utils_v22 import TokenFrequencyTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        tracker = TokenFrequencyTracker(cfg.vocab_size)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        for _ in range(5):
+            x = torch.randint(0, cfg.vocab_size, (2, 8))
+            y = torch.randint(0, cfg.vocab_size, (2, 8))
+            tracker.update(x, y)
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        stats = tracker.get_stats()
+        assert stats['n_batches'] == 5
+        assert stats['coverage'] > 0
