@@ -56,6 +56,8 @@ from .geometry import (
     PrivilegedAxisAttention,
     HeisenbergAttention,
     FlowerOfLifeGAT,
+    StructuralDefectLayer,
+    HexagramAttentionPattern,
 )
 
 
@@ -165,7 +167,7 @@ class YiJingAttention(nn.Module):
         B, H, T, D = x.shape
         return x[:, :, None, :, :].expand(B, H, self.n_rep, T, D).reshape(B, H * self.n_rep, T, D)
 
-    def forward(self, x, kv_cache=None):
+    def forward(self, x, kv_cache=None, extra_attn_bias=None):
         B, T, C = x.shape
 
         # Раздельные проекции Q, K, V (для GQA)
@@ -194,7 +196,7 @@ class YiJingAttention(nn.Module):
 
         S = k.size(2)  # полная длина (с кэшем)
 
-        if self.use_flash and hasattr(F, 'scaled_dot_product_attention') and kv_cache is None:
+        if self.use_flash and hasattr(F, 'scaled_dot_product_attention') and kv_cache is None and extra_attn_bias is None:
             out = F.scaled_dot_product_attention(
                 q, k, v, is_causal=True, dropout_p=self.dropout.p if self.training else 0.0
             )
@@ -222,6 +224,21 @@ class YiJingAttention(nn.Module):
                 offset = S - T
                 alibi_bias = self.alibi(T, offset=offset)
                 scores = scores + alibi_bias
+
+            # v53: external attention biases (triangular, mobius, cube diagonal, etc.)
+            if extra_attn_bias is not None:
+                # Normalize to (B, 1, T, S) — broadcasts across heads
+                if extra_attn_bias.dim() == 2:
+                    bias = extra_attn_bias.unsqueeze(0).unsqueeze(0)
+                elif extra_attn_bias.dim() == 3:
+                    bias = extra_attn_bias.unsqueeze(1)
+                else:
+                    bias = extra_attn_bias
+                # Handle KV-cache: bias is (*, T, T) but scores are (*, T, S)
+                if bias.size(-1) < S:
+                    pad_size = S - bias.size(-1)
+                    bias = F.pad(bias, (pad_size, 0))
+                scores = scores + bias
 
             # Causal mask с учётом KV-cache
             causal = torch.tril(torch.ones(S, S, device=x.device))
@@ -322,6 +339,26 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_cube_diagonal:
             self.cube_diag = CubeDiagonalAttention(cfg.d_model)
 
+        # v53: Heisenberg attention (Беляев 6.1) — additive enrichment
+        self.use_heisenberg = getattr(cfg, 'use_heisenberg_attention', False)
+        if self.use_heisenberg and not (self.use_quadrant_attention or self.use_recursive_cube or self.use_weaving_loom):
+            self.heisenberg_attn = HeisenbergAttention(cfg.d_model)
+
+        # v53: Hexagram attention pattern (64 fixed patterns)
+        self.use_hex_attn_pattern = getattr(cfg, 'use_hex_attn_pattern', False)
+        if self.use_hex_attn_pattern:
+            self.hex_pattern = HexagramAttentionPattern(cfg.d_model, cfg.block_size)
+
+        # v53: Flower of Life GAT (Беляев 6.6)
+        self.use_flower_gat = getattr(cfg, 'use_flower_gat', False)
+        if self.use_flower_gat:
+            self.flower_gat = FlowerOfLifeGAT(cfg.d_model)
+
+        # v53: Structural Defect bottleneck (Беляев)
+        self.use_structural_defect = getattr(cfg, 'use_structural_defect', False)
+        if self.use_structural_defect:
+            self.structural_defect = StructuralDefectLayer(cfg.d_model)
+
         # Квантизация к вершинам гиперкуба (bottleneck)
         # Multi-scale: layer_quant_dim overrides cfg.quant_total_dim
         quant_dim = layer_quant_dim if layer_quant_dim is not None else cfg.quant_total_dim
@@ -388,14 +425,39 @@ class YiJingTransformerLayer(nn.Module):
             )
 
     def forward(self, x, kv_cache=None):
+        B, T, C = x.shape
+
         # 1. Attention (standard or v51 module)
         h = self.ln_attn(x)
         new_kv = None
 
+        # v53: compose external attention biases — injected into score computation
+        extra_bias = None
+        if self.use_triangular_bias:
+            tri_bias = self.triangular_bias(T).unsqueeze(0).unsqueeze(0)  # (1,1,T,T)
+            extra_bias = tri_bias if extra_bias is None else extra_bias + tri_bias
+        if self.use_mobius_bias:
+            mob_bias = self.mobius_pattern(T).unsqueeze(0).unsqueeze(0)  # (1,1,T,T)
+            extra_bias = mob_bias if extra_bias is None else extra_bias + mob_bias
+        if self.use_cube_diagonal:
+            cd_bias = self.cube_diag.get_bias(h).unsqueeze(1)  # (B,1,T,T)
+            extra_bias = cd_bias if extra_bias is None else extra_bias + cd_bias
+        if self.use_hex_attn_pattern:
+            hex_bias = self.hex_pattern(h, T)  # (B,1,T,T)
+            extra_bias = hex_bias if extra_bias is None else extra_bias + hex_bias
+
         if self._attn_returns_cache:
-            attn_out, new_kv = self.attn(h, kv_cache=kv_cache)
+            attn_out, new_kv = self.attn(h, kv_cache=kv_cache, extra_attn_bias=extra_bias)
         else:
             attn_out = self.attn(h)
+            # For alternative attentions: compose bias post-hoc
+            if extra_bias is not None:
+                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
+                attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
+
+        # v53: Heisenberg attention enrichment (additive)
+        if self.use_heisenberg:
+            attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
 
         # v51: compose additional attention biases (additive post-processing)
         if self.use_palace_attention:
@@ -403,16 +465,19 @@ class YiJingTransformerLayer(nn.Module):
             attn_out = attn_out + 0.1 * palace_out
 
         if self.use_privileged_axis:
-            # PrivilegedAxisAttention returns a bias; add to attention output
-            axis_bias = self.privileged_axis.get_bias(h)
-            # Apply bias as weighted self-attention modification
-            attn_out = attn_out + 0.05 * (axis_bias.unsqueeze(-1) * h.unsqueeze(1)).mean(dim=2)
+            axis_bias = self.privileged_axis.get_bias(h)  # (B, T, T)
+            axis_w = F.softmax(axis_bias, dim=-1)
+            attn_out = attn_out + 0.05 * torch.bmm(axis_w, h)
 
         x = x + attn_out
 
         # v51: Dual Embedding enrichment
         if self.use_dual_embedding:
             x = self.dual_emb(x)
+
+        # v53: Flower of Life GAT enrichment
+        if self.use_flower_gat:
+            x = self.flower_gat(x)
 
         # 2. Квантизация к вершинам гиперкуба
         h = self.ln_hex(x)
@@ -435,6 +500,16 @@ class YiJingTransformerLayer(nn.Module):
         # 4. D₄-эквивариантный слой
         if self.use_d4_equivariant:
             x = self.d4_layer(x)
+
+        # v53: Structural Defect bottleneck (geometric compression)
+        if self.use_structural_defect:
+            compressed = self.structural_defect(x)  # (B, 12, C)
+            if compressed.size(1) < T:
+                weights = F.softmax(
+                    torch.matmul(x, compressed.transpose(-2, -1)) / math.sqrt(C),
+                    dim=-1
+                )
+                x = x + 0.1 * torch.matmul(weights, compressed)
 
         # 5. FFN или MoE
         h_ffn = self.ln_ffn(x)
@@ -605,6 +680,11 @@ class YiJingGPT(nn.Module):
             if kv_cache is not None and kv_cache[0] is not None:
                 offset = kv_cache[0][0].size(2)
             x = x + self.pos_emb[:, offset:offset+t, :]
+
+        # v53: Bidirectional triangular pre-processing (Андреев 3.3)
+        if self.use_bidirectional_tri:
+            bi_mask = self.bi_tri_attn.get_mask(t)  # (t, t) soft directional mask
+            x = x * bi_mask.diag().unsqueeze(0).unsqueeze(-1)
 
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)

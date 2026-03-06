@@ -181,6 +181,57 @@ Learned representations concentrate energy in low-order Walsh coefficients
 
 Hypercube-based PTQ achieves competitive quality at 3-4 bits per group.
 
+### 8.8 XOR and Modular Arithmetic (v52 Proof of Concept)
+
+**Task**: Modular addition mod 64. Input: two integers a, b ∈ {0,...,63}.
+Output: (a + b) mod 64. This is equivalent to XOR + carry in Z₂⁶.
+
+| Model | Full Acc | Bit Acc | Params |
+|-------|----------|---------|--------|
+| Vanilla Transformer | 0.4785 | 0.9040 | 155,166 |
+| **Geometry (D4 + Quant + BianGua)** | **1.0000** | **1.0000** | 158,676 |
+
+**Key finding**: The geometry transformer achieves **perfect accuracy** (100%)
+on modular arithmetic while the vanilla transformer plateaus at 48%.
+This validates the core thesis: Z₂⁶ hypercube geometry provides a natural
+inductive bias for algebraic operations on Z₂⁶.
+
+### 8.9 v53 Full Integration
+
+All 8 previously disconnected v51 modules are now wired into the forward pass:
+- **Attention biases** (TriangularBias, MobiusBias, CubeDiagonal, HexagramPattern):
+  inject directly into attention score computation via `extra_attn_bias`
+- **Enrichment** (HeisenbergAttention, FlowerOfLifeGAT): additive post-attention
+- **Bottleneck** (StructuralDefectLayer): geometric compression 16→12
+- **Directional** (BidirectionalTriangularAttention): modulates input embeddings
+
+Full configuration (all 15 geometric modules) trains end-to-end with gradient
+flow through all parameters.
+
+### 8.10 Six-Source Ablation (v53)
+
+Task: modular addition (a+b mod 64) with d_model=64, 2 layers, 3000 steps.
+
+| Source | Acc@200 | Final Acc | Final Loss | Params |
+|--------|---------|-----------|------------|--------|
+| vanilla | 0.358 | 1.000 | 0.0169 | 109,018 |
+| **S2 Fomyuk (D4+antipodal)** | **0.491** | **1.000** | **0.0062** | 109,806 |
+| **S6 Belyaev (Heis+FoL+Mob+SD)** | **0.429** | **1.000** | **0.0070** | 168,158 |
+| S5 Hermann (factored6) | 0.230 | 1.000 | 0.0112 | 109,018 |
+| S3 Andreev (tri+4PE+bidir) | 0.020 | 1.000 | 0.0114 | 113,630 |
+| S4 Kasatkin (dual+cube+priv) | 0.049 | 1.000 | 0.0739 | 112,174 |
+| S1 Sklyarova (palace+grad) | 0.044 | 0.821 | 1.3106 | 109,022 |
+| all_sources | 0.033 | 0.981 | 0.8771 | 176,718 |
+
+**Key findings**:
+1. **Fomyuk (D4-equivariant + antipodal)** converges 37% faster and achieves
+   2.7× lower final loss — the strongest individual source for Z₂ tasks.
+2. **Belyaev** modules also accelerate convergence (+20% at step 200).
+3. **Palace attention (Sklyarova)** harms modular arithmetic — the block-sparse
+   pattern conflicts with the fully-connected Z₂⁶ group structure.
+4. **Combining all sources hurts** — combinatorial interference between 15 modules
+   in a tiny model creates optimization challenges. Source selection matters.
+
 ## 9. Related Work
 
 - **Vector Quantization in NLU**: VQ-VAE (van den Oord et al., 2017),

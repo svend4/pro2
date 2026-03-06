@@ -1,0 +1,74 @@
+{
+  "vanilla": {
+    "source": "vanilla",
+    "final_accuracy": 1.0,
+    "final_loss": 0.016938703134655952,
+    "params": 109018,
+    "time": 132.03422212600708,
+    "acc_at_200": 0.3583984375,
+    "acc_at_600": 0.9921875
+  },
+  "source1_sklyarova": {
+    "source": "source1_sklyarova",
+    "final_accuracy": 0.8212890625,
+    "final_loss": 1.3105746507644653,
+    "params": 109022,
+    "time": 119.0519962310791,
+    "acc_at_200": 0.0439453125,
+    "acc_at_600": 0.0537109375
+  },
+  "source2_fomyuk": {
+    "source": "source2_fomyuk",
+    "final_accuracy": 1.0,
+    "final_loss": 0.006163294892758131,
+    "params": 109806,
+    "time": 139.46447157859802,
+    "acc_at_200": 0.4912109375,
+    "acc_at_600": 1.0
+  },
+  "source3_andreev": {
+    "source": "source3_andreev",
+    "final_accuracy": 1.0,
+    "final_loss": 0.011363833211362362,
+    "params": 113630,
+    "time": 105.55343246459961,
+    "acc_at_200": 0.01953125,
+    "acc_at_600": 1.0
+  },
+  "source4_kasatkin": {
+    "source": "source4_kasatkin",
+    "final_accuracy": 1.0,
+    "final_loss": 0.07393275946378708,
+    "params": 112174,
+    "time": 127.64396691322327,
+    "acc_at_200": 0.048828125,
+    "acc_at_600": 0.36328125
+  },
+  "source5_hermann": {
+    "source": "source5_hermann",
+    "final_accuracy": 1.0,
+    "final_loss": 0.01117519661784172,
+    "params": 109018,
+    "time": 102.9378616809845,
+    "acc_at_200": 0.2294921875,
+    "acc_at_600": 1.0
+  },
+  "source6_belyaev": {
+    "source": "source6_belyaev",
+    "final_accuracy": 1.0,
+    "final_loss": 0.006978780496865511,
+    "params": 168158,
+    "time": 172.16143679618835,
+    "acc_at_200": 0.4287109375,
+    "acc_at_600": 1.0
+  },
+  "all_sources": {
+    "source": "all_sources",
+    "final_accuracy": 0.9814453125,
+    "final_loss": 0.877109944820404,
+    "params": 176718,
+    "time": 264.7866017818451,
+    "acc_at_200": 0.033203125,
+    "acc_at_600": 0.052734375
+  }
+}

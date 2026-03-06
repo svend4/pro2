@@ -347,6 +347,7 @@ class YiJingConfig:
     use_four_level_pe: bool = False     # 4-уровневое позиционное кодирование (Андреев 3.1)
     use_bidirectional_tri: bool = False # двунаправленный треугольный attention (Андреев 3.3)
     use_flower_gat: bool = False        # Цветок Жизни GAT (Беляев 6.6)
+    use_structural_defect: bool = False  # Structural Defect bottleneck 16→12 (Беляев)
     curriculum_strategy: str = 'linear' # 'linear', 'geometric_first', 'triangular' (Андреев 3.4)
 
     # Обучение

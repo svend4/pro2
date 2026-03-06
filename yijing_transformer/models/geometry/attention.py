@@ -298,8 +298,8 @@ class FlowerOfLifeGAT(nn.Module):
         B, T, D = x.shape
         node_tokens = []
         for i in range(self.n_nodes):
-            indices = torch.arange(i, T, self.n_nodes, device=x.device)
-            if len(indices) > 0:
+            if i < T:
+                indices = torch.arange(i, T, self.n_nodes, device=x.device)
                 node_tokens.append(x[:, indices].mean(dim=1))
             else:
                 node_tokens.append(torch.zeros(B, D, device=x.device))
@@ -313,10 +313,9 @@ class FlowerOfLifeGAT(nn.Module):
         out_nodes = torch.matmul(alpha, h)
         out_nodes = self.out_proj(out_nodes)
         result = x.clone()
-        for i in range(self.n_nodes):
+        for i in range(min(self.n_nodes, T)):
             indices = torch.arange(i, T, self.n_nodes, device=x.device)
-            if len(indices) > 0:
-                result[:, indices] = result[:, indices] + out_nodes[:, i:i+1]
+            result[:, indices] = result[:, indices] + out_nodes[:, i:i+1]
         return result
 
 
