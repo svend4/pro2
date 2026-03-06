@@ -100,6 +100,12 @@ class YiJingConfig:
     neftune_alpha: float = 0.0       # NEFTune noise scale (0 = выкл, 5-15 типично)
     bpe_dropout: float = 0.0         # BPE-Dropout rate (0 = выкл, 0.1 типично)
 
+    # v19: Sophia, RMSNorm, Chunked Prefill, EMA decay warmup
+    use_rmsnorm: bool = False        # RMSNorm вместо LayerNorm
+    sophia_rho: float = 0.04         # Sophia clipping threshold
+    chunk_prefill_size: int = 0      # Chunked prefill (0 = выкл)
+    ema_decay_warmup: int = 0        # EMA decay warmup шагов (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

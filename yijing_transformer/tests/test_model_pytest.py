@@ -3854,3 +3854,341 @@ class TestV18Integration:
             sched.step()
         assert not torch.isnan(loss)
         NEFTune.remove_from_model(model, original_emb)
+
+
+# ==================== v19 Tests ====================
+
+
+class TestSophia:
+    """Тесты для Sophia optimizer."""
+
+    def test_basic_step(self):
+        from training.utils_v19 import Sophia
+        model = nn.Linear(10, 5)
+        opt = Sophia(model.parameters(), lr=1e-3)
+        x = torch.randn(4, 10)
+        y = torch.randn(4, 5)
+        loss = F.mse_loss(model(x), y)
+        loss.backward()
+        opt.step()
+
+    def test_convergence(self):
+        from training.utils_v19 import Sophia
+        torch.manual_seed(42)
+        model = nn.Linear(10, 1)
+        opt = Sophia(model.parameters(), lr=1e-3, weight_decay=0.0, rho=1.0)
+        x = torch.randn(32, 10)
+        y = x[:, 0:1] * 2
+        initial_loss = F.mse_loss(model(x), y).item()
+        for _ in range(100):
+            opt.zero_grad()
+            loss = F.mse_loss(model(x), y)
+            loss.backward()
+            opt.step()
+        final_loss = F.mse_loss(model(x), y).item()
+        assert final_loss < initial_loss
+
+    def test_weight_decay(self):
+        from training.utils_v19 import Sophia
+        model = nn.Linear(10, 5, bias=False)
+        nn.init.constant_(model.weight, 5.0)
+        opt = Sophia(model.parameters(), lr=1e-3, weight_decay=0.1, rho=1.0)
+        for _ in range(20):
+            opt.zero_grad()
+            loss = model(torch.randn(4, 10)).sum()
+            loss.backward()
+            opt.step()
+        assert model.weight.data.abs().mean().item() < 5.0
+
+    def test_hessian_update(self):
+        from training.utils_v19 import Sophia
+        model = nn.Linear(10, 5)
+        opt = Sophia(model.parameters(), lr=1e-3)
+        x = torch.randn(4, 10)
+        y = torch.randn(4, 5)
+        loss = F.mse_loss(model(x), y)
+        loss.backward()
+        opt.step()
+        opt.zero_grad()
+
+        def loss_fn():
+            return F.mse_loss(model(x), y)
+
+        opt.update_hessian(loss_fn)
+
+        for group in opt.param_groups:
+            for p in group['params']:
+                state = opt.state[p]
+                assert 'hessian' in state
+                assert not torch.all(state['hessian'] == 1.0)
+
+    def test_state_dict(self):
+        from training.utils_v19 import Sophia
+        model = nn.Linear(10, 5)
+        opt = Sophia(model.parameters(), lr=1e-3)
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        opt.step()
+        sd = opt.state_dict()
+        assert len(sd['state']) > 0
+
+
+class TestRMSNorm:
+    """Тесты для RMSNorm."""
+
+    def test_output_shape(self):
+        from training.utils_v19 import RMSNorm
+        norm = RMSNorm(64)
+        x = torch.randn(2, 8, 64)
+        out = norm(x)
+        assert out.shape == (2, 8, 64)
+
+    def test_normalization(self):
+        from training.utils_v19 import RMSNorm
+        norm = RMSNorm(64)
+        x = torch.randn(2, 8, 64) * 10
+        out = norm(x)
+        rms = out.pow(2).mean(dim=-1).sqrt()
+        assert rms.mean().item() < 3.0
+
+    def test_backward(self):
+        from training.utils_v19 import RMSNorm
+        norm = RMSNorm(64)
+        x = torch.randn(2, 8, 64, requires_grad=True)
+        out = norm(x)
+        out.sum().backward()
+        assert x.grad is not None
+        assert norm.weight.grad is not None
+
+    def test_weight_initialization(self):
+        from training.utils_v19 import RMSNorm
+        norm = RMSNorm(64)
+        assert torch.all(norm.weight == 1.0)
+
+    def test_1d_input(self):
+        from training.utils_v19 import RMSNorm
+        norm = RMSNorm(32)
+        x = torch.randn(32)
+        out = norm(x)
+        assert out.shape == (32,)
+
+    def test_extra_repr(self):
+        from training.utils_v19 import RMSNorm
+        norm = RMSNorm(64, eps=1e-5)
+        assert '64' in norm.extra_repr()
+        assert '1e-05' in norm.extra_repr()
+
+
+class TestChunkedPrefill:
+    """Тесты для Chunked Prefill."""
+
+    def test_prefill_short(self):
+        from training.utils_v19 import ChunkedPrefill
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        cp = ChunkedPrefill(model, chunk_size=8)
+        ids = torch.randint(0, cfg.vocab_size, (1, 8))
+        logits, info = cp.prefill(ids)
+        assert logits.shape == (1, 8, cfg.vocab_size)
+        assert info['n_chunks'] == 1
+
+    def test_prefill_long(self):
+        from training.utils_v19 import ChunkedPrefill
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        cp = ChunkedPrefill(model, chunk_size=8)
+        ids = torch.randint(0, cfg.vocab_size, (1, 24))
+        logits, info = cp.prefill(ids)
+        assert logits.shape == (1, 24, cfg.vocab_size)
+        assert info['n_chunks'] == 3
+
+    def test_prefill_uneven(self):
+        from training.utils_v19 import ChunkedPrefill
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        cp = ChunkedPrefill(model, chunk_size=8)
+        ids = torch.randint(0, cfg.vocab_size, (1, 13))
+        logits, info = cp.prefill(ids)
+        assert logits.shape == (1, 13, cfg.vocab_size)
+        assert info['n_chunks'] == 2
+
+    def test_generate(self):
+        from training.utils_v19 import ChunkedPrefill
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        cp = ChunkedPrefill(model, chunk_size=8)
+        ids = torch.randint(0, cfg.vocab_size, (1, 8))
+        generated = cp.generate_with_prefill(ids, max_new_tokens=5)
+        assert generated.shape == (1, 13)
+
+
+class TestCAGrad:
+    """Тесты для CAGrad."""
+
+    def test_no_conflict(self):
+        from training.utils_v19 import CAGrad
+        model = nn.Linear(10, 5, bias=False)
+        cag = CAGrad(n_tasks=2, c=0.5)
+        x = torch.randn(4, 10)
+        loss1 = model(x)[:, 0].pow(2).sum()
+        loss2 = model(x)[:, 1].pow(2).sum()
+        params = list(model.parameters())
+        total = cag.backward([loss1, loss2], params)
+        assert total > 0
+        assert model.weight.grad is not None
+
+    def test_conflicting_tasks(self):
+        from training.utils_v19 import CAGrad
+        model = nn.Linear(10, 2, bias=False)
+        cag = CAGrad(n_tasks=2, c=0.5)
+        x = torch.randn(4, 10)
+        loss1 = model(x)[:, 0].mean()
+        loss2 = -model(x)[:, 0].mean()
+        params = list(model.parameters())
+        total = cag.backward([loss1, loss2], params)
+        assert model.weight.grad is not None
+
+    def test_three_tasks(self):
+        from training.utils_v19 import CAGrad
+        model = nn.Linear(10, 5, bias=False)
+        cag = CAGrad(n_tasks=3, c=0.5)
+        x = torch.randn(4, 10)
+        losses = [model(x)[:, i].sum() for i in range(3)]
+        params = list(model.parameters())
+        total = cag.backward(losses, params)
+        assert total > 0
+
+    def test_gradient_set(self):
+        from training.utils_v19 import CAGrad
+        model = nn.Linear(10, 5, bias=False)
+        cag = CAGrad(n_tasks=2, c=0.5)
+        x = torch.randn(4, 10)
+        loss1 = model(x)[:, 0].sum()
+        loss2 = model(x)[:, 1].sum()
+        params = list(model.parameters())
+        cag.backward([loss1, loss2], params)
+        w_before = model.weight.data.clone()
+        model.weight.data -= 0.01 * model.weight.grad
+        assert not torch.equal(w_before, model.weight.data)
+
+
+class TestEMADecayScheduler:
+    """Тесты для EMA Decay Scheduler."""
+
+    def test_decay_warmup(self):
+        from training.utils_v19 import EMADecayScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema_model = YiJingGPT(cfg)
+        sched = EMADecayScheduler(ema_model, model,
+                                   initial_decay=0.9, target_decay=0.999,
+                                   warmup_steps=10)
+        decays = []
+        for _ in range(15):
+            d = sched.step()
+            decays.append(d)
+        assert decays[-1] > decays[0]
+        assert abs(decays[-1] - 0.999) < 1e-3
+
+    def test_initial_decay(self):
+        from training.utils_v19 import EMADecayScheduler
+        model = nn.Linear(10, 5)
+        ema = nn.Linear(10, 5)
+        sched = EMADecayScheduler(ema, model, initial_decay=0.9,
+                                   target_decay=0.999, warmup_steps=100)
+        d = sched.get_decay()
+        assert abs(d - 0.9) < 1e-6
+
+    def test_ema_update(self):
+        from training.utils_v19 import EMADecayScheduler
+        model = nn.Linear(10, 5, bias=False)
+        ema = nn.Linear(10, 5, bias=False)
+        nn.init.ones_(model.weight)
+        nn.init.zeros_(ema.weight)
+        sched = EMADecayScheduler(ema, model, initial_decay=0.5,
+                                   target_decay=0.999, warmup_steps=100)
+        sched.step()
+        assert ema.weight.data.abs().sum().item() > 0
+
+    def test_state_dict(self):
+        from training.utils_v19 import EMADecayScheduler
+        model = nn.Linear(10, 5)
+        ema = nn.Linear(10, 5)
+        sched = EMADecayScheduler(ema, model, warmup_steps=50)
+        for _ in range(25):
+            sched.step()
+        sd = sched.state_dict()
+        assert sd['step'] == 25
+        sched2 = EMADecayScheduler(ema, model, warmup_steps=50)
+        sched2.load_state_dict(sd)
+        assert sched2._step == 25
+
+    def test_cosine_monotonic(self):
+        from training.utils_v19 import EMADecayScheduler
+        model = nn.Linear(10, 5)
+        ema = nn.Linear(10, 5)
+        sched = EMADecayScheduler(ema, model, initial_decay=0.9,
+                                   target_decay=0.999, warmup_steps=20)
+        decays = []
+        for _ in range(20):
+            decays.append(sched.get_decay())
+            sched.step()
+        for i in range(1, len(decays)):
+            assert decays[i] >= decays[i - 1] - 1e-10
+
+
+class TestV19Integration:
+    """Интеграционные тесты v19."""
+
+    def test_sophia_with_model(self):
+        from training.utils_v19 import Sophia
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = Sophia(model.parameters(), lr=1e-4, rho=1.0)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        assert not torch.isnan(loss)
+
+    def test_rmsnorm_drop_in(self):
+        from training.utils_v19 import RMSNorm
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        for module in model.modules():
+            for name, child in list(module.named_children()):
+                if isinstance(child, nn.LayerNorm):
+                    setattr(module, name, RMSNorm(child.normalized_shape[0]))
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, _, _ = model(x)
+        assert logits.shape == (2, 8, cfg.vocab_size)
+        assert not torch.isnan(logits).any()
+
+    def test_ema_scheduler_with_training(self):
+        from training.utils_v19 import EMADecayScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema_model = YiJingGPT(cfg)
+        ema_model.load_state_dict(model.state_dict())
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ema_sched = EMADecayScheduler(ema_model, model,
+                                       initial_decay=0.9, target_decay=0.999,
+                                       warmup_steps=5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            ema_sched.step()
+        ema_model.eval()
+        logits, _, _ = ema_model(x)
+        assert not torch.isnan(logits).any()
