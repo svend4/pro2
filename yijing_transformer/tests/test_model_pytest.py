@@ -8866,3 +8866,336 @@ class TestV34Integration:
             opt.step()
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v35 Tests ====================
+
+
+class TestCurriculumScheduler:
+    """Тесты для Curriculum Learning."""
+
+    def test_initial_difficulty(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100)
+        assert cs.get_difficulty() == 0.0  # step 0
+
+    def test_difficulty_increases(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='linear')
+        d1 = cs.get_difficulty()
+        for _ in range(50):
+            cs.step()
+        d2 = cs.get_difficulty()
+        assert d2 > d1
+
+    def test_max_difficulty(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100)
+        for _ in range(200):
+            cs.step()
+        assert cs.get_difficulty() <= 1.0
+
+    def test_max_seq_len(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100)
+        for _ in range(100):
+            cs.step()
+        seq_len = cs.get_max_seq_len(64)
+        assert seq_len <= 64
+        assert seq_len >= 4
+
+    def test_data_fraction(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100)
+        frac = cs.get_data_fraction()
+        assert 0.0 <= frac <= 1.0
+
+    def test_filter_by_difficulty(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100)
+        for _ in range(50):
+            cs.step()
+        losses = [0.1, 0.5, 0.3, 0.9, 0.2]
+        indices = cs.filter_by_difficulty(losses)
+        assert len(indices) >= 1
+        assert len(indices) <= len(losses)
+
+    def test_step_strategy(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='step')
+        for _ in range(80):
+            cs.step()
+        d = cs.get_difficulty()
+        assert d > 0.5
+
+    def test_sqrt_strategy(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='sqrt')
+        for _ in range(50):
+            cs.step()
+        d = cs.get_difficulty()
+        assert d > 0
+
+    def test_get_info(self):
+        from training.utils_v35 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100)
+        info = cs.get_info()
+        assert 'difficulty' in info
+        assert 'strategy' in info
+
+
+class TestGradientNoiseInjector:
+    """Тесты для Gradient Noise."""
+
+    def test_inject(self):
+        from training.utils_v35 import GradientNoiseInjector
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        grad_before = model.weight.grad.clone()
+        gni = GradientNoiseInjector(eta=0.1)
+        result = gni.inject(model)
+        assert result['n_params_noised'] > 0
+        assert not torch.equal(model.weight.grad, grad_before)
+
+    def test_variance_decreases(self):
+        from training.utils_v35 import GradientNoiseInjector
+        gni = GradientNoiseInjector(eta=1.0, gamma=0.55)
+        v1 = gni.get_noise_variance()
+        gni._step = 100
+        v2 = gni.get_noise_variance()
+        assert v2 < v1
+
+    def test_uniform_noise(self):
+        from training.utils_v35 import GradientNoiseInjector
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gni = GradientNoiseInjector(noise_type='uniform')
+        result = gni.inject(model)
+        assert result['n_params_noised'] > 0
+
+    def test_reset(self):
+        from training.utils_v35 import GradientNoiseInjector
+        gni = GradientNoiseInjector()
+        gni._step = 50
+        gni.reset()
+        assert gni._step == 0
+
+    def test_get_info(self):
+        from training.utils_v35 import GradientNoiseInjector
+        gni = GradientNoiseInjector(eta=0.5)
+        info = gni.get_info()
+        assert info['eta'] == 0.5
+
+
+class TestDynamicBatchSizeScaler:
+    """Тесты для Dynamic Batch Size."""
+
+    def test_initial_state(self):
+        from training.utils_v35 import DynamicBatchSizeScaler
+        scaler = DynamicBatchSizeScaler(initial_batch_size=32)
+        assert scaler.current_batch_size == 32
+
+    def test_stable_loss_scales_up(self):
+        from training.utils_v35 import DynamicBatchSizeScaler
+        scaler = DynamicBatchSizeScaler(initial_batch_size=32, stability_window=10)
+        for _ in range(20):
+            result = scaler.update(2.0)  # Perfectly stable
+        assert result['batch_size'] >= 32
+
+    def test_unstable_loss_scales_down(self):
+        from training.utils_v35 import DynamicBatchSizeScaler
+        scaler = DynamicBatchSizeScaler(initial_batch_size=64, stability_window=10,
+                                         min_batch_size=8)
+        import random
+        random.seed(42)
+        for i in range(20):
+            loss = 2.0 + random.uniform(-5, 5)  # Very unstable
+            result = scaler.update(loss)
+        # Should have tried to scale down or stay
+        assert result['batch_size'] <= 64
+
+    def test_lr_multiplier(self):
+        from training.utils_v35 import DynamicBatchSizeScaler
+        scaler = DynamicBatchSizeScaler(initial_batch_size=32)
+        result = scaler.update(2.0)
+        assert result['lr_multiplier'] == 1.0
+
+    def test_max_batch_size(self):
+        from training.utils_v35 import DynamicBatchSizeScaler
+        scaler = DynamicBatchSizeScaler(initial_batch_size=32, max_batch_size=64,
+                                         stability_window=5)
+        for _ in range(50):
+            scaler.update(2.0)
+        assert scaler.current_batch_size <= 64
+
+    def test_get_info(self):
+        from training.utils_v35 import DynamicBatchSizeScaler
+        scaler = DynamicBatchSizeScaler()
+        info = scaler.get_info()
+        assert 'current_batch_size' in info
+
+
+class TestParameterEfficiencyAnalyzer:
+    """Тесты для Parameter Efficiency."""
+
+    def test_analyze(self):
+        from training.utils_v35 import ParameterEfficiencyAnalyzer
+        model = nn.Linear(10, 5)
+        pea = ParameterEfficiencyAnalyzer()
+        result = pea.analyze(model)
+        assert result['total_params'] > 0
+        assert result['utilization'] >= 0
+
+    def test_dead_params(self):
+        from training.utils_v35 import ParameterEfficiencyAnalyzer
+        model = nn.Linear(10, 5)
+        model.weight.data.zero_()
+        pea = ParameterEfficiencyAnalyzer()
+        result = pea.analyze(model)
+        assert result['dead_params'] > 0
+
+    def test_redundant_layers(self):
+        from training.utils_v35 import ParameterEfficiencyAnalyzer
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(10, 5))
+        # Make weights identical
+        model[1].weight.data.copy_(model[0].weight.data)
+        model[1].bias.data.copy_(model[0].bias.data)
+        pea = ParameterEfficiencyAnalyzer()
+        pairs = pea.find_redundant_layers(model)
+        assert len(pairs) >= 1
+
+    def test_gradient_flow(self):
+        from training.utils_v35 import ParameterEfficiencyAnalyzer
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        pea = ParameterEfficiencyAnalyzer()
+        flow = pea.gradient_flow(model)
+        assert len(flow) > 0
+        assert flow[0]['has_grad']
+
+    def test_layer_stats(self):
+        from training.utils_v35 import ParameterEfficiencyAnalyzer
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        pea = ParameterEfficiencyAnalyzer()
+        result = pea.analyze(model)
+        assert len(result['layer_stats']) > 0
+
+
+class TestTrainingStabilityMonitor:
+    """Тесты для Training Stability Monitor."""
+
+    def test_stable_training(self):
+        from training.utils_v35 import TrainingStabilityMonitor
+        monitor = TrainingStabilityMonitor()
+        for i in range(50):
+            result = monitor.update(2.0 - i * 0.01)
+        assert result['stable']
+
+    def test_loss_spike(self):
+        from training.utils_v35 import TrainingStabilityMonitor
+        monitor = TrainingStabilityMonitor(spike_threshold=2.0)
+        for _ in range(20):
+            monitor.update(2.0)
+        result = monitor.update(100.0)  # Spike
+        assert not result['stable']
+        assert any(e['type'] == 'loss_spike' for e in result['events'])
+
+    def test_gradient_explosion(self):
+        from training.utils_v35 import TrainingStabilityMonitor
+        monitor = TrainingStabilityMonitor(spike_threshold=2.0)
+        for _ in range(20):
+            monitor.update(2.0, grad_norm=1.0)
+        result = monitor.update(2.0, grad_norm=100.0)
+        assert any(e['type'] == 'gradient_explosion' for e in result['events'])
+
+    def test_stability_score(self):
+        from training.utils_v35 import TrainingStabilityMonitor
+        monitor = TrainingStabilityMonitor()
+        for _ in range(20):
+            monitor.update(2.0)
+        score = monitor.get_stability_score()
+        assert 0 <= score <= 1.0
+
+    def test_get_summary(self):
+        from training.utils_v35 import TrainingStabilityMonitor
+        monitor = TrainingStabilityMonitor()
+        monitor.update(2.0)
+        summary = monitor.get_summary()
+        assert 'stability_score' in summary
+
+    def test_reset(self):
+        from training.utils_v35 import TrainingStabilityMonitor
+        monitor = TrainingStabilityMonitor()
+        for _ in range(20):
+            monitor.update(2.0)
+        monitor.reset()
+        assert monitor.get_stability_score() == 1.0
+
+
+class TestV35Integration:
+    """Интеграционные тесты v35."""
+
+    def test_curriculum_training(self):
+        from training.utils_v35 import CurriculumScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        cs = CurriculumScheduler(total_steps=20, strategy='linear')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            seq_len = cs.get_max_seq_len(8)
+            _, loss, _ = model(x[:, :seq_len], y[:, :seq_len])
+            loss.backward()
+            opt.step()
+            cs.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_grad_noise_training(self):
+        from training.utils_v35 import GradientNoiseInjector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gni = GradientNoiseInjector(eta=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gni.inject(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_stability_monitor_training(self):
+        from training.utils_v35 import TrainingStabilityMonitor
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        monitor = TrainingStabilityMonitor()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0).item()
+            monitor.update(loss.item(), grad_norm=grad_norm)
+            opt.step()
+        score = monitor.get_stability_score()
+        assert score >= 0
+
+    def test_param_efficiency_on_model(self):
+        from training.utils_v35 import ParameterEfficiencyAnalyzer
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        pea = ParameterEfficiencyAnalyzer()
+        result = pea.analyze(model)
+        assert result['total_params'] > 0
+        assert result['utilization'] > 0

@@ -191,6 +191,12 @@ class YiJingConfig:
     convergence_patience: int = 0         # Convergence detector patience (0 = выкл)
     activation_checkpoint_ratio: float = 0.0  # Activation checkpointing ratio (0 = выкл)
 
+    # v35: Curriculum, Gradient Noise, Dynamic Batch, Stability Monitor
+    curriculum_strategy: str = 'none'     # Curriculum learning: 'none', 'linear', 'sqrt', 'step'
+    grad_noise_eta: float = 0.0           # Gradient noise eta (0 = выкл)
+    dynamic_batch_size: bool = False      # Dynamic batch size scaling
+    stability_monitor: bool = False       # Training stability monitor
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
