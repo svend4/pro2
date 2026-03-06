@@ -10715,3 +10715,317 @@ class TestV40Integration:
             opt.step()
             result = tpe.update(loss.item())
         assert result['progress_pct'] == 100.0
+
+
+# ==================== v41 Tests ====================
+
+
+class TestActivationCheckpointManager:
+    """Тесты для Activation Checkpointing."""
+
+    def test_apply_every_n(self):
+        from training.utils_v41 import ActivationCheckpointManager
+        model = nn.Sequential(
+            nn.Sequential(nn.Linear(10, 10), nn.ReLU()),
+            nn.Sequential(nn.Linear(10, 10), nn.ReLU()),
+            nn.Sequential(nn.Linear(10, 5), nn.ReLU()),
+        )
+        acm = ActivationCheckpointManager(strategy='every_n', every_n=1)
+        result = acm.apply(model)
+        assert result['n_checkpointed'] >= 1
+
+    def test_apply_all(self):
+        from training.utils_v41 import ActivationCheckpointManager
+        model = nn.Sequential(
+            nn.Sequential(nn.Linear(10, 10)),
+            nn.Sequential(nn.Linear(10, 5)),
+        )
+        acm = ActivationCheckpointManager(strategy='all')
+        result = acm.apply(model)
+        assert result['n_checkpointed'] >= 1
+
+    def test_selective(self):
+        from training.utils_v41 import ActivationCheckpointManager
+        model = nn.Sequential(
+            nn.Sequential(nn.Linear(10, 10)),
+            nn.Sequential(nn.Linear(10, 5)),
+        )
+        acm = ActivationCheckpointManager(strategy='selective')
+        result = acm.apply(model, layer_names=['0'])
+        assert '0' in result['layers']
+
+    def test_memory_estimate(self):
+        from training.utils_v41 import ActivationCheckpointManager
+        model = nn.Sequential(nn.Sequential(nn.Linear(10, 10)))
+        acm = ActivationCheckpointManager(strategy='all')
+        acm.apply(model)
+        est = acm.estimate_memory_saving()
+        assert est['saved_mb'] >= 0
+
+    def test_get_info(self):
+        from training.utils_v41 import ActivationCheckpointManager
+        acm = ActivationCheckpointManager()
+        info = acm.get_info()
+        assert 'strategy' in info
+
+
+class TestParameterFreezer:
+    """Тесты для Parameter Freezer."""
+
+    def test_freeze_all(self):
+        from training.utils_v41 import ParameterFreezer
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        pf = ParameterFreezer(model)
+        result = pf.freeze()
+        assert result['n_frozen'] == 4  # 2 weights + 2 biases
+
+    def test_freeze_pattern(self):
+        from training.utils_v41 import ParameterFreezer
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        pf = ParameterFreezer(model)
+        result = pf.freeze(patterns=['0'])
+        assert result['n_frozen'] == 2
+
+    def test_unfreeze(self):
+        from training.utils_v41 import ParameterFreezer
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        pf = ParameterFreezer(model)
+        pf.freeze()
+        result = pf.unfreeze(patterns=['1'])
+        assert result['n_unfrozen'] == 2
+
+    def test_unfreeze_all(self):
+        from training.utils_v41 import ParameterFreezer
+        model = nn.Linear(10, 5)
+        pf = ParameterFreezer(model)
+        pf.freeze()
+        result = pf.unfreeze()
+        assert result['n_unfrozen'] == 2
+
+    def test_trainable_count(self):
+        from training.utils_v41 import ParameterFreezer
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        pf = ParameterFreezer(model)
+        pf.freeze(patterns=['0'])
+        counts = pf.get_trainable_count()
+        assert counts['frozen'] > 0
+        assert counts['trainable'] > 0
+
+    def test_except_patterns(self):
+        from training.utils_v41 import ParameterFreezer
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        pf = ParameterFreezer(model)
+        result = pf.freeze(except_patterns=['bias'])
+        assert result['n_frozen'] == 2  # Only weights
+
+    def test_get_status(self):
+        from training.utils_v41 import ParameterFreezer
+        model = nn.Linear(10, 5)
+        pf = ParameterFreezer(model)
+        status = pf.get_status()
+        assert 'trainable_pct' in status
+
+
+class TestLossLandscapeProbe:
+    """Тесты для Loss Landscape Probe."""
+
+    def test_probe_1d(self):
+        from training.utils_v41 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+        y = torch.randn(4, 5)
+
+        def loss_fn():
+            return ((model(x) - y) ** 2).mean()
+
+        probe = LossLandscapeProbe()
+        result = probe.probe_1d(model, loss_fn)
+        assert len(result['losses']) == len(result['steps'])
+        assert result['curvature'] is not None
+
+    def test_model_restored(self):
+        from training.utils_v41 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        original = model.weight.data.clone()
+
+        def loss_fn():
+            return model(torch.randn(4, 10)).sum() ** 2
+
+        probe = LossLandscapeProbe()
+        probe.probe_1d(model, loss_fn)
+        assert torch.equal(model.weight.data, original)
+
+    def test_probe_2d(self):
+        from training.utils_v41 import LossLandscapeProbe
+        model = nn.Linear(5, 3)
+        x = torch.randn(4, 5)
+        y = torch.randn(4, 3)
+
+        def loss_fn():
+            return ((model(x) - y) ** 2).mean()
+
+        probe = LossLandscapeProbe()
+        result = probe.probe_2d(model, loss_fn, n_points=3)
+        assert len(result['loss_grid']) == 3
+        assert len(result['loss_grid'][0]) == 3
+
+    def test_sharpness(self):
+        from training.utils_v41 import LossLandscapeProbe
+        model = nn.Linear(5, 3)
+        x = torch.randn(4, 5)
+        y = torch.randn(4, 3)
+
+        def loss_fn():
+            return ((model(x) - y) ** 2).mean()
+
+        probe = LossLandscapeProbe()
+        result = probe.estimate_sharpness(model, loss_fn)
+        assert result['sharpness'] >= 0
+
+
+class TestOptimizerStateInspector:
+    """Тесты для Optimizer State Inspector."""
+
+    def test_inspect_adam(self):
+        from training.utils_v41 import OptimizerStateInspector
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        # Do one step to populate state
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+
+        inspector = OptimizerStateInspector(opt)
+        result = inspector.inspect()
+        assert result['n_params_with_state'] > 0
+        assert 'momentum' in result['state_summary']
+
+    def test_inspect_sgd(self):
+        from training.utils_v41 import OptimizerStateInspector
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        inspector = OptimizerStateInspector(opt)
+        result = inspector.inspect()
+        assert result['n_params_with_state'] == 0
+
+    def test_effective_lr(self):
+        from training.utils_v41 import OptimizerStateInspector
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+
+        inspector = OptimizerStateInspector(opt)
+        results = inspector.get_effective_lr()
+        assert len(results) == 1
+        assert results[0]['base_lr'] == 1e-3
+
+    def test_detect_anomalies(self):
+        from training.utils_v41 import OptimizerStateInspector
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+        inspector = OptimizerStateInspector(opt)
+        anomalies = inspector.detect_anomalies()
+        assert isinstance(anomalies, list)
+
+
+class TestBatchSizeFinder:
+    """Тесты для Batch Size Finder."""
+
+    def test_find(self):
+        from training.utils_v41 import BatchSizeFinder
+        model = nn.Linear(10, 5)
+
+        def create_batch(bs):
+            return torch.randn(bs, 10), torch.randn(bs, 5)
+
+        def loss_fn(output, target):
+            return ((output - target) ** 2).mean()
+
+        bsf = BatchSizeFinder(max_batch_size=32, min_batch_size=1)
+        result = bsf.find(create_batch, model, loss_fn)
+        assert result['optimal_batch_size'] >= 1
+        assert len(result['tested']) > 0
+
+    def test_find_efficient(self):
+        from training.utils_v41 import BatchSizeFinder
+        model = nn.Linear(10, 5)
+
+        def create_batch(bs):
+            return torch.randn(bs, 10), torch.randn(bs, 5)
+
+        def loss_fn(output, target):
+            return ((output - target) ** 2).mean()
+
+        bsf = BatchSizeFinder(max_batch_size=16, min_batch_size=1)
+        result = bsf.find_efficient(create_batch, model, loss_fn)
+        assert result['best_batch_size'] >= 1
+
+    def test_all_fail(self):
+        from training.utils_v41 import BatchSizeFinder
+
+        def create_batch(bs):
+            raise RuntimeError("OOM")
+
+        model = nn.Linear(10, 5)
+        bsf = BatchSizeFinder(max_batch_size=4, min_batch_size=1)
+        result = bsf.find(create_batch, model, lambda o, t: o.sum())
+        assert result['optimal_batch_size'] == 1
+
+
+class TestV41Integration:
+    """Интеграционные тесты v41."""
+
+    def test_freeze_and_train(self):
+        from training.utils_v41 import ParameterFreezer
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        pf = ParameterFreezer(model)
+        pf.freeze(patterns=['embed'], except_patterns=['pos'])
+        opt = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_optimizer_inspect_training(self):
+        from training.utils_v41 import OptimizerStateInspector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        inspector = OptimizerStateInspector(opt)
+        result = inspector.inspect()
+        assert result['n_params_with_state'] > 0
+        anomalies = inspector.detect_anomalies()
+        assert 'nan_in_momentum' not in anomalies
+
+    def test_loss_landscape_model(self):
+        from training.utils_v41 import LossLandscapeProbe
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+
+        def loss_fn():
+            _, loss, _ = model(x, y)
+            return loss
+
+        probe = LossLandscapeProbe(step_sizes=[-0.1, 0.0, 0.1])
+        result = probe.probe_1d(model, loss_fn)
+        assert len(result['losses']) == 3

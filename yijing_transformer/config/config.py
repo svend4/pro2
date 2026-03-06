@@ -229,6 +229,13 @@ class YiJingConfig:
     mixed_precision: bool = False         # Mixed precision manager
     progress_estimator: bool = False      # Training progress estimator
 
+    # v41: Activation Checkpointing, Parameter Freezer, Loss Landscape, Optimizer Inspector
+    activation_checkpointing: bool = False # Activation checkpointing
+    param_freezer: bool = False           # Parameter freezer
+    loss_landscape_probe: bool = False    # Loss landscape probing
+    optimizer_inspector: bool = False     # Optimizer state inspector
+    batch_size_finder: bool = False       # Batch size finder
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
