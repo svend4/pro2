@@ -5150,3 +5150,333 @@ class TestV22Integration:
         stats = tracker.get_stats()
         assert stats['n_batches'] == 5
         assert stats['coverage'] > 0
+
+
+# ==================== v23 Tests ====================
+
+
+class TestLookahead:
+    """Тесты для Lookahead Optimizer."""
+
+    def test_basic(self):
+        from training.utils_v23 import Lookahead
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        la = Lookahead(base_opt, k=5, alpha=0.5)
+
+        for i in range(10):
+            la.zero_grad()
+            loss = model(torch.randn(4, 10)).sum()
+            loss.backward()
+            la.step()
+
+        assert la._step_count == 10
+
+    def test_slow_weights_sync(self):
+        from training.utils_v23 import Lookahead
+        model = nn.Linear(10, 5, bias=False)
+        nn.init.ones_(model.weight)
+        base_opt = torch.optim.SGD(model.parameters(), lr=0.0)  # no actual update
+        la = Lookahead(base_opt, k=2, alpha=0.5)
+
+        # Manually change fast weights
+        model.weight.data.fill_(3.0)
+        la.step()  # step 1, no sync
+        la.step()  # step 2, sync: slow = 1 + 0.5*(3-1) = 2, fast = 2
+
+        assert torch.allclose(model.weight.data, torch.full_like(model.weight, 2.0), atol=1e-5)
+
+    def test_state_dict(self):
+        from training.utils_v23 import Lookahead
+        model = nn.Linear(10, 5)
+        la = Lookahead(torch.optim.Adam(model.parameters()), k=5)
+        la.step()
+        sd = la.state_dict()
+        assert sd['step_count'] == 1
+
+    def test_param_groups(self):
+        from training.utils_v23 import Lookahead
+        model = nn.Linear(10, 5)
+        la = Lookahead(torch.optim.Adam(model.parameters(), lr=0.01))
+        assert len(la.param_groups) == 1
+
+
+class TestActivationHistogram:
+    """Тесты для Activation Histogram."""
+
+    def test_register_and_forward(self):
+        from training.utils_v23 import ActivationHistogram
+        model = nn.Sequential(nn.Linear(10, 20), nn.ReLU(), nn.Linear(20, 5))
+        tracker = ActivationHistogram(n_bins=10)
+        tracker.register(model)
+        model(torch.randn(4, 10))
+        stats = tracker.get_latest_stats()
+        assert len(stats) > 0
+
+    def test_stats_content(self):
+        from training.utils_v23 import ActivationHistogram
+        model = nn.Linear(10, 20)
+        tracker = ActivationHistogram()
+        tracker.register(model)
+        model(torch.randn(4, 10))
+        stats = tracker.get_latest_stats()
+        for name, s in stats.items():
+            assert 'mean' in s
+            assert 'std' in s
+            assert 'dead_frac' in s
+
+    def test_dead_neuron_report(self):
+        from training.utils_v23 import ActivationHistogram
+        model = nn.Sequential(nn.Linear(10, 20), nn.ReLU())
+        tracker = ActivationHistogram()
+        tracker.register(model)
+        # ReLU kills some activations
+        model(torch.randn(100, 10))
+        report = tracker.get_dead_neuron_report(threshold=0.0)
+        assert isinstance(report, list)
+
+    def test_remove_hooks(self):
+        from training.utils_v23 import ActivationHistogram
+        model = nn.Linear(10, 10)
+        tracker = ActivationHistogram()
+        tracker.register(model)
+        tracker.remove_hooks()
+        assert len(tracker._hooks) == 0
+
+    def test_reset(self):
+        from training.utils_v23 import ActivationHistogram
+        model = nn.Linear(10, 10)
+        tracker = ActivationHistogram()
+        tracker.register(model)
+        model(torch.randn(2, 10))
+        tracker.reset()
+        assert len(tracker.stats) == 0
+
+
+class TestCurriculumSampler:
+    """Тесты для Curriculum Sampler."""
+
+    def test_linear_competence(self):
+        from training.utils_v23 import CurriculumSampler
+        diffs = torch.rand(100)
+        cs = CurriculumSampler(diffs, total_steps=100, strategy='linear')
+        assert cs.get_competence(0) == 0.0
+        assert cs.get_competence(50) == 0.5
+        assert cs.get_competence(100) == 1.0
+
+    def test_sqrt_competence(self):
+        from training.utils_v23 import CurriculumSampler
+        cs = CurriculumSampler(torch.rand(50), total_steps=100, strategy='sqrt')
+        c = cs.get_competence(25)
+        assert abs(c - 0.5) < 0.01
+
+    def test_step_competence(self):
+        from training.utils_v23 import CurriculumSampler
+        cs = CurriculumSampler(torch.rand(50), total_steps=100, strategy='step')
+        assert cs.get_competence(10) == 0.33
+        assert cs.get_competence(50) == 0.66
+        assert cs.get_competence(80) == 1.0
+
+    def test_sample_indices(self):
+        from training.utils_v23 import CurriculumSampler
+        diffs = torch.linspace(0, 1, 100)
+        cs = CurriculumSampler(diffs, total_steps=100, strategy='linear')
+        # At step 0, competence=0 → only items with diff=0
+        indices = cs.sample_indices(step=50, batch_size=10)
+        assert len(indices) == 10
+        # All selected should have difficulty <= 0.5
+        assert (diffs[indices] <= 0.5 + 1e-6).all()
+
+    def test_full_coverage(self):
+        from training.utils_v23 import CurriculumSampler
+        diffs = torch.rand(50)
+        cs = CurriculumSampler(diffs, total_steps=100)
+        stats = cs.get_curriculum_stats(100)
+        assert stats['coverage'] == 1.0
+
+    def test_list_input(self):
+        from training.utils_v23 import CurriculumSampler
+        cs = CurriculumSampler([0.1, 0.5, 0.9], total_steps=10)
+        indices = cs.sample_indices(step=10, batch_size=2)
+        assert len(indices) == 2
+
+
+class TestEMAModel:
+    """Тесты для EMA Model."""
+
+    def test_basic_ema(self):
+        from training.utils_v23 import EMAModel
+        model = nn.Linear(10, 5, bias=False)
+        nn.init.ones_(model.weight)
+        ema = EMAModel(model, decay=0.5)
+
+        # Change weights and update EMA
+        model.weight.data.fill_(3.0)
+        ema.update()
+        # shadow = 0.5*1 + 0.5*3 = 2.0
+        assert torch.allclose(
+            ema.shadow['weight'],
+            torch.full_like(model.weight, 2.0),
+            atol=1e-5,
+        )
+
+    def test_apply_and_restore(self):
+        from training.utils_v23 import EMAModel
+        model = nn.Linear(10, 5, bias=False)
+        nn.init.ones_(model.weight)
+        ema = EMAModel(model, decay=0.5)
+        model.weight.data.fill_(3.0)
+        ema.update()
+
+        backup = ema.apply_shadow()
+        # Model now has EMA weights
+        assert torch.allclose(model.weight.data, torch.full_like(model.weight, 2.0), atol=1e-5)
+
+        ema.restore(backup)
+        # Model restored
+        assert torch.allclose(model.weight.data, torch.full_like(model.weight, 3.0), atol=1e-5)
+
+    def test_warmup(self):
+        from training.utils_v23 import EMAModel
+        model = nn.Linear(10, 5)
+        ema = EMAModel(model, decay=0.999, warmup_steps=100)
+        # At step 0, decay should be small (not 0.999)
+        d = ema._get_decay()
+        assert d < 0.999
+
+    def test_state_dict(self):
+        from training.utils_v23 import EMAModel
+        model = nn.Linear(10, 5)
+        ema = EMAModel(model, decay=0.99)
+        ema.update()
+        sd = ema.state_dict()
+        assert sd['step'] == 1
+        assert sd['decay'] == 0.99
+
+    def test_multiple_updates(self):
+        from training.utils_v23 import EMAModel
+        model = nn.Linear(10, 5, bias=False)
+        ema = EMAModel(model, decay=0.9)
+        for i in range(10):
+            model.weight.data.fill_(float(i))
+            ema.update()
+        assert ema._step == 10
+        # Shadow should not be NaN
+        assert not torch.isnan(ema.shadow['weight']).any()
+
+
+class TestGradientNoiseInjector:
+    """Тесты для Gradient Noise Injection."""
+
+    def test_inject(self):
+        from training.utils_v23 import GradientNoiseInjector
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        grad_before = model.weight.grad.clone()
+        injector = GradientNoiseInjector(eta=1.0, gamma=0.55)
+        result = injector.inject(model)
+
+        assert result['n_params_noised'] == 2  # weight + bias
+        assert not torch.equal(grad_before, model.weight.grad)
+
+    def test_variance_decay(self):
+        from training.utils_v23 import GradientNoiseInjector
+        injector = GradientNoiseInjector(eta=1.0, gamma=0.55)
+        v0 = injector.get_variance()
+        injector._step = 100
+        v100 = injector.get_variance()
+        assert v100 < v0
+
+    def test_reset(self):
+        from training.utils_v23 import GradientNoiseInjector
+        injector = GradientNoiseInjector()
+        injector._step = 50
+        injector.reset()
+        assert injector._step == 0
+
+    def test_no_grad_params(self):
+        from training.utils_v23 import GradientNoiseInjector
+        model = nn.Linear(10, 5)
+        # No backward → no grads
+        injector = GradientNoiseInjector(eta=0.01)
+        result = injector.inject(model)
+        assert result['n_params_noised'] == 0
+
+
+class TestV23Integration:
+    """Интеграционные тесты v23."""
+
+    def test_lookahead_training(self):
+        from training.utils_v23 import Lookahead
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        base_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        la = Lookahead(base_opt, k=3, alpha=0.5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(6):
+            la.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            la.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_ema_training(self):
+        from training.utils_v23 import EMAModel
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = EMAModel(model, decay=0.99)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            ema.update()
+        backup = ema.apply_shadow()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+        ema.restore(backup)
+
+    def test_grad_noise_training(self):
+        from training.utils_v23 import GradientNoiseInjector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        injector = GradientNoiseInjector(eta=0.01)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            injector.inject(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_curriculum_with_model(self):
+        from training.utils_v23 import CurriculumSampler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        # Simulate dataset with difficulties
+        n_data = 50
+        diffs = torch.linspace(0, 1, n_data)
+        cs = CurriculumSampler(diffs, total_steps=10)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        for step in range(10):
+            indices = cs.sample_indices(step, batch_size=4)
+            x = torch.randint(0, cfg.vocab_size, (4, 8))
+            y = torch.randint(0, cfg.vocab_size, (4, 8))
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        stats = cs.get_curriculum_stats(10)
+        assert stats['coverage'] == 1.0

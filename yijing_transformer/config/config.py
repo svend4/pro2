@@ -121,6 +121,13 @@ class YiJingConfig:
     swa_start: int = 0               # SWA start step (0 = выкл)
     swa_freq: int = 1                # SWA averaging frequency
 
+    # v23: Lookahead, EMA, Gradient Noise, Curriculum
+    lookahead_k: int = 0             # Lookahead steps (0 = выкл, 5 типично)
+    lookahead_alpha: float = 0.5     # Lookahead interpolation
+    ema_decay: float = 0.0           # EMA decay (0 = выкл, 0.999 типично)
+    grad_noise_eta: float = 0.0      # Gradient noise eta (0 = выкл)
+    curriculum_strategy: str = 'none'  # Curriculum: none, linear, sqrt, step
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
