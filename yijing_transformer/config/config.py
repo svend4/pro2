@@ -156,6 +156,12 @@ class YiJingConfig:
     grad_accum_steps: int = 1          # Gradient accumulation steps
     label_smoothing_warmup: int = 0    # Label smoothing warmup steps (0 = выкл)
 
+    # v29: EMA, Curriculum, Gradient Noise, Weight Decay Schedule
+    ema_decay: float = 0.0             # EMA decay (0 = выкл, 0.999 типично)
+    curriculum_strategy: str = 'none'  # none, linear, sqrt, step, exponential
+    gradient_noise_eta: float = 0.0    # Gradient noise amplitude (0 = выкл)
+    wd_schedule: str = 'constant'      # constant, linear, cosine, proportional
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

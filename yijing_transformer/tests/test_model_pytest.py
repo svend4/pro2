@@ -6954,3 +6954,315 @@ class TestV28Integration:
             opt.step()
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v29 Tests ====================
+
+
+class TestEMA:
+    """Тесты для Exponential Moving Average."""
+
+    def test_basic_update(self):
+        from training.utils_v29 import EMA
+        model = nn.Linear(10, 5)
+        ema = EMA(model, decay=0.99)
+        for name, p in model.named_parameters():
+            assert torch.equal(ema._shadow[name], p.data)
+        model.weight.data.fill_(99.0)
+        ema.update()
+        assert not torch.allclose(ema._shadow['weight'],
+                                  torch.full_like(model.weight.data, 99.0))
+
+    def test_apply_and_restore(self):
+        from training.utils_v29 import EMA
+        model = nn.Linear(10, 5)
+        ema = EMA(model, decay=0.99)
+        model.weight.data.fill_(0.0)
+        ema.update()
+        ema.apply_shadow()
+        assert not torch.allclose(model.weight.data, torch.zeros_like(model.weight.data))
+        ema.restore()
+        assert torch.equal(model.weight.data, torch.zeros_like(model.weight.data))
+
+    def test_warmup_decay(self):
+        from training.utils_v29 import EMA
+        model = nn.Linear(10, 5)
+        ema = EMA(model, decay=0.999, warmup_steps=10)
+        assert ema.current_decay == 0.0
+        for _ in range(5):
+            ema.update()
+        assert 0 < ema.current_decay < 0.999
+
+    def test_shadow_state_dict(self):
+        from training.utils_v29 import EMA
+        model = nn.Linear(10, 5)
+        ema = EMA(model, decay=0.99)
+        sd = ema.get_shadow_state_dict()
+        assert 'weight' in sd
+        assert 'bias' in sd
+
+    def test_load_shadow(self):
+        from training.utils_v29 import EMA
+        model = nn.Linear(10, 5)
+        ema = EMA(model, decay=0.99)
+        new_shadow = {'weight': torch.ones_like(model.weight.data)}
+        ema.load_shadow_state_dict(new_shadow)
+        assert torch.equal(ema._shadow['weight'], new_shadow['weight'])
+
+
+class TestCurriculumScheduler:
+    """Тесты для Curriculum Learning Scheduler."""
+
+    def test_linear(self):
+        from training.utils_v29 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='linear')
+        assert cs.get_difficulty(0) == 0.0
+        assert abs(cs.get_difficulty(50) - 0.5) < 0.01
+        assert abs(cs.get_difficulty(100) - 1.0) < 0.01
+
+    def test_sqrt(self):
+        from training.utils_v29 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='sqrt')
+        d25 = cs.get_difficulty(25)
+        assert abs(d25 - 0.5) < 0.01
+
+    def test_step(self):
+        from training.utils_v29 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='step', n_stages=5)
+        d0 = cs.get_difficulty(0)
+        d99 = cs.get_difficulty(99)
+        assert d0 < d99
+
+    def test_exponential(self):
+        from training.utils_v29 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='exponential')
+        assert cs.get_difficulty(10) < cs.get_difficulty(90)
+
+    def test_min_max_difficulty(self):
+        from training.utils_v29 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, min_difficulty=0.2, max_difficulty=0.8)
+        assert cs.get_difficulty(0) == 0.2
+        assert abs(cs.get_difficulty(100) - 0.8) < 0.01
+
+    def test_max_seq_len(self):
+        from training.utils_v29 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='linear')
+        assert cs.get_max_seq_len(0, min_len=4, max_len=128) == 4
+        assert cs.get_max_seq_len(100, min_len=4, max_len=128) == 128
+
+    def test_stage_info(self):
+        from training.utils_v29 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='linear')
+        info = cs.get_stage_info(50)
+        assert 'difficulty' in info
+        assert 'progress' in info
+
+
+class TestGradientNoise:
+    """Тесты для Gradient Noise Injection."""
+
+    def test_add_noise(self):
+        from training.utils_v29 import GradientNoise
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        grad_before = model.weight.grad.clone()
+        gn = GradientNoise(eta=1.0)
+        result = gn.add_noise(model)
+        assert result['n_params_noised'] == 2
+        assert not torch.equal(grad_before, model.weight.grad)
+
+    def test_noise_decay(self):
+        from training.utils_v29 import GradientNoise
+        gn = GradientNoise(eta=1.0, gamma=0.55)
+        std1 = gn.get_noise_std()
+        gn._step = 100
+        std100 = gn.get_noise_std()
+        assert std100 < std1
+
+    def test_reset(self):
+        from training.utils_v29 import GradientNoise
+        gn = GradientNoise()
+        gn._step = 50
+        gn.reset()
+        assert gn.step == 0
+
+    def test_add_noise_to_params(self):
+        from training.utils_v29 import GradientNoise
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gn = GradientNoise(eta=0.5)
+        result = gn.add_noise_to_params(model.parameters())
+        assert result['n_params_noised'] == 2
+
+
+class TestLRProbe:
+    """Тесты для Learning Rate Probing."""
+
+    def test_probe_simple(self):
+        from training.utils_v29 import LRProbe
+        model = nn.Linear(10, 5)
+
+        def data_fn():
+            return torch.randn(4, 10), torch.randn(4, 5)
+
+        def loss_fn(m, x, y):
+            return F.mse_loss(m(x), y)
+
+        probe = LRProbe(model, min_lr=1e-5, max_lr=1.0, n_steps=20)
+        result = probe.probe(data_fn, loss_fn)
+        assert result['best_lr'] > 0
+        assert len(result['lr_history']) > 0
+
+    def test_probe_restores_weights(self):
+        from training.utils_v29 import LRProbe
+        model = nn.Linear(10, 5)
+        w_before = model.weight.data.clone()
+
+        def data_fn():
+            return torch.randn(4, 10), torch.randn(4, 5)
+
+        def loss_fn(m, x, y):
+            return F.mse_loss(m(x), y)
+
+        probe = LRProbe(model, n_steps=10)
+        probe.probe(data_fn, loss_fn)
+        assert torch.equal(w_before, model.weight.data)
+
+    def test_suggested_range(self):
+        from training.utils_v29 import LRProbe
+        model = nn.Linear(10, 5)
+
+        def data_fn():
+            return torch.randn(4, 10), torch.randn(4, 5)
+
+        def loss_fn(m, x, y):
+            return F.mse_loss(m(x), y)
+
+        probe = LRProbe(model, n_steps=15)
+        result = probe.probe(data_fn, loss_fn)
+        low, high = result['suggested_range']
+        assert low < high
+
+
+class TestWeightDecayScheduler:
+    """Тесты для Weight Decay Scheduler."""
+
+    def test_constant(self):
+        from training.utils_v29 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), weight_decay=0.01)
+        wds = WeightDecayScheduler(opt, initial_wd=0.01, strategy='constant')
+        assert wds.step() == 0.01
+
+    def test_linear(self):
+        from training.utils_v29 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), weight_decay=0.01)
+        wds = WeightDecayScheduler(opt, initial_wd=0.1, final_wd=0.0,
+                                   total_steps=10, strategy='linear')
+        for _ in range(10):
+            wd = wds.step()
+        assert abs(wd - 0.0) < 0.02
+
+    def test_cosine(self):
+        from training.utils_v29 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), weight_decay=0.01)
+        wds = WeightDecayScheduler(opt, initial_wd=0.1, final_wd=0.0,
+                                   total_steps=100, strategy='cosine')
+        wds.step()
+        assert wds.get_current_wd() > 0
+
+    def test_proportional(self):
+        from training.utils_v29 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), lr=0.01, weight_decay=0.01)
+        wds = WeightDecayScheduler(opt, initial_wd=0.01, strategy='proportional')
+        assert wds.step() > 0
+
+    def test_applies_to_optimizer(self):
+        from training.utils_v29 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), weight_decay=0.01)
+        wds = WeightDecayScheduler(opt, initial_wd=0.05, strategy='constant')
+        wds.step()
+        assert opt.param_groups[0]['weight_decay'] == 0.05
+
+
+class TestV29Integration:
+    """Интеграционные тесты v29."""
+
+    def test_ema_training(self):
+        from training.utils_v29 import EMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ema = EMA(model, decay=0.99)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            ema.update()
+        ema.apply_shadow()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+        ema.restore()
+
+    def test_curriculum_training(self):
+        from training.utils_v29 import CurriculumScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        cs = CurriculumScheduler(total_steps=10, strategy='linear')
+        for step in range(10):
+            seq_len = cs.get_max_seq_len(step, min_len=4, max_len=8)
+            x = torch.randint(0, cfg.vocab_size, (2, seq_len))
+            y = torch.randint(0, cfg.vocab_size, (2, seq_len))
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(torch.randint(0, cfg.vocab_size, (2, 8)))
+        assert not torch.isnan(logits).any()
+
+    def test_gradient_noise_training(self):
+        from training.utils_v29 import GradientNoise
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gn = GradientNoise(eta=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gn.add_noise(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_wd_scheduler_training(self):
+        from training.utils_v29 import WeightDecayScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+        wds = WeightDecayScheduler(opt, initial_wd=0.01, final_wd=0.001,
+                                   total_steps=10, strategy='cosine')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            wds.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
