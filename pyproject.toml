@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "yijing-transformer"
+version = "0.50.0"
+description = "Transformer with hypercube geometry inductive bias (Yi Jing hexagrams)"
+requires-python = ">=3.8"
+dependencies = ["torch>=2.0.0"]
+
+[project.optional-dependencies]
+data = ["datasets", "sentencepiece"]
+viz = ["matplotlib"]
+all = ["datasets", "sentencepiece", "matplotlib", "wandb", "tensorboard", "pytest"]
