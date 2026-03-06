@@ -285,6 +285,20 @@ class YiJingConfig:
     temperature_scheduler: str = 'constant'  # Temperature schedule mode
     kv_cache_manager: bool = False        # KV cache manager
 
+    # v49: Gradient Surgery, AGC, Cosine Loss, Mixup, CutMix
+    gradient_surgery: bool = False        # PCGrad gradient surgery
+    adaptive_grad_clip: float = 0.0       # AGC clip factor (0 = disabled)
+    cosine_loss: bool = False             # Cosine similarity loss
+    mixup_alpha: float = 0.0              # Mixup alpha (0 = disabled)
+    cutmix_alpha: float = 0.0             # CutMix alpha (0 = disabled)
+
+    # v50: Entropy Reg, Confidence Penalty, Distill Temp Anneal, Prog Freeze, Metrics
+    entropy_regularization: float = 0.0   # Entropy reg weight (0 = disabled)
+    confidence_penalty: float = 0.0       # Confidence penalty weight (0 = disabled)
+    distill_temp_annealing: bool = False  # Distillation temperature annealing
+    progressive_freezing: bool = False    # Progressive layer freezing
+    metrics_aggregator: bool = False      # Training metrics aggregator
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

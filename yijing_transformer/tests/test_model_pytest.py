@@ -12542,3 +12542,391 @@ class TestKVCacheManager:
         info = kv.get_info()
         assert info['n_layers_cached'] == 1
         assert info['total_length'] == 5
+
+
+# ==================== v49 Tests ====================
+
+
+class TestGradientSurgery:
+    """Тесты для PCGrad."""
+
+    def test_project_no_conflict(self):
+        from training.utils_v49 import GradientSurgery
+        gs = GradientSurgery()
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([0.0, 1.0])
+        result = gs.project([g1, g2])
+        assert result['n_conflicts'] == 0
+
+    def test_project_with_conflict(self):
+        from training.utils_v49 import GradientSurgery
+        gs = GradientSurgery()
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([-1.0, 0.0])
+        result = gs.project([g1, g2])
+        assert result['n_conflicts'] > 0
+
+    def test_stats(self):
+        from training.utils_v49 import GradientSurgery
+        gs = GradientSurgery()
+        gs.project([torch.randn(10), torch.randn(10)])
+        stats = gs.get_stats()
+        assert 'total_conflicts' in stats
+
+
+class TestAdaptiveGradientClipping:
+    """Тесты для AGC."""
+
+    def test_clip(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc = AdaptiveGradientClipping(clip_factor=0.001)
+        result = agc.clip(model)
+        assert result['n_total'] > 0
+
+    def test_no_clip_with_large_factor(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc = AdaptiveGradientClipping(clip_factor=100.0)
+        result = agc.clip(model)
+        assert result['n_clipped'] == 0
+
+    def test_stats(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        agc = AdaptiveGradientClipping()
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc.clip(model)
+        stats = agc.get_stats()
+        assert 'clip_rate' in stats
+
+
+class TestCosineSimilarityLoss:
+    """Тесты для Cosine Similarity Loss."""
+
+    def test_positive_pairs(self):
+        from training.utils_v49 import CosineSimilarityLoss
+        csl = CosineSimilarityLoss()
+        x = torch.randn(4, 32)
+        loss = csl(x, x)
+        assert loss.item() < 0.01  # Same vectors → loss ≈ 0
+
+    def test_with_labels(self):
+        from training.utils_v49 import CosineSimilarityLoss
+        csl = CosineSimilarityLoss(margin=0.5)
+        x = torch.randn(4, 32)
+        y = torch.randn(4, 32)
+        labels = torch.tensor([1, 1, -1, -1]).float()
+        loss = csl(x, y, labels)
+        assert loss.item() >= 0
+
+    def test_similarity_matrix(self):
+        from training.utils_v49 import CosineSimilarityLoss
+        csl = CosineSimilarityLoss()
+        emb = torch.randn(4, 32)
+        sim = csl.compute_similarity_matrix(emb)
+        assert sim.shape == (4, 4)
+        # Diagonal should be ~1
+        assert (sim.diag() - 1.0).abs().max().item() < 0.01
+
+
+class TestMixupAugmentation:
+    """Тесты для Mixup."""
+
+    def test_mix(self):
+        from training.utils_v49 import MixupAugmentation
+        mixup = MixupAugmentation(alpha=0.2)
+        x = torch.randn(4, 10)
+        result = mixup.mix(x)
+        assert result['mixed_x'].shape == (4, 10)
+        assert 0.5 <= result['lam'] <= 1.0
+
+    def test_mix_with_labels(self):
+        from training.utils_v49 import MixupAugmentation
+        mixup = MixupAugmentation(alpha=0.4)
+        x = torch.randn(4, 10)
+        y = torch.randint(0, 5, (4,))
+        result = mixup.mix(x, y)
+        assert 'mixed_y' in result
+
+    def test_criterion(self):
+        from training.utils_v49 import MixupAugmentation
+        mixup = MixupAugmentation()
+        pred = torch.randn(4, 10)
+        y_a = torch.randint(0, 10, (4,))
+        y_b = torch.randint(0, 10, (4,))
+        loss = mixup.mixup_criterion(F.cross_entropy, pred, y_a, y_b, 0.7)
+        assert loss.item() > 0
+
+
+class TestSequenceCutMix:
+    """Тесты для CutMix."""
+
+    def test_cut_mix(self):
+        from training.utils_v49 import SequenceCutMix
+        cm = SequenceCutMix(alpha=1.0)
+        ids = torch.randint(0, 100, (4, 20))
+        result = cm.cut_mix(ids)
+        assert result['mixed_ids'].shape == (4, 20)
+        assert result['cut_start'] < result['cut_end']
+
+    def test_with_labels(self):
+        from training.utils_v49 import SequenceCutMix
+        cm = SequenceCutMix()
+        ids = torch.randint(0, 100, (4, 20))
+        labels = torch.randint(0, 100, (4, 20))
+        result = cm.cut_mix(ids, labels)
+        assert 'mixed_labels' in result
+        assert result['mixed_labels'].shape == (4, 20)
+
+    def test_criterion(self):
+        from training.utils_v49 import SequenceCutMix
+        cm = SequenceCutMix()
+        pred = torch.randn(4, 10)
+        y1 = torch.randint(0, 10, (4,))
+        y2 = torch.randint(0, 10, (4,))
+        loss = cm.cutmix_criterion(F.cross_entropy, pred, y1, y2, 0.8)
+        assert loss.item() > 0
+
+
+class TestV49Integration:
+    """Интеграционные тесты v49."""
+
+    def test_agc_training(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        agc = AdaptiveGradientClipping(clip_factor=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            agc.clip(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+
+# ==================== v50 Tests ====================
+
+
+class TestEntropyRegularization:
+    """Тесты для Entropy Regularization."""
+
+    def test_maximize(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization(weight=0.1, mode='maximize')
+        logits = torch.randn(4, 10)
+        result = er.compute(logits)
+        assert result['loss'].item() < 0  # Negative = maximize
+
+    def test_minimize(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization(weight=0.1, mode='minimize')
+        logits = torch.randn(4, 10)
+        result = er.compute(logits)
+        assert result['loss'].item() > 0
+
+    def test_3d_logits(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization()
+        logits = torch.randn(2, 8, 10)
+        result = er.compute(logits)
+        assert 0 <= result['normalized_entropy'] <= 1.0
+
+    def test_target_entropy(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization(target_entropy=1.0)
+        result = er.compute(torch.randn(4, 10))
+        assert result['loss'].item() >= 0
+
+    def test_stats(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization()
+        for _ in range(5):
+            er.compute(torch.randn(4, 10))
+        stats = er.get_stats()
+        assert stats['avg_entropy'] > 0
+
+
+class TestConfidencePenalty:
+    """Тесты для Confidence Penalty."""
+
+    def test_entropy_method(self):
+        from training.utils_v50 import ConfidencePenalty
+        cp = ConfidencePenalty(weight=0.1, threshold=0.5, method='entropy')
+        logits = torch.tensor([[10.0, 0, 0, 0, 0]])  # Very confident
+        result = cp.compute(logits)
+        assert result['avg_confidence'] > 0.9
+
+    def test_max_prob_method(self):
+        from training.utils_v50 import ConfidencePenalty
+        cp = ConfidencePenalty(method='max_prob', threshold=0.5)
+        logits = torch.tensor([[10.0, 0, 0, 0, 0]])
+        result = cp.compute(logits)
+        assert result['pct_overconfident'] > 0
+
+    def test_no_penalty_below_threshold(self):
+        from training.utils_v50 import ConfidencePenalty
+        cp = ConfidencePenalty(threshold=0.99, method='entropy')
+        logits = torch.randn(4, 100)  # Uniform-ish
+        result = cp.compute(logits)
+        # Most samples should not be overconfident with 100 classes
+        assert result['pct_overconfident'] < 0.5
+
+
+class TestDistillationTemperatureAnnealing:
+    """Тесты для Distillation Temperature Annealing."""
+
+    def test_linear(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing(
+            initial_temp=10.0, final_temp=1.0,
+            total_steps=100, schedule='linear'
+        )
+        t1 = dta.step()
+        for _ in range(98):
+            dta.step()
+        t2 = dta.step()
+        assert t1 > t2
+
+    def test_cosine(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing(schedule='cosine')
+        temps = [dta.step() for _ in range(100)]
+        assert temps[0] > temps[-1]
+
+    def test_exponential(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing(schedule='exponential')
+        t1 = dta.step()
+        for _ in range(98):
+            dta.step()
+        t2 = dta.step()
+        assert t1 > t2
+
+    def test_get_info(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing()
+        dta.step()
+        info = dta.get_info()
+        assert 'current_temp' in info
+
+
+class TestProgressiveLayerFreezing:
+    """Тесты для Progressive Layer Freezing."""
+
+    def test_unfreeze_mode(self):
+        from training.utils_v50 import ProgressiveLayerFreezing
+        plf = ProgressiveLayerFreezing(n_layers=4, mode='unfreeze', steps_per_layer=1)
+        model = nn.ModuleDict({
+            'layers': nn.ModuleList([nn.Linear(10, 10) for _ in range(4)])
+        })
+        # Step 1: unfreeze top 1 layer
+        result = plf.step(model)
+        assert len(result['frozen_layers']) == 3
+
+    def test_freeze_mode(self):
+        from training.utils_v50 import ProgressiveLayerFreezing
+        plf = ProgressiveLayerFreezing(n_layers=4, mode='freeze', steps_per_layer=1)
+        model = nn.ModuleDict({
+            'layers': nn.ModuleList([nn.Linear(10, 10) for _ in range(4)])
+        })
+        result = plf.step(model)
+        assert len(result['frozen_layers']) == 1
+
+    def test_get_info(self):
+        from training.utils_v50 import ProgressiveLayerFreezing
+        plf = ProgressiveLayerFreezing()
+        info = plf.get_info()
+        assert 'mode' in info
+
+
+class TestTrainingMetricsAggregator:
+    """Тесты для Training Metrics Aggregator."""
+
+    def test_update(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator(window_size=10)
+        for i in range(20):
+            agg.update(loss=1.0 / (i + 1), accuracy=i * 0.05)
+        avgs = agg.get_averages()
+        assert 'loss' in avgs
+        assert 'accuracy' in avgs
+
+    def test_trends(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator(window_size=5)
+        for i in range(10):
+            agg.update(loss=10.0 - i)
+        trends = agg.get_trends()
+        assert trends['loss']['improving'] is True
+
+    def test_summary(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator()
+        agg.update(loss=1.0)
+        summary = agg.get_summary()
+        assert 'step' in summary
+        assert summary['step'] == 1
+
+    def test_reset(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator()
+        agg.update(loss=1.0)
+        agg.reset()
+        assert agg.get_averages() == {}
+
+    def test_tensor_input(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator()
+        agg.update(loss=torch.tensor(1.5))
+        avgs = agg.get_averages()
+        assert abs(avgs['loss'] - 1.5) < 0.01
+
+
+class TestV50Integration:
+    """Интеграционные тесты v50."""
+
+    def test_entropy_reg_training(self):
+        from training.utils_v50 import EntropyRegularization
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        er = EntropyRegularization(weight=0.01, mode='maximize')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            logits, loss, _ = model(x, y)
+            ent_result = er.compute(logits)
+            total = loss + ent_result['loss']
+            total.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_metrics_with_model(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        agg = TrainingMetricsAggregator(window_size=3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            agg.update(loss=loss)
+        summary = agg.get_summary()
+        assert summary['step'] == 5
