@@ -133,6 +133,11 @@ class YiJingConfig:
     wd_schedule: str = 'constant'    # Weight decay schedule: constant, linear, cosine
     spike_threshold: float = 3.0     # Loss spike detection threshold (z-score)
 
+    # v25: Gradient Centralization, Token Mixing
+    use_grad_centralization: bool = False  # Gradient Centralization
+    use_token_mixing: bool = False        # Token Mixing MLP вместо attention
+    token_mixing_expansion: int = 2       # Token Mixing expansion factor
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

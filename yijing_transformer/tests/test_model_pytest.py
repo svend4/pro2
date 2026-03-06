@@ -5774,3 +5774,253 @@ class TestV24Integration:
             opt.step()
             wd_sched.step()
         assert opt.param_groups[0]['weight_decay'] >= 0
+
+
+# ==================== v25 Tests ====================
+
+
+class TestGradientCentralization:
+    """Тесты для Gradient Centralization."""
+
+    def test_centralize(self):
+        from training.utils_v25 import GradientCentralization
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+
+        gc = GradientCentralization(model)
+        result = gc.centralize()
+        assert result['n_centralized'] >= 1  # weight (2d)
+        assert result['n_skipped'] >= 1      # bias (1d)
+
+        # Weight grad should be zero-mean along non-first dims
+        mean = model.weight.grad.mean(dim=1)
+        assert torch.allclose(mean, torch.zeros_like(mean), atol=1e-6)
+
+    def test_skip_1d(self):
+        from training.utils_v25 import GradientCentralization
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization(model)
+        result = gc.centralize()
+        # Bias is 1d → skipped
+        assert result['n_skipped'] >= 1
+
+    def test_no_grads(self):
+        from training.utils_v25 import GradientCentralization
+        model = nn.Linear(10, 5)
+        gc = GradientCentralization(model)
+        result = gc.centralize()
+        assert result['n_centralized'] == 0
+
+    def test_gc_conv_only(self):
+        from training.utils_v25 import GradientCentralization
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization(model, gc_conv_only=True)
+        result = gc.centralize()
+        assert result['n_centralized'] >= 1  # weight has 'weight' in name
+
+
+class TestTokenMixingMLP:
+    """Тесты для Token Mixing MLP."""
+
+    def test_forward(self):
+        from training.utils_v25 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=16, d_model=32)
+        x = torch.randn(2, 16, 32)
+        out = mixer(x)
+        assert out.shape == (2, 16, 32)
+
+    def test_shorter_seq(self):
+        from training.utils_v25 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=16, d_model=32)
+        x = torch.randn(2, 8, 32)  # shorter than seq_len
+        out = mixer(x)
+        assert out.shape == (2, 8, 32)
+
+    def test_residual(self):
+        from training.utils_v25 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=8, d_model=16)
+        x = torch.randn(2, 8, 16)
+        out = mixer(x)
+        # Residual connection → output ≠ 0
+        assert out.abs().sum() > 0
+
+    def test_backward(self):
+        from training.utils_v25 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=8, d_model=16)
+        x = torch.randn(2, 8, 16, requires_grad=True)
+        out = mixer(x)
+        out.sum().backward()
+        assert x.grad is not None
+
+
+class TestLRFinder:
+    """Тесты для Learning Rate Finder."""
+
+    def test_run(self):
+        from training.utils_v25 import LRFinder
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=1e-7)
+        finder = LRFinder(model, opt, min_lr=1e-5, max_lr=1.0, n_steps=20)
+
+        def loss_fn():
+            return F.mse_loss(model(torch.randn(4, 10)), torch.randn(4, 5))
+
+        history = finder.run(loss_fn)
+        assert len(history) > 0
+        assert history[0]['lr'] < history[-1]['lr']
+
+    def test_suggest_lr(self):
+        from training.utils_v25 import LRFinder
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=1e-7)
+        finder = LRFinder(model, opt, n_steps=15)
+
+        def loss_fn():
+            return F.mse_loss(model(torch.randn(4, 10)), torch.randn(4, 5))
+
+        finder.run(loss_fn)
+        suggestion = finder.suggest_lr()
+        assert suggestion is not None
+        assert suggestion['suggested_lr'] > 0
+
+    def test_restores_state(self):
+        from training.utils_v25 import LRFinder
+        model = nn.Linear(10, 5)
+        w_before = model.weight.data.clone()
+        opt = torch.optim.SGD(model.parameters(), lr=1e-7)
+        finder = LRFinder(model, opt, n_steps=10)
+
+        def loss_fn():
+            return model(torch.randn(2, 10)).sum() ** 2
+
+        finder.run(loss_fn)
+        assert torch.equal(w_before, model.weight.data)
+
+    def test_empty_suggest(self):
+        from training.utils_v25 import LRFinder
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=1e-7)
+        finder = LRFinder(model, opt)
+        assert finder.suggest_lr() is None
+
+
+class TestParamEfficiencyTracker:
+    """Тесты для Parameter Efficiency Tracker."""
+
+    def test_analyze(self):
+        from training.utils_v25 import ParamEfficiencyTracker
+        model = nn.Sequential(nn.Linear(10, 20), nn.ReLU(), nn.Linear(20, 5))
+        tracker = ParamEfficiencyTracker(model)
+        result = tracker.analyze()
+        assert result['total_params'] == 10 * 20 + 20 + 20 * 5 + 5
+        assert result['trainable_pct'] == 100.0
+
+    def test_frozen_params(self):
+        from training.utils_v25 import ParamEfficiencyTracker
+        model = nn.Sequential(nn.Linear(10, 20), nn.Linear(20, 5))
+        # Freeze first layer
+        for p in model[0].parameters():
+            p.requires_grad = False
+        tracker = ParamEfficiencyTracker(model)
+        result = tracker.analyze()
+        assert result['frozen_params'] > 0
+        assert result['trainable_pct'] < 100.0
+
+    def test_top_layers(self):
+        from training.utils_v25 import ParamEfficiencyTracker
+        model = nn.Sequential(nn.Linear(10, 100), nn.Linear(100, 5))
+        tracker = ParamEfficiencyTracker(model)
+        top = tracker.get_top_layers(k=1)
+        assert len(top) == 1
+        assert top[0]['params'] > 0
+
+    def test_estimate_flops(self):
+        from training.utils_v25 import ParamEfficiencyTracker
+        model = nn.Linear(64, 32)
+        tracker = ParamEfficiencyTracker(model)
+        flops = tracker.estimate_flops(input_shape=(4, 16, 64))
+        assert flops['total_flops'] > 0
+
+    def test_efficiency_ratio(self):
+        from training.utils_v25 import ParamEfficiencyTracker
+        model = nn.Linear(10, 5)
+        tracker = ParamEfficiencyTracker(model)
+        ratio = tracker.get_efficiency_ratio()
+        assert ratio == 100.0
+
+
+class TestBatchSizeFinder:
+    """Тесты для Batch Size Finder."""
+
+    def test_try_batch_size(self):
+        from training.utils_v25 import BatchSizeFinder
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        finder = BatchSizeFinder(model, max_batch_size=8, seq_len=8, vocab_size=cfg.vocab_size)
+        result = finder._try_batch_size(2)
+        assert result['success']
+        assert result['batch_size'] == 2
+
+    def test_find(self):
+        from training.utils_v25 import BatchSizeFinder
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        finder = BatchSizeFinder(model, max_batch_size=8, seq_len=8, vocab_size=cfg.vocab_size)
+        result = finder.find()
+        assert result['max_batch_size'] >= 1
+        assert len(result['results']) >= 1
+
+    def test_estimate_throughput(self):
+        from training.utils_v25 import BatchSizeFinder
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        finder = BatchSizeFinder(model, seq_len=8, vocab_size=cfg.vocab_size)
+        result = finder.estimate_throughput(batch_size=2, n_steps=2)
+        assert result['tokens_per_sec'] > 0
+        assert result['samples_per_sec'] > 0
+
+
+class TestV25Integration:
+    """Интеграционные тесты v25."""
+
+    def test_gc_training(self):
+        from training.utils_v25 import GradientCentralization
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        gc = GradientCentralization(model)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gc.centralize()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_token_mixing_standalone(self):
+        from training.utils_v25 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=32, d_model=64, expansion=2)
+        x = torch.randn(4, 32, 64)
+        out = mixer(x)
+        loss = out.sum()
+        loss.backward()
+        assert not torch.isnan(out).any()
+
+    def test_param_tracker_with_model(self):
+        from training.utils_v25 import ParamEfficiencyTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        tracker = ParamEfficiencyTracker(model)
+        result = tracker.analyze()
+        assert result['total_params'] > 0
+        flops = tracker.estimate_flops((2, 8, cfg.d_model))
+        assert flops['total_flops'] > 0
