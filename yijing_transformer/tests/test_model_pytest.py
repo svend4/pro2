@@ -11328,3 +11328,236 @@ class TestV42Integration:
             opt.step()
         health = mon.is_training_healthy()
         assert health['healthy']
+
+
+# ==================== v43 Tests ====================
+
+
+class TestKnowledgeDistillation:
+    """Тесты для Knowledge Distillation."""
+
+    def test_compute(self):
+        from training.utils_v43 import KnowledgeDistillation
+        kd = KnowledgeDistillation(temperature=4.0, alpha=0.5)
+        student = torch.randn(4, 10, requires_grad=True)
+        teacher = torch.randn(4, 10)
+        targets = torch.randint(0, 10, (4,))
+        result = kd.compute(student, teacher, targets)
+        assert 'loss' in result
+        assert result['loss'].requires_grad
+
+    def test_alpha_extremes(self):
+        from training.utils_v43 import KnowledgeDistillation
+        student = torch.randn(4, 10)
+        teacher = torch.randn(4, 10)
+        targets = torch.randint(0, 10, (4,))
+        kd1 = KnowledgeDistillation(alpha=1.0)
+        r1 = kd1.compute(student, teacher, targets)
+        kd0 = KnowledgeDistillation(alpha=0.0)
+        r0 = kd0.compute(student, teacher, targets)
+        assert r1['loss'].item() != r0['loss'].item()
+
+    def test_from_logits(self):
+        from training.utils_v43 import KnowledgeDistillation
+        kd = KnowledgeDistillation()
+        loss = kd.compute_from_logits(torch.randn(4, 10), torch.randn(4, 10))
+        assert loss.item() >= 0
+
+    def test_stats(self):
+        from training.utils_v43 import KnowledgeDistillation
+        kd = KnowledgeDistillation()
+        for _ in range(3):
+            kd.compute(torch.randn(4, 10), torch.randn(4, 10),
+                       torch.randint(0, 10, (4,)))
+        stats = kd.get_stats()
+        assert stats['avg_total_loss'] > 0
+
+
+class TestLabelSmoothingLoss:
+    """Тесты для Label Smoothing."""
+
+    def test_basic(self):
+        from training.utils_v43 import LabelSmoothingLoss
+        ls = LabelSmoothingLoss(smoothing=0.1)
+        loss = ls(torch.randn(4, 10), torch.randint(0, 10, (4,)))
+        assert loss.item() > 0
+
+    def test_zero_smoothing(self):
+        from training.utils_v43 import LabelSmoothingLoss
+        ls = LabelSmoothingLoss(smoothing=0.0)
+        logits = torch.randn(4, 10)
+        targets = torch.randint(0, 10, (4,))
+        loss_smooth = ls(logits, targets)
+        loss_ce = F.cross_entropy(logits, targets)
+        assert abs(loss_smooth.item() - loss_ce.item()) < 0.01
+
+    def test_3d(self):
+        from training.utils_v43 import LabelSmoothingLoss
+        ls = LabelSmoothingLoss(smoothing=0.1)
+        loss = ls(torch.randn(2, 8, 10), torch.randint(0, 10, (2, 8)))
+        assert loss.item() > 0
+
+    def test_ignore_index(self):
+        from training.utils_v43 import LabelSmoothingLoss
+        ls = LabelSmoothingLoss(smoothing=0.1, ignore_index=0)
+        loss = ls(torch.randn(4, 10), torch.tensor([0, 0, 5, 3]))
+        assert loss.item() > 0
+
+
+class TestFocalLoss:
+    """Тесты для Focal Loss."""
+
+    def test_basic(self):
+        from training.utils_v43 import FocalLoss
+        fl = FocalLoss(gamma=2.0)
+        loss = fl(torch.randn(4, 10), torch.randint(0, 10, (4,)))
+        assert loss.item() > 0
+
+    def test_gamma_zero_equals_ce(self):
+        from training.utils_v43 import FocalLoss
+        fl = FocalLoss(gamma=0.0)
+        logits = torch.randn(4, 10)
+        targets = torch.randint(0, 10, (4,))
+        focal = fl(logits, targets)
+        ce = F.cross_entropy(logits, targets)
+        assert abs(focal.item() - ce.item()) < 0.01
+
+    def test_3d(self):
+        from training.utils_v43 import FocalLoss
+        fl = FocalLoss(gamma=2.0)
+        loss = fl(torch.randn(2, 8, 10), torch.randint(0, 10, (2, 8)))
+        assert loss.item() > 0
+
+    def test_alpha_float(self):
+        from training.utils_v43 import FocalLoss
+        fl = FocalLoss(gamma=2.0, alpha=0.25)
+        loss = fl(torch.randn(4, 10), torch.randint(0, 10, (4,)))
+        assert loss.item() > 0
+
+    def test_alpha_tensor(self):
+        from training.utils_v43 import FocalLoss
+        fl = FocalLoss(gamma=2.0, alpha=torch.ones(10) * 0.5)
+        loss = fl(torch.randn(4, 10), torch.randint(0, 10, (4,)))
+        assert loss.item() > 0
+
+
+class TestContrastiveLoss:
+    """Тесты для Contrastive Loss."""
+
+    def test_basic(self):
+        from training.utils_v43 import ContrastiveLoss
+        cl = ContrastiveLoss(temperature=0.07)
+        loss = cl(torch.randn(8, 32), torch.randn(8, 32))
+        assert loss.item() > 0
+
+    def test_identical_pairs(self):
+        from training.utils_v43 import ContrastiveLoss
+        cl = ContrastiveLoss(temperature=0.5)
+        z = torch.randn(8, 32)
+        loss = cl(z, z)
+        assert loss.item() >= 0
+
+    def test_similarity_stats(self):
+        from training.utils_v43 import ContrastiveLoss
+        cl = ContrastiveLoss()
+        stats = cl.compute_similarity_stats(torch.randn(8, 32), torch.randn(8, 32))
+        assert 'pos_sim' in stats
+        assert 'neg_sim' in stats
+
+
+class TestRDropRegularization:
+    """Тесты для R-Drop."""
+
+    def test_kl_divergence(self):
+        from training.utils_v43 import RDropRegularization
+        rdrop = RDropRegularization()
+        kl = rdrop.kl_divergence(torch.randn(4, 10), torch.randn(4, 10))
+        assert kl.item() >= 0
+
+    def test_kl_identical(self):
+        from training.utils_v43 import RDropRegularization
+        rdrop = RDropRegularization()
+        logits = torch.randn(4, 10)
+        kl = rdrop.kl_divergence(logits, logits)
+        assert kl.item() < 0.01
+
+    def test_compute(self):
+        from training.utils_v43 import RDropRegularization
+        rdrop = RDropRegularization(alpha=1.0)
+        model = nn.Sequential(nn.Linear(10, 5), nn.Dropout(0.5))
+        result = rdrop.compute(model, torch.randn(4, 10), torch.randint(0, 5, (4,)))
+        assert 'loss' in result
+        assert result['rdrop_loss'] >= 0
+
+    def test_stats(self):
+        from training.utils_v43 import RDropRegularization
+        rdrop = RDropRegularization()
+        model = nn.Sequential(nn.Linear(10, 5), nn.Dropout(0.5))
+        for _ in range(3):
+            rdrop.compute(model, torch.randn(4, 10), torch.randint(0, 5, (4,)))
+        stats = rdrop.get_stats()
+        assert 'avg_rdrop_loss' in stats
+
+
+class TestV43Integration:
+    """Интеграционные тесты v43."""
+
+    def test_distillation_training(self):
+        from training.utils_v43 import KnowledgeDistillation
+        cfg = make_cfg()
+        teacher = YiJingGPT(cfg)
+        student = YiJingGPT(cfg)
+        teacher.eval()
+        kd = KnowledgeDistillation(temperature=4.0, alpha=0.7)
+        opt = torch.optim.Adam(student.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            with torch.no_grad():
+                t_logits, _, _ = teacher(x)
+            s_logits, _, _ = student(x)
+            B, T, C = s_logits.shape
+            result = kd.compute(
+                s_logits.reshape(-1, C),
+                t_logits.reshape(-1, C),
+                y.reshape(-1)
+            )
+            result['loss'].backward()
+            opt.step()
+        logits, _, _ = student(x)
+        assert not torch.isnan(logits).any()
+
+    def test_label_smoothing_training(self):
+        from training.utils_v43 import LabelSmoothingLoss
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ls = LabelSmoothingLoss(smoothing=0.1)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            logits, _, _ = model(x)
+            loss = ls(logits, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_focal_loss_training(self):
+        from training.utils_v43 import FocalLoss
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        fl = FocalLoss(gamma=2.0)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            logits, _, _ = model(x)
+            loss = fl(logits, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()

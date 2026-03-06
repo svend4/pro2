@@ -243,6 +243,13 @@ class YiJingConfig:
     curriculum_learning: bool = False     # Curriculum learning
     stability_monitor: bool = False       # Training stability monitor
 
+    # v43: Knowledge Distillation, Label Smoothing, Focal Loss, Contrastive, R-Drop
+    knowledge_distillation: bool = False  # Knowledge distillation
+    label_smoothing: float = 0.0          # Label smoothing epsilon
+    focal_loss_gamma: float = 0.0         # Focal loss gamma (0 = disabled)
+    contrastive_loss: bool = False        # Contrastive loss
+    rdrop_alpha: float = 0.0              # R-Drop alpha (0 = disabled)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
