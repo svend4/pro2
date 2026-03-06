@@ -1,0 +1,16 @@
+{
+  "geometry_comparison": {
+    "octogram_points": 256,
+    "e8_points": 240,
+    "oct_covering_radius": 4.150478363037109,
+    "e8_covering_radius": 4.752737998962402,
+    "oct_avg_dist": 1.7645000219345093,
+    "e8_avg_dist": 1.7595900297164917
+  },
+  "quantization_quality": {
+    "oct_recon": 1.260991096496582,
+    "e8_recon": 1.0581737756729126,
+    "oct_binary": 1.1926791151917193e-11,
+    "e8_binary": 0.3242599666118622
+  }
+}

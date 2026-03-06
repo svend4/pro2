@@ -285,6 +285,13 @@ class YiJingConfig:
     temperature_scheduler: str = 'constant'  # Temperature schedule mode
     kv_cache_manager: bool = False        # KV cache manager
 
+    # v49: Архитектурный режим и гейтовый выбор пути
+    architecture_mode: str = 'standard'  # 'standard', 'pure_geometry', 'hybrid'
+    gate_init_bias: float = 0.0          # начальный bias гейта (0 = равные шансы)
+    curriculum_strategy_geo: str = 'none'  # 'none', 'linear', 'warmup_hold', 'cosine', 'step', 'geometric_first'
+    curriculum_warmup_fraction: float = 0.3  # доля шагов на warmup curriculum
+    curriculum_target_strength: float = 0.1  # целевая сила геометрии
+    log_gate_every: int = 100            # логировать гейты каждые N шагов
     # v49: Gradient Surgery, AGC, Cosine Loss, Mixup, CutMix
     gradient_surgery: bool = False        # PCGrad gradient surgery
     adaptive_grad_clip: float = 0.0       # AGC clip factor (0 = disabled)
