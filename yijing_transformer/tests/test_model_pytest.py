@@ -10126,3 +10126,311 @@ class TestV38Integration:
         assert info is not None
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v39 Tests ====================
+
+
+class TestGradientProjection:
+    """Тесты для Gradient Projection (PCGrad)."""
+
+    def test_no_conflict(self):
+        from training.utils_v39 import GradientProjection
+        gp = GradientProjection(n_tasks=2)
+        g1 = torch.tensor([1.0, 0.0, 0.0])
+        g2 = torch.tensor([0.0, 1.0, 0.0])
+        result = gp.project([g1, g2])
+        assert result['n_conflicts'] == 0
+
+    def test_conflict(self):
+        from training.utils_v39 import GradientProjection
+        gp = GradientProjection(n_tasks=2)
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([-1.0, 0.0])
+        result = gp.project([g1, g2])
+        assert result['n_conflicts'] > 0
+
+    def test_projected_shape(self):
+        from training.utils_v39 import GradientProjection
+        gp = GradientProjection()
+        g1 = torch.randn(100)
+        g2 = torch.randn(100)
+        result = gp.project([g1, g2])
+        assert len(result['projected_grads']) == 2
+        assert result['projected_grads'][0].shape == g1.shape
+
+    def test_three_tasks(self):
+        from training.utils_v39 import GradientProjection
+        gp = GradientProjection(n_tasks=3)
+        grads = [torch.randn(50) for _ in range(3)]
+        result = gp.project(grads)
+        assert len(result['projected_grads']) == 3
+
+
+class TestLossSpikeRecovery:
+    """Тесты для Loss Spike Recovery."""
+
+    def test_normal_operation(self):
+        from training.utils_v39 import LossSpikeRecovery
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        lsr = LossSpikeRecovery(spike_threshold=5.0)
+        lsr.save_snapshot(model, opt)
+        for _ in range(20):
+            result = lsr.check_and_recover(model, opt, 2.0)
+        assert not result['spike_detected']
+
+    def test_spike_detected(self):
+        from training.utils_v39 import LossSpikeRecovery
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        lsr = LossSpikeRecovery(spike_threshold=3.0)
+        lsr.save_snapshot(model, opt)
+        for _ in range(20):
+            lsr.check_and_recover(model, opt, 2.0)
+        result = lsr.check_and_recover(model, opt, 100.0)
+        assert result['spike_detected']
+        assert result['rolled_back']
+
+    def test_nan_recovery(self):
+        from training.utils_v39 import LossSpikeRecovery
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        lsr = LossSpikeRecovery()
+        lsr.save_snapshot(model, opt)
+        result = lsr.check_and_recover(model, opt, float('nan'))
+        assert result['spike_detected']
+        assert result['rolled_back']
+
+    def test_max_rollbacks(self):
+        from training.utils_v39 import LossSpikeRecovery
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        lsr = LossSpikeRecovery(max_rollbacks=2)
+        lsr.save_snapshot(model, opt)
+        lsr.check_and_recover(model, opt, float('nan'))
+        lsr.check_and_recover(model, opt, float('nan'))
+        result = lsr.check_and_recover(model, opt, float('nan'))
+        assert not result['rolled_back']
+
+    def test_get_stats(self):
+        from training.utils_v39 import LossSpikeRecovery
+        lsr = LossSpikeRecovery()
+        stats = lsr.get_stats()
+        assert stats['total_rollbacks'] == 0
+
+
+class TestOptimizerStatePruner:
+    """Тесты для Optimizer State Pruning."""
+
+    def test_prune_dead(self):
+        from training.utils_v39 import OptimizerStatePruner
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        # Do a step to populate state
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+        # Freeze
+        for p in model.parameters():
+            p.requires_grad = False
+        pruner = OptimizerStatePruner()
+        result = pruner.prune_dead_states(opt, model)
+        assert result['n_pruned'] >= 1
+
+    def test_state_memory(self):
+        from training.utils_v39 import OptimizerStatePruner
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+        pruner = OptimizerStatePruner()
+        mem = pruner.get_state_memory(opt)
+        assert mem['total_params'] > 0
+
+    def test_prune_small_grads(self):
+        from training.utils_v39 import OptimizerStatePruner
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+        # Set tiny gradients
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad.data.zero_()
+        pruner = OptimizerStatePruner(threshold=1.0)
+        result = pruner.prune_small_grad_states(opt, model)
+        assert result['n_reset'] >= 1
+
+
+class TestScheduledDropout:
+    """Тесты для Scheduled Dropout."""
+
+    def test_initial_rate(self):
+        from training.utils_v39 import ScheduledDropout
+        sd = ScheduledDropout(initial_rate=0.5, final_rate=0.1)
+        assert abs(sd.get_rate() - 0.5) < 1e-5
+
+    def test_rate_changes(self):
+        from training.utils_v39 import ScheduledDropout
+        sd = ScheduledDropout(initial_rate=0.5, final_rate=0.1,
+                               total_steps=100, strategy='linear')
+        r1 = sd.get_rate()
+        for _ in range(50):
+            sd.step()
+        r2 = sd.get_rate()
+        assert r2 < r1
+
+    def test_forward_train(self):
+        from training.utils_v39 import ScheduledDropout
+        sd = ScheduledDropout(initial_rate=0.3)
+        sd.train()
+        x = torch.ones(100, 50)
+        out = sd(x)
+        # Some values should be zeroed
+        assert (out == 0).any()
+
+    def test_forward_eval(self):
+        from training.utils_v39 import ScheduledDropout
+        sd = ScheduledDropout(initial_rate=0.5)
+        sd.eval()
+        x = torch.ones(10, 5)
+        out = sd(x)
+        assert torch.equal(out, x)
+
+    def test_cosine_strategy(self):
+        from training.utils_v39 import ScheduledDropout
+        sd = ScheduledDropout(initial_rate=0.5, final_rate=0.1,
+                               total_steps=100, strategy='cosine')
+        for _ in range(100):
+            sd.step()
+        rate = sd.get_rate()
+        assert abs(rate - 0.1) < 0.05
+
+    def test_apply_to_model(self):
+        from training.utils_v39 import ScheduledDropout
+        model = nn.Sequential(nn.Linear(10, 5), nn.Dropout(0.5), nn.Linear(5, 3))
+        sd = ScheduledDropout(initial_rate=0.2)
+        count = sd.apply_to_model(model)
+        assert count == 1
+
+    def test_get_info(self):
+        from training.utils_v39 import ScheduledDropout
+        sd = ScheduledDropout()
+        info = sd.get_info()
+        assert 'current_rate' in info
+
+
+class TestWeightDecayScheduler:
+    """Тесты для Weight Decay Scheduler."""
+
+    def test_initial(self):
+        from training.utils_v39 import WeightDecayScheduler
+        wds = WeightDecayScheduler(initial_wd=0.01, final_wd=0.1)
+        assert abs(wds.get_weight_decay() - 0.01) < 1e-6
+
+    def test_linear_increase(self):
+        from training.utils_v39 import WeightDecayScheduler
+        wds = WeightDecayScheduler(initial_wd=0.01, final_wd=0.1,
+                                    total_steps=100, strategy='linear')
+        for _ in range(100):
+            wds.step()
+        wd = wds.get_weight_decay()
+        assert abs(wd - 0.1) < 0.01
+
+    def test_cosine(self):
+        from training.utils_v39 import WeightDecayScheduler
+        wds = WeightDecayScheduler(initial_wd=0.01, final_wd=0.1,
+                                    total_steps=100, strategy='cosine')
+        for _ in range(50):
+            wds.step()
+        wd = wds.get_weight_decay()
+        assert 0.01 <= wd <= 0.1
+
+    def test_apply_to_optimizer(self):
+        from training.utils_v39 import WeightDecayScheduler
+        model = nn.Linear(10, 5)
+        opt = torch.optim.AdamW(model.parameters(), weight_decay=0.01)
+        wds = WeightDecayScheduler(initial_wd=0.05)
+        wd = wds.apply_to_optimizer(opt)
+        assert opt.param_groups[0]['weight_decay'] == wd
+
+    def test_constant_then_decay(self):
+        from training.utils_v39 import WeightDecayScheduler
+        wds = WeightDecayScheduler(initial_wd=0.01, final_wd=0.1,
+                                    total_steps=100, strategy='constant_then_decay')
+        for _ in range(25):
+            wds.step()
+        wd1 = wds.get_weight_decay()
+        assert abs(wd1 - 0.01) < 1e-5  # Still constant
+        for _ in range(75):
+            wds.step()
+        wd2 = wds.get_weight_decay()
+        assert wd2 > wd1
+
+    def test_get_info(self):
+        from training.utils_v39 import WeightDecayScheduler
+        wds = WeightDecayScheduler()
+        info = wds.get_info()
+        assert 'weight_decay' in info
+
+
+class TestV39Integration:
+    """Интеграционные тесты v39."""
+
+    def test_loss_spike_training(self):
+        from training.utils_v39 import LossSpikeRecovery
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        lsr = LossSpikeRecovery(spike_threshold=5.0)
+        lsr.save_snapshot(model, opt)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            result = lsr.check_and_recover(model, opt, loss.item())
+            if not result.get('rolled_back', False):
+                loss.backward()
+                opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_scheduled_dropout_training(self):
+        from training.utils_v39 import ScheduledDropout
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sd = ScheduledDropout(initial_rate=0.3, final_rate=0.1, total_steps=20)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            sd.apply_to_model(model)
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            sd.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_weight_decay_schedule_training(self):
+        from training.utils_v39 import WeightDecayScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
+        wds = WeightDecayScheduler(initial_wd=0.01, final_wd=0.05, total_steps=20)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            wds.apply_to_optimizer(opt)
+            opt.step()
+            wds.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()

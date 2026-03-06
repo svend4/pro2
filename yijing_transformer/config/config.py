@@ -217,6 +217,12 @@ class YiJingConfig:
     checkpoint_top_k: int = 0            # Top-k checkpoint saving (0 = выкл)
     cosine_warm_restarts: bool = False    # SGDR cosine warm restarts
 
+    # v39: Gradient Projection, Loss Spike Recovery, Scheduled Dropout, WD Scheduler
+    gradient_projection: bool = False     # PCGrad gradient projection
+    loss_spike_recovery: bool = False     # Auto rollback on loss spike
+    scheduled_dropout: bool = False       # Dynamic dropout rate
+    weight_decay_schedule: str = 'none'   # WD schedule: 'none', 'linear', 'cosine'
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
