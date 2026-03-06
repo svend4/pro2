@@ -12930,3 +12930,305 @@ class TestV50Integration:
             agg.update(loss=loss)
         summary = agg.get_summary()
         assert summary['step'] == 5
+
+
+# ==================== v51 Tests ====================
+
+
+class TestGradientVaccine:
+    """Тесты для Gradient Vaccine."""
+
+    def test_first_call_accepted(self):
+        from training.utils_v51 import GradientVaccine
+        gv = GradientVaccine()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        result = gv.check_and_filter(model)
+        assert result['accepted'] is True
+
+    def test_similar_gradients_accepted(self):
+        from training.utils_v51 import GradientVaccine
+        gv = GradientVaccine(threshold=0.1)
+        model = nn.Linear(10, 5)
+        x = torch.randn(2, 10)
+        model(x).sum().backward()
+        gv.check_and_filter(model)
+        model.zero_grad()
+        model(x).sum().backward()
+        result = gv.check_and_filter(model)
+        assert result['accepted'] is True
+
+    def test_stats(self):
+        from training.utils_v51 import GradientVaccine
+        gv = GradientVaccine()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        gv.check_and_filter(model)
+        stats = gv.get_stats()
+        assert stats['accepted'] == 1
+
+
+class TestScaledWeightStandardization:
+    """Тесты для Norm-Free."""
+
+    def test_forward(self):
+        from training.utils_v51 import ScaledWeightStandardization
+        linear = nn.Linear(10, 5)
+        sws = ScaledWeightStandardization(linear)
+        output = sws(torch.randn(2, 10))
+        assert output.shape == (2, 5)
+
+    def test_wrap_model(self):
+        from training.utils_v51 import ScaledWeightStandardization
+        model = nn.Sequential(nn.Linear(10, 5), nn.ReLU(), nn.Linear(5, 3))
+        count = ScaledWeightStandardization.wrap_model(model)
+        assert count == 2
+
+
+class TestSharpnessEstimator:
+    """Тесты для Sharpness Estimator."""
+
+    def test_estimate(self):
+        from training.utils_v51 import SharpnessEstimator
+        se = SharpnessEstimator(n_perturbations=3, epsilon=0.01)
+        model = nn.Linear(10, 5)
+        def loss_fn(m, d):
+            return m(d).sum()
+        result = se.estimate(model, loss_fn, torch.randn(2, 10))
+        assert result['sharpness'] >= 0
+        assert 'base_loss' in result
+
+    def test_trend(self):
+        from training.utils_v51 import SharpnessEstimator
+        se = SharpnessEstimator(n_perturbations=2)
+        model = nn.Linear(10, 5)
+        def loss_fn(m, d):
+            return m(d).sum()
+        for _ in range(3):
+            se.estimate(model, loss_fn, torch.randn(2, 10))
+        trend = se.get_trend()
+        assert 'trend' in trend
+
+
+class TestGradientFlowMonitor:
+    """Тесты для Gradient Flow Monitor."""
+
+    def test_record(self):
+        from training.utils_v51 import GradientFlowMonitor
+        gfm = GradientFlowMonitor()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        result = gfm.record(model)
+        assert len(result['layers']) == 2
+
+    def test_diagnose_healthy(self):
+        from training.utils_v51 import GradientFlowMonitor
+        gfm = GradientFlowMonitor()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        gfm.record(model)
+        diag = gfm.diagnose()
+        assert diag['healthy'] is True
+
+    def test_summary(self):
+        from training.utils_v51 import GradientFlowMonitor
+        gfm = GradientFlowMonitor()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        gfm.record(model)
+        summary = gfm.get_summary()
+        assert summary['n_layers'] == 2
+
+
+class TestV51Integration:
+    """Интеграционные тесты v51."""
+
+    def test_grad_flow_training(self):
+        from training.utils_v51 import GradientFlowMonitor
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gfm = GradientFlowMonitor()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gfm.record(model)
+            opt.step()
+        diag = gfm.diagnose()
+        assert isinstance(diag['healthy'], bool)
+
+
+# ==================== v52 Tests ====================
+
+
+class TestSlidingWindowAttention:
+    """Тесты для Sliding Window Attention."""
+
+    def test_create_mask(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=2, causal=True)
+        mask = swa.create_mask(6)
+        assert mask.shape == (1, 1, 6, 6)
+        # Position 0 can only see itself
+        assert mask[0, 0, 0, 0] == 1
+        assert mask[0, 0, 0, 1] == 0
+
+    def test_causal(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=10, causal=True)
+        mask = swa.create_mask(4)
+        # No future tokens
+        assert mask[0, 0, 0, 1] == 0
+        assert mask[0, 0, 1, 0] == 1
+
+    def test_non_causal(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=1, causal=False)
+        mask = swa.create_mask(4)
+        assert mask[0, 0, 0, 1] == 1  # Can see future within window
+        assert mask[0, 0, 0, 2] == 0  # Outside window
+
+    def test_apply_mask(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=2)
+        scores = torch.zeros(1, 1, 4, 4)
+        masked = swa.apply_mask(scores, 4)
+        assert (masked[0, 0, 0, 3] < -1e8)  # Far away = masked
+
+
+class TestALiBiPositionalBias:
+    """Тесты для ALiBi."""
+
+    def test_get_bias(self):
+        from training.utils_v52 import ALiBiPositionalBias
+        alibi = ALiBiPositionalBias(n_heads=4)
+        bias = alibi.get_bias(8)
+        assert bias.shape == (1, 4, 8, 8)
+        # Diagonal should be 0
+        assert (bias[0, :, 0, 0] == 0).all()
+
+    def test_negative_bias(self):
+        from training.utils_v52 import ALiBiPositionalBias
+        alibi = ALiBiPositionalBias(n_heads=2)
+        bias = alibi.get_bias(4)
+        # Off-diagonal should be negative
+        assert (bias[0, :, 0, 1] < 0).all()
+
+    def test_forward(self):
+        from training.utils_v52 import ALiBiPositionalBias
+        alibi = ALiBiPositionalBias(n_heads=4)
+        scores = torch.zeros(2, 4, 8, 8)
+        biased = alibi(scores)
+        assert biased.shape == (2, 4, 8, 8)
+
+
+class TestRotaryPositionEmbedding:
+    """Тесты для RoPE."""
+
+    def test_forward_4d(self):
+        from training.utils_v52 import RotaryPositionEmbedding
+        rope = RotaryPositionEmbedding(dim=16, max_seq_len=64)
+        x = torch.randn(2, 4, 8, 16)
+        out = rope(x)
+        assert out.shape == (2, 4, 8, 16)
+
+    def test_forward_3d(self):
+        from training.utils_v52 import RotaryPositionEmbedding
+        rope = RotaryPositionEmbedding(dim=16)
+        x = torch.randn(2, 8, 16)
+        out = rope(x)
+        assert out.shape == (2, 8, 16)
+
+    def test_relative_position(self):
+        from training.utils_v52 import RotaryPositionEmbedding
+        rope = RotaryPositionEmbedding(dim=32)
+        q = torch.randn(1, 1, 4, 32)
+        q_rot = rope(q)
+        # RoPE should change the actual values
+        assert not torch.allclose(q, q_rot, atol=1e-4)
+        # But preserve norms (rotation preserves L2 norm)
+        norm_orig = q.norm(dim=-1)
+        norm_rot = q_rot.norm(dim=-1)
+        assert torch.allclose(norm_orig, norm_rot, atol=1e-3)
+
+
+class TestFlashAttentionApprox:
+    """Тесты для Flash Attention."""
+
+    def test_small_sequence(self):
+        from training.utils_v52 import FlashAttentionApprox
+        fa = FlashAttentionApprox(chunk_size=256, causal=True)
+        q = torch.randn(1, 2, 8, 16)
+        k = torch.randn(1, 2, 8, 16)
+        v = torch.randn(1, 2, 8, 16)
+        out = fa(q, k, v)
+        assert out.shape == (1, 2, 8, 16)
+
+    def test_chunked(self):
+        from training.utils_v52 import FlashAttentionApprox
+        fa = FlashAttentionApprox(chunk_size=4, causal=True)
+        q = torch.randn(1, 2, 12, 16)
+        k = torch.randn(1, 2, 12, 16)
+        v = torch.randn(1, 2, 12, 16)
+        out = fa(q, k, v)
+        assert out.shape == (1, 2, 12, 16)
+
+    def test_non_causal(self):
+        from training.utils_v52 import FlashAttentionApprox
+        fa = FlashAttentionApprox(chunk_size=4, causal=False)
+        q = torch.randn(1, 2, 8, 16)
+        k = torch.randn(1, 2, 8, 16)
+        v = torch.randn(1, 2, 8, 16)
+        out = fa(q, k, v)
+        assert out.shape == (1, 2, 8, 16)
+
+
+class TestMultiQueryAttentionHelper:
+    """Тесты для MQA/GQA."""
+
+    def test_mqa_expand(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=1)
+        kv = torch.randn(1, 1, 10, 16)
+        expanded = mqa.expand_kv(kv)
+        assert expanded.shape == (1, 8, 10, 16)
+
+    def test_gqa_expand(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        gqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=2)
+        kv = torch.randn(1, 2, 10, 16)
+        expanded = gqa.expand_kv(kv)
+        assert expanded.shape == (1, 8, 10, 16)
+
+    def test_mha_no_expand(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mha = MultiQueryAttentionHelper(n_heads=4, n_kv_heads=4)
+        kv = torch.randn(1, 4, 10, 16)
+        expanded = mha.expand_kv(kv)
+        assert torch.equal(expanded, kv)
+
+    def test_compute_attention(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        gqa = MultiQueryAttentionHelper(n_heads=4, n_kv_heads=2)
+        q = torch.randn(1, 4, 8, 16)
+        k = torch.randn(1, 2, 8, 16)
+        v = torch.randn(1, 2, 8, 16)
+        out = gqa.compute_attention(q, k, v)
+        assert out.shape == (1, 4, 8, 16)
+
+    def test_memory_savings(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=1)
+        savings = mqa.get_memory_savings(seq_len=1024, head_dim=64)
+        assert savings['savings_ratio'] > 0.8
+
+    def test_get_info(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=1)
+        info = mqa.get_info()
+        assert info['type'] == 'MQA'
+        gqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=2)
+        assert gqa.get_info()['type'] == 'GQA'

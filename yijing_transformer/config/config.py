@@ -299,6 +299,20 @@ class YiJingConfig:
     progressive_freezing: bool = False    # Progressive layer freezing
     metrics_aggregator: bool = False      # Training metrics aggregator
 
+    # v51: Gradient Vaccine, NormFree, Sharpness, LR Finder, Grad Flow
+    gradient_vaccine: bool = False        # Gradient vaccine filtering
+    norm_free: bool = False               # Scaled weight standardization
+    sharpness_estimator: bool = False     # Sharpness estimation
+    lr_finder: bool = False               # Learning rate finder
+    gradient_flow_monitor: bool = False   # Gradient flow monitoring
+
+    # v52: Sliding Window, ALiBi, RoPE, Flash Attn, MQA/GQA
+    sliding_window_size: int = 0          # Sliding window attention (0 = disabled)
+    alibi_bias: bool = False              # ALiBi positional bias
+    rope_embeddings: bool = False         # Rotary position embeddings
+    flash_attention: bool = False         # Flash attention approximation
+    # n_kv_heads already defined above as Optional[int] = None
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
