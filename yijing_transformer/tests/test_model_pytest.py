@@ -9199,3 +9199,293 @@ class TestV35Integration:
         result = pea.analyze(model)
         assert result['total_params'] > 0
         assert result['utilization'] > 0
+
+
+# ==================== v36 Tests ====================
+
+
+class TestEMAModel:
+    """Тесты для EMA Model."""
+
+    def test_init(self):
+        from training.utils_v36 import EMAModel
+        model = nn.Linear(10, 5)
+        ema = EMAModel(model, decay=0.999)
+        assert len(ema._shadow) == 2  # weight + bias
+
+    def test_update(self):
+        from training.utils_v36 import EMAModel
+        model = nn.Linear(10, 5)
+        ema = EMAModel(model, decay=0.9)
+        shadow_before = ema._shadow['weight'].clone()
+        # Change model weights
+        model.weight.data.add_(torch.randn_like(model.weight.data))
+        ema.update(model)
+        # Shadow should have changed
+        assert not torch.equal(ema._shadow['weight'], shadow_before)
+
+    def test_apply_and_restore(self):
+        from training.utils_v36 import EMAModel
+        model = nn.Linear(10, 5)
+        ema = EMAModel(model, decay=0.9)
+        original = model.weight.data.clone()
+        model.weight.data.add_(torch.ones_like(model.weight.data))
+        ema.update(model)
+        ema.apply_shadow(model)
+        # Weights should be shadow now
+        assert not torch.equal(model.weight.data, model.weight.data + 1)
+        ema.restore(model)
+        # Should be back to modified weights
+        assert torch.allclose(model.weight.data, original + 1)
+
+    def test_warmup(self):
+        from training.utils_v36 import EMAModel
+        model = nn.Linear(10, 5)
+        ema = EMAModel(model, decay=0.999, warmup_steps=10)
+        d1 = ema._get_decay()
+        ema._step = 100
+        d2 = ema._get_decay()
+        assert d2 >= d1
+
+    def test_step_count(self):
+        from training.utils_v36 import EMAModel
+        model = nn.Linear(10, 5)
+        ema = EMAModel(model)
+        ema.update(model)
+        ema.update(model)
+        assert ema.step == 2
+
+
+class TestGradientVaccine:
+    """Тесты для Gradient Vaccine."""
+
+    def test_simple_penalty(self):
+        from training.utils_v36 import GradientVaccine
+        model = nn.Linear(10, 5)
+        gv = GradientVaccine(model, lambda_ewc=1.0)
+        # Modify weights
+        model.weight.data.add_(torch.ones_like(model.weight.data) * 0.1)
+        penalty = gv.simple_penalty(model)
+        assert penalty.item() > 0
+
+    def test_no_drift_no_penalty(self):
+        from training.utils_v36 import GradientVaccine
+        model = nn.Linear(10, 5)
+        gv = GradientVaccine(model, lambda_ewc=1.0)
+        penalty = gv.simple_penalty(model)
+        assert penalty.item() == 0.0
+
+    def test_get_drift(self):
+        from training.utils_v36 import GradientVaccine
+        model = nn.Linear(10, 5)
+        gv = GradientVaccine(model)
+        model.weight.data.add_(torch.ones_like(model.weight.data))
+        drift = gv.get_drift(model)
+        assert drift['total_drift'] > 0
+        assert drift['max_drift'] > 0
+
+    def test_penalty_backward(self):
+        from training.utils_v36 import GradientVaccine
+        model = nn.Linear(10, 5)
+        gv = GradientVaccine(model, lambda_ewc=0.5)
+        model.weight.data.add_(0.1)
+        penalty = gv.penalty(model)
+        penalty.backward()
+        assert model.weight.grad is not None
+
+
+class TestAdaptiveGradientClipping:
+    """Тесты для AGC."""
+
+    def test_clip(self):
+        from training.utils_v36 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc = AdaptiveGradientClipping(clip_factor=0.01)
+        result = agc.clip(model)
+        assert result['n_total'] > 0
+
+    def test_large_grad_clipped(self):
+        from training.utils_v36 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.mul_(1000)  # Amplify gradient
+        agc = AdaptiveGradientClipping(clip_factor=0.001)
+        result = agc.clip(model)
+        assert result['n_clipped'] > 0
+
+    def test_exclude_bias(self):
+        from training.utils_v36 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc = AdaptiveGradientClipping(exclude_names=('bias',))
+        result = agc.clip(model)
+        assert 'bias' not in result['ratios']
+
+    def test_no_grad_params(self):
+        from training.utils_v36 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        agc = AdaptiveGradientClipping()
+        result = agc.clip(model)  # No backward called
+        assert result['n_total'] == 0
+
+
+class TestLRFinder:
+    """Тесты для LR Finder."""
+
+    def test_find(self):
+        from training.utils_v36 import LRFinder
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=1e-7)
+        finder = LRFinder(model, opt, min_lr=1e-5, max_lr=1.0, n_steps=20)
+
+        def train_fn(lr):
+            opt.zero_grad()
+            loss = model(torch.randn(4, 10)).sum() ** 2
+            loss.backward()
+            opt.step()
+            return loss.item()
+
+        result = finder.find(train_fn)
+        assert 'best_lr' in result
+        assert 'suggestion' in result
+        assert len(result['results']) > 0
+
+    def test_model_restored(self):
+        from training.utils_v36 import LRFinder
+        model = nn.Linear(10, 5)
+        original_weight = model.weight.data.clone()
+        opt = torch.optim.SGD(model.parameters(), lr=1e-7)
+        finder = LRFinder(model, opt, n_steps=10)
+
+        def train_fn(lr):
+            opt.zero_grad()
+            loss = model(torch.randn(4, 10)).sum() ** 2
+            loss.backward()
+            opt.step()
+            return loss.item()
+
+        finder.find(train_fn)
+        assert torch.equal(model.weight.data, original_weight)
+
+    def test_results_property(self):
+        from training.utils_v36 import LRFinder
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=1e-7)
+        finder = LRFinder(model, opt, n_steps=5)
+        assert finder.results == []
+
+
+class TestWeightStandardization:
+    """Тесты для Weight Standardization."""
+
+    def test_forward(self):
+        from training.utils_v36 import WeightStandardization
+        linear = nn.Linear(10, 5)
+        ws = WeightStandardization(linear)
+        out = ws(torch.randn(2, 10))
+        assert out.shape == (2, 5)
+
+    def test_standardize_in_place(self):
+        from training.utils_v36 import WeightStandardization
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        count = WeightStandardization.standardize_weights_(model)
+        assert count == 2
+        # Check standardized
+        for m in model.modules():
+            if isinstance(m, nn.Linear):
+                w = m.weight.data
+                mean = w.mean(dim=list(range(1, w.dim())), keepdim=True)
+                assert torch.allclose(mean, torch.zeros_like(mean), atol=1e-4)
+
+    def test_apply_to_model(self):
+        from training.utils_v36 import WeightStandardization
+        model = nn.Sequential(nn.Linear(10, 5), nn.ReLU(), nn.Linear(5, 3))
+        info = WeightStandardization.apply_to_model(model)
+        assert info['n_eligible'] == 2
+
+    def test_grad_flows(self):
+        from training.utils_v36 import WeightStandardization
+        linear = nn.Linear(10, 5)
+        ws = WeightStandardization(linear)
+        out = ws(torch.randn(2, 10))
+        out.sum().backward()
+        assert linear.weight.grad is not None
+
+
+class TestV36Integration:
+    """Интеграционные тесты v36."""
+
+    def test_ema_training(self):
+        from training.utils_v36 import EMAModel
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ema = EMAModel(model, decay=0.99)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            ema.update(model)
+        # Test shadow inference
+        ema.apply_shadow(model)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+        ema.restore(model)
+
+    def test_gradient_vaccine_training(self):
+        from training.utils_v36 import GradientVaccine
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        gv = GradientVaccine(model, lambda_ewc=0.1)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            penalty = gv.simple_penalty(model)
+            total = loss + penalty
+            total.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_agc_training(self):
+        from training.utils_v36 import AdaptiveGradientClipping
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        agc = AdaptiveGradientClipping(clip_factor=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            agc.clip(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_weight_std_training(self):
+        from training.utils_v36 import WeightStandardization
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        WeightStandardization.standardize_weights_(model)
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()

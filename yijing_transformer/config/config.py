@@ -197,6 +197,12 @@ class YiJingConfig:
     dynamic_batch_size: bool = False      # Dynamic batch size scaling
     stability_monitor: bool = False       # Training stability monitor
 
+    # v36: EMA, Gradient Vaccine, AGC, Weight Standardization
+    ema_decay: float = 0.0                # EMA decay (0 = выкл, 0.999 типично)
+    gradient_vaccine_lambda: float = 0.0  # Gradient vaccine strength (0 = выкл)
+    agc_clip_factor: float = 0.0          # Adaptive Gradient Clipping factor (0 = выкл, 0.01 типично)
+    weight_standardization: bool = False  # Weight Standardization
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
