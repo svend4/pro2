@@ -6024,3 +6024,326 @@ class TestV25Integration:
         assert result['total_params'] > 0
         flops = tracker.estimate_flops((2, 8, cfg.d_model))
         assert flops['total_flops'] > 0
+
+
+# ==================== v26 Tests ====================
+
+
+class TestSparseAttentionMask:
+    """Тесты для Sparse Attention Mask."""
+
+    def test_local_mask(self):
+        from training.utils_v26 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, pattern='local', window_size=4)
+        mask = sam.get_mask()
+        assert mask.shape == (16, 16)
+        assert mask.dtype == torch.bool
+        # Diagonal should be True
+        for i in range(16):
+            assert mask[i, i]
+
+    def test_strided_mask(self):
+        from training.utils_v26 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, pattern='strided', stride=4)
+        mask = sam.get_mask()
+        # Every 4th position should be visible
+        for i in range(16):
+            assert mask[i, 0]
+            assert mask[i, 4]
+
+    def test_axial_mask(self):
+        from training.utils_v26 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, pattern='axial')
+        mask = sam.get_mask()
+        assert mask.shape == (16, 16)
+        assert mask[0, 0]
+
+    def test_combined_mask(self):
+        from training.utils_v26 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, pattern='combined', window_size=4, stride=4)
+        mask = sam.get_mask()
+        local = SparseAttentionMask(16, 'local', 4).get_mask()
+        strided = SparseAttentionMask(16, 'strided', stride=4).get_mask()
+        assert (mask == (local | strided)).all()
+
+    def test_float_mask(self):
+        from training.utils_v26 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=8, pattern='local', window_size=4)
+        fmask = sam.get_float_mask()
+        assert fmask.dtype == torch.float32
+        assert (fmask[~sam.get_mask()] == float('-inf')).all()
+
+    def test_sparsity(self):
+        from training.utils_v26 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=32, pattern='local', window_size=4)
+        sparsity = sam.sparsity_ratio()
+        assert 0 < sparsity < 1  # Not fully dense, not fully sparse
+
+    def test_custom_seq_len(self):
+        from training.utils_v26 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, pattern='local', window_size=4)
+        mask = sam.get_mask(seq_len=8)
+        assert mask.shape == (8, 8)
+
+
+class TestGradientVaccine:
+    """Тесты для Gradient Vaccine."""
+
+    def test_no_conflict(self):
+        from training.utils_v26 import GradientVaccine
+        gv = GradientVaccine()
+        # Same direction → no conflict
+        g_a = [torch.ones(10)]
+        g_b = [torch.ones(10) * 2]
+        result = gv.compute_conflict(g_a, g_b)
+        assert not result['conflict']
+        assert result['cosine_sim'] > 0.99
+
+    def test_conflict(self):
+        from training.utils_v26 import GradientVaccine
+        gv = GradientVaccine()
+        g_a = [torch.ones(10)]
+        g_b = [-torch.ones(10)]
+        result = gv.compute_conflict(g_a, g_b)
+        assert result['conflict']
+
+    def test_vaccinate_no_conflict(self):
+        from training.utils_v26 import GradientVaccine
+        gv = GradientVaccine()
+        g_a = [torch.ones(10)]
+        g_b = [torch.ones(10)]
+        corrected = gv.vaccinate(g_a, g_b)
+        # No conflict → unchanged
+        assert torch.equal(corrected[0], g_a[0])
+
+    def test_vaccinate_conflict(self):
+        from training.utils_v26 import GradientVaccine
+        gv = GradientVaccine()
+        g_a = [torch.tensor([1.0, -1.0])]
+        g_b = [torch.tensor([-1.0, 0.0])]
+        result = gv.compute_conflict(g_a, g_b)
+        if result['conflict']:
+            corrected = gv.vaccinate(g_a, g_b)
+            # Corrected should have less conflict
+            new_conflict = gv.compute_conflict(corrected, g_b)
+            assert new_conflict['cosine_sim'] >= result['cosine_sim']
+
+    def test_merge_gradients(self):
+        from training.utils_v26 import GradientVaccine
+        model = nn.Linear(5, 3)
+        # Compute two sets of gradients
+        loss1 = model(torch.randn(2, 5)).sum()
+        loss1.backward()
+        grads1 = [p.grad.clone() for p in model.parameters()]
+        model.zero_grad()
+        loss2 = model(torch.randn(2, 5)).sum()
+        loss2.backward()
+        grads2 = [p.grad.clone() for p in model.parameters()]
+
+        gv = GradientVaccine(n_tasks=2)
+        result = gv.merge_gradients([grads1, grads2], model)
+        assert 'n_conflicts' in result
+
+
+class TestProgressiveResizing:
+    """Тесты для Progressive Resizing."""
+
+    def test_linear(self):
+        from training.utils_v26 import ProgressiveResizing
+        pr = ProgressiveResizing(min_len=32, max_len=256, total_steps=100, strategy='linear')
+        assert pr.get_seq_len(0) == 32
+        assert pr.get_seq_len(100) == 256
+
+    def test_step_strategy(self):
+        from training.utils_v26 import ProgressiveResizing
+        pr = ProgressiveResizing(min_len=32, max_len=256, total_steps=100, strategy='step')
+        l1 = pr.get_seq_len(10)
+        l2 = pr.get_seq_len(50)
+        l3 = pr.get_seq_len(90)
+        assert l1 <= l2 <= l3
+
+    def test_truncate_batch(self):
+        from training.utils_v26 import ProgressiveResizing
+        pr = ProgressiveResizing(min_len=8, max_len=32, total_steps=100)
+        x = torch.randint(0, 100, (4, 32))
+        truncated = pr.truncate_batch(x, step=0)
+        assert truncated.shape[1] <= 32
+
+    def test_schedule(self):
+        from training.utils_v26 import ProgressiveResizing
+        pr = ProgressiveResizing(min_len=16, max_len=128, total_steps=100)
+        schedule = pr.get_schedule(n_points=5)
+        assert len(schedule) == 6
+        assert schedule[0][1] <= schedule[-1][1]
+
+    def test_speedup(self):
+        from training.utils_v26 import ProgressiveResizing
+        pr = ProgressiveResizing(min_len=32, max_len=256, total_steps=100)
+        speedup = pr.get_speedup_estimate(0)
+        assert speedup['attention_speedup'] > 1.0
+
+    def test_multiple_of_8(self):
+        from training.utils_v26 import ProgressiveResizing
+        pr = ProgressiveResizing(min_len=10, max_len=100, total_steps=100)
+        for step in range(0, 101, 10):
+            sl = pr.get_seq_len(step)
+            assert sl % 8 == 0 or sl == pr.max_len
+
+
+class TestCheckpointManager:
+    """Тесты для Checkpoint Manager."""
+
+    def test_should_save(self, tmp_path):
+        from training.utils_v26 import CheckpointManager
+        mgr = CheckpointManager(save_dir=str(tmp_path), max_keep=2, mode='min')
+        assert mgr.should_save(1.0)
+
+    def test_save_and_get_best(self, tmp_path):
+        from training.utils_v26 import CheckpointManager
+        mgr = CheckpointManager(save_dir=str(tmp_path), max_keep=2, mode='min')
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        mgr.save(model, opt, step=1, metric_value=2.0)
+        mgr.save(model, opt, step=2, metric_value=1.5)
+        best = mgr.get_best()
+        assert best['metric'] == 1.5
+
+    def test_max_keep(self, tmp_path):
+        from training.utils_v26 import CheckpointManager
+        mgr = CheckpointManager(save_dir=str(tmp_path), max_keep=2, mode='min')
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        mgr.save(model, opt, step=1, metric_value=3.0)
+        mgr.save(model, opt, step=2, metric_value=2.0)
+        mgr.save(model, opt, step=3, metric_value=1.0)
+        assert len(mgr.best_checkpoints) == 2
+        # Worst (3.0) should be removed
+        metrics = [m for m, _, _ in mgr.best_checkpoints]
+        assert 3.0 not in metrics
+
+    def test_load_best(self, tmp_path):
+        from training.utils_v26 import CheckpointManager
+        mgr = CheckpointManager(save_dir=str(tmp_path), max_keep=2, mode='min')
+        model = nn.Linear(10, 5, bias=False)
+        nn.init.ones_(model.weight)
+        opt = torch.optim.Adam(model.parameters())
+        mgr.save(model, opt, step=1, metric_value=1.0)
+        # Change weights
+        model.weight.data.fill_(99.0)
+        # Reload
+        mgr.load_best(model)
+        assert torch.allclose(model.weight.data, torch.ones_like(model.weight))
+
+    def test_mode_max(self, tmp_path):
+        from training.utils_v26 import CheckpointManager
+        mgr = CheckpointManager(save_dir=str(tmp_path), max_keep=2, mode='max')
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        mgr.save(model, opt, step=1, metric_value=0.5)
+        mgr.save(model, opt, step=2, metric_value=0.9)
+        best = mgr.get_best()
+        assert best['metric'] == 0.9
+
+
+class TestNCELoss:
+    """Тесты для NCE Loss."""
+
+    def test_forward(self):
+        from training.utils_v26 import NCELoss
+        nce = NCELoss(d_model=32, vocab_size=100, n_negatives=16)
+        hidden = torch.randn(2, 8, 32)
+        targets = torch.randint(0, 100, (2, 8))
+        loss = nce(hidden, targets)
+        assert loss.item() > 0
+
+    def test_backward(self):
+        from training.utils_v26 import NCELoss
+        nce = NCELoss(d_model=32, vocab_size=100, n_negatives=16)
+        hidden = torch.randn(2, 8, 32, requires_grad=True)
+        targets = torch.randint(0, 100, (2, 8))
+        loss = nce(hidden, targets)
+        loss.backward()
+        assert hidden.grad is not None
+
+    def test_set_noise_dist(self):
+        from training.utils_v26 import NCELoss
+        nce = NCELoss(d_model=16, vocab_size=50, n_negatives=8)
+        counts = torch.randint(1, 100, (50,))
+        nce.set_noise_distribution(counts)
+        assert abs(nce.noise_dist.sum().item() - 1.0) < 1e-5
+
+    def test_different_negatives(self):
+        from training.utils_v26 import NCELoss
+        nce16 = NCELoss(d_model=16, vocab_size=50, n_negatives=16)
+        nce4 = NCELoss(d_model=16, vocab_size=50, n_negatives=4)
+        hidden = torch.randn(2, 4, 16)
+        targets = torch.randint(0, 50, (2, 4))
+        loss16 = nce16(hidden, targets)
+        loss4 = nce4(hidden, targets)
+        # Both should produce valid losses
+        assert loss16.item() > 0
+        assert loss4.item() > 0
+
+
+class TestV26Integration:
+    """Интеграционные тесты v26."""
+
+    def test_sparse_attention_with_model(self):
+        from training.utils_v26 import SparseAttentionMask
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        sam = SparseAttentionMask(seq_len=8, pattern='local', window_size=4)
+        mask = sam.get_float_mask(8)
+        # Model should still work with custom mask shape
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_progressive_resizing_training(self):
+        from training.utils_v26 import ProgressiveResizing
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        pr = ProgressiveResizing(min_len=4, max_len=8, total_steps=10)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        for step in range(10):
+            seq_len = pr.get_seq_len(step)
+            x = torch.randint(0, cfg.vocab_size, (2, seq_len))
+            y = torch.randint(0, cfg.vocab_size, (2, seq_len))
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(torch.randint(0, cfg.vocab_size, (2, 8)))
+        assert not torch.isnan(logits).any()
+
+    def test_nce_with_model(self):
+        from training.utils_v26 import NCELoss
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        nce = NCELoss(d_model=cfg.d_model, vocab_size=cfg.vocab_size, n_negatives=16)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        emb = model.tok_emb(x)
+        if model.pos_emb is not None:
+            emb = emb + model.pos_emb[:, :8, :]
+        hidden = model.core(emb)[0]
+        loss = nce(hidden, y)
+        loss.backward()
+        assert not torch.isnan(loss)
+
+    def test_checkpoint_training(self, tmp_path):
+        from training.utils_v26 import CheckpointManager
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        mgr = CheckpointManager(save_dir=str(tmp_path), max_keep=2, mode='min')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for step in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            mgr.save(model, opt, step=step, metric_value=loss.item())
+        best = mgr.get_best()
+        assert best is not None

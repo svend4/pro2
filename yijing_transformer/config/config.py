@@ -138,6 +138,12 @@ class YiJingConfig:
     use_token_mixing: bool = False        # Token Mixing MLP вместо attention
     token_mixing_expansion: int = 2       # Token Mixing expansion factor
 
+    # v26: Sparse Attention, Progressive Resizing, NCE
+    sparse_attention_pattern: str = 'none'  # none, local, strided, axial, combined
+    sparse_window_size: int = 8             # Sparse attention window
+    progressive_min_len: int = 0            # Progressive resizing min (0 = выкл)
+    nce_negatives: int = 0                  # NCE negatives (0 = выкл, use CE)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
