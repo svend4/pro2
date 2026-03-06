@@ -606,7 +606,7 @@ def run_d12():
                 x = torch.tensor([seq], dtype=torch.long, device=device)
                 # Forward pass to get hidden states
                 hidden = model.tok_emb(x)
-                if hasattr(model, 'pos_emb'):
+                if hasattr(model, 'pos_emb') and model.pos_emb is not None:
                     hidden = hidden + model.pos_emb[:, :BLOCK_SIZE, :]
                 tracker.record_activations(model, hidden, data_type=dtype)
 

@@ -1,0 +1,44 @@
+{
+  "vanilla": {
+    "copy": {
+      "params": 809216,
+      "geo_params": 0,
+      "final_ft_loss": 0.5358273983001709,
+      "accuracy": 0.0075
+    },
+    "pattern": {
+      "params": 809216,
+      "geo_params": 0,
+      "final_ft_loss": 3.0180439949035645,
+      "accuracy": 0.3151862464183381
+    }
+  },
+  "hybrid": {
+    "copy": {
+      "params": 2369860,
+      "geo_params": 1567812,
+      "final_ft_loss": 0.5249232053756714,
+      "accuracy": 0.0175
+    },
+    "pattern": {
+      "params": 2369860,
+      "geo_params": 1567812,
+      "final_ft_loss": 3.027357578277588,
+      "accuracy": 0.2492836676217765
+    }
+  },
+  "adaptive": {
+    "copy": {
+      "params": 2371196,
+      "geo_params": 1569148,
+      "final_ft_loss": 0.5501524209976196,
+      "accuracy": 0.0
+    },
+    "pattern": {
+      "params": 2371196,
+      "geo_params": 1569148,
+      "final_ft_loss": 3.0770976543426514,
+      "accuracy": 0.2607449856733524
+    }
+  }
+}
