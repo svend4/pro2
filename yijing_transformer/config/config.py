@@ -325,6 +325,17 @@ class YiJingConfig:
     moe_top_k: int = 2           # сколько экспертов активировать
     n_experts: int = 8           # число экспертов (= число триграмм)
 
+    # v51 геометрия: интеграция шести источников
+    codebook_order: str = 'fuxi'         # 'fuxi' (binary), 'wenwang' (traditional), 'learned'
+    use_palace_attention: bool = False   # block-sparse attention по 8 дворцам (Склярова)
+    use_antipodal_reg: bool = False      # антиподальная регуляризация (Фомюк/Герман)
+    antipodal_weight: float = 0.01       # вес антиподального штрафа
+    use_triangular_bias: bool = False    # треугольный attention bias (Андреев)
+    use_four_state: bool = False         # 4-состояния линий: 4096 кодбук (Склярова 1.2)
+    use_dual_embedding: bool = False     # dual 6D+3D embedding (Касаткин)
+    use_quadrant_attention: bool = False # 4-квадрантный attention (Беляев)
+    use_graduated_biangua: bool = False  # градуированная 变卦 (Склярова 1.3)
+
     # Обучение
     lr: float = 3e-4
     warmup_steps: int = 2000
