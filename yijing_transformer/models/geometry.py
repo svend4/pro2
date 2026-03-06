@@ -875,6 +875,413 @@ class GraduatedBianGuaTransform(nn.Module):
         return x + self.scale * self.proj_from_6d(z_transformed)
 
 
+class D4EquivariantLayer(nn.Module):
+    """D₄-эквивариантный слой для триграмм (Ступень 2.2).
+
+    Группа диэдра D₄ = симметрии квадрата (4 поворота + 4 отражения).
+    8 триграмм образуют представление D₄: любое преобразование триграммы
+    сводится к одной из 8 операций D₄.
+
+    Аналог group-equivariant CNN (Cohen & Welling, 2016),
+    но для дискретной группы D₄ на триграммах.
+    """
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.d_model = d_model
+        self.proj_to_3d = nn.Linear(d_model, 3, bias=False)
+        self.proj_from_3d = nn.Linear(3, d_model, bias=False)
+        self.scale = nn.Parameter(torch.tensor(0.01))
+
+        # 8 операций D₄ на 3D-триграммах (перестановки + знаки)
+        # D₄ действует на 3 координаты: rot90, rot180, rot270, flip_x, flip_y, flip_xy, flip_yx, identity
+        ops = torch.zeros(8, 3, 3)
+        # identity
+        ops[0] = torch.eye(3)
+        # rot90: (a,b,c) → (b,c,a)
+        ops[1] = torch.tensor([[0, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=torch.float32)
+        # rot180: (a,b,c) → (c,a,b)
+        ops[2] = torch.tensor([[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=torch.float32)
+        # rot270: (a,b,c) → (-a,-b,-c) — инверсия (антипод)
+        ops[3] = -torch.eye(3)
+        # flip_x: (a,b,c) → (-a,b,c)
+        ops[4] = torch.diag(torch.tensor([-1.0, 1.0, 1.0]))
+        # flip_y: (a,b,c) → (a,-b,c)
+        ops[5] = torch.diag(torch.tensor([1.0, -1.0, 1.0]))
+        # flip_z: (a,b,c) → (a,b,-c)
+        ops[6] = torch.diag(torch.tensor([1.0, 1.0, -1.0]))
+        # flip_xy: (a,b,c) → (b,a,c)
+        ops[7] = torch.tensor([[0, 1, 0], [1, 0, 0], [0, 0, 1]], dtype=torch.float32)
+        self.register_buffer('d4_ops', ops)  # (8, 3, 3)
+
+        # Обучаемые веса для 8 операций
+        self.op_weights = nn.Parameter(torch.zeros(8))
+
+    def forward(self, x):
+        """x: (B, T, D) → D₄-эквивариантное преобразование → (B, T, D)"""
+        z = self.proj_to_3d(x)  # (B, T, 3)
+
+        # Применяем все 8 операций D₄
+        w = F.softmax(self.op_weights, dim=0)  # (8,)
+        z_flat = z.reshape(-1, 3)  # (N, 3)
+
+        # Взвешенная сумма преобразований: Σ w_i · (z @ R_i^T)
+        transformed = torch.zeros_like(z_flat)
+        for i in range(8):
+            transformed += w[i] * (z_flat @ self.d4_ops[i].T)
+
+        transformed = transformed.reshape_as(z)
+        return x + self.scale * self.proj_from_3d(transformed)
+
+
+class DualModeHead(nn.Module):
+    """Мезонный/барионный dual-mode attention head (Ступень 6.4).
+
+    Два режима attention:
+    - Мезонный (дуадный): Q сравнивается с антиподом K (Q↔-K)
+    - Барионный (триадный): Q сравнивается с циклической перестановкой K
+
+    Обучаемый параметр mode ∈ [0,1] определяет баланс.
+    По Беляеву: мезонные семейства = дуадная система ⟨u|d|s⟩↔⟨ū|d̄|s̄⟩,
+    барионные = триадная ⟨u|u|d⟩↔⟨d|s|s⟩.
+    """
+    def __init__(self, head_dim: int):
+        super().__init__()
+        self.head_dim = head_dim
+        self.mode = nn.Parameter(torch.tensor(0.5))
+        self.scale = head_dim ** -0.5
+
+    def forward(self, q, k, v, mask=None):
+        """q, k, v: (B, T, d)"""
+        # Мезонный: Q · (-K)^T = -(Q · K^T) — антиподальный
+        meson_attn = -torch.matmul(q, k.transpose(-2, -1)) * self.scale
+
+        # Барионный: Q · permute(K)^T — циклическая перестановка координат
+        k_perm = torch.roll(k, shifts=1, dims=-1)  # (a,b,c,d,...) → (...,a,b,c)
+        baryon_attn = torch.matmul(q, k_perm.transpose(-2, -1)) * self.scale
+
+        # Смешивание
+        alpha = torch.sigmoid(self.mode)
+        attn = alpha * meson_attn + (1 - alpha) * baryon_attn
+
+        if mask is not None:
+            attn = attn.masked_fill(mask == 0, float('-inf'))
+
+        attn = F.softmax(attn, dim=-1)
+        return torch.matmul(attn, v)
+
+
+class RecursiveCubeAttention(nn.Module):
+    """Рекурсивный attention «куб из кубов» (Ступень 6.5).
+
+    Гиперкуб {-1,+1}⁶ = куб триграмм × куб триграмм (8×8).
+    Двухуровневый attention:
+    - Уровень 1 (intra-cube): 8 триграмм взаимодействуют внутри каждого кубика
+    - Уровень 2 (inter-cube): 8 кубиков взаимодействуют через «представителей»
+
+    Аналог Set Transformer (Lee et al., 2019), но с фиксированной кубической топологией.
+    """
+    def __init__(self, d_model: int, n_heads: int = 8):
+        super().__init__()
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+
+        # Intra-cube attention (внутри каждого из 8 кубиков)
+        self.intra_q = nn.Linear(d_model, d_model, bias=False)
+        self.intra_k = nn.Linear(d_model, d_model, bias=False)
+        self.intra_v = nn.Linear(d_model, d_model, bias=False)
+
+        # Inter-cube attention (между 8 кубиками через «представителей»)
+        self.inter_q = nn.Linear(d_model, d_model, bias=False)
+        self.inter_k = nn.Linear(d_model, d_model, bias=False)
+        self.inter_v = nn.Linear(d_model, d_model, bias=False)
+
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+        self.cube_size = 8  # триграмм в кубике
+
+    def forward(self, x, mask=None):
+        """x: (B, T, D)"""
+        B, T, D = x.shape
+        scale = self.head_dim ** -0.5
+
+        # Разбиваем на кубики по 8 (padding если T не кратно 8)
+        n_cubes = (T + self.cube_size - 1) // self.cube_size
+        pad_len = n_cubes * self.cube_size - T
+        if pad_len > 0:
+            x_padded = F.pad(x, (0, 0, 0, pad_len))
+        else:
+            x_padded = x
+
+        # Reshape: (B, n_cubes, 8, D)
+        x_cubes = x_padded.reshape(B, n_cubes, self.cube_size, D)
+
+        # === Уровень 1: Intra-cube attention ===
+        q1 = self.intra_q(x_cubes)  # (B, n_cubes, 8, D)
+        k1 = self.intra_k(x_cubes)
+        v1 = self.intra_v(x_cubes)
+
+        attn1 = torch.matmul(q1, k1.transpose(-2, -1)) * scale  # (B, n_cubes, 8, 8)
+        attn1 = F.softmax(attn1, dim=-1)
+        out1 = torch.matmul(attn1, v1)  # (B, n_cubes, 8, D)
+
+        # === Уровень 2: Inter-cube attention ===
+        # «Представитель» каждого кубика = среднее
+        cube_reps = out1.mean(dim=2)  # (B, n_cubes, D)
+
+        q2 = self.inter_q(cube_reps)  # (B, n_cubes, D)
+        k2 = self.inter_k(cube_reps)
+        v2 = self.inter_v(cube_reps)
+
+        attn2 = torch.matmul(q2, k2.transpose(-2, -1)) * scale  # (B, n_cubes, n_cubes)
+        attn2 = F.softmax(attn2, dim=-1)
+        inter_out = torch.matmul(attn2, v2)  # (B, n_cubes, D)
+
+        # Broadcast inter-cube information back to tokens
+        inter_broadcast = inter_out.unsqueeze(2).expand_as(out1)  # (B, n_cubes, 8, D)
+        combined = out1 + inter_broadcast
+
+        # Reshape back
+        combined = combined.reshape(B, n_cubes * self.cube_size, D)
+        if pad_len > 0:
+            combined = combined[:, :T, :]
+
+        return self.out_proj(combined)
+
+
+class StructuralDefectLayer(nn.Module):
+    """Структурный дефект 16→12: геометрический bottleneck (Ступень 6.7).
+
+    По Беляеву: пара кубов (16 вершин) → икосаэдр (12 вершин) = потеря 4 вершин.
+    Это информационное сжатие с геометрическим обоснованием.
+
+    Конструктивный пример attention pooling с фиксированным коэффициентом 16→12.
+    """
+    def __init__(self, d_model: int, input_size: int = 16, output_size: int = 12):
+        super().__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        # Обучаемые «якорные» точки для сжатия
+        self.anchors = nn.Parameter(torch.randn(output_size, d_model) * 0.02)
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x):
+        """x: (B, T, D) → (B, output_size, D) через attention pooling."""
+        B, T, D = x.shape
+        # Query = якорные точки, Key/Value = входные токены
+        q = self.q_proj(self.anchors.unsqueeze(0).expand(B, -1, -1))  # (B, 12, D)
+        k = self.k_proj(x)  # (B, T, D)
+
+        scale = D ** -0.5
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale  # (B, 12, T)
+        attn = F.softmax(attn, dim=-1)
+        return torch.matmul(attn, x)  # (B, 12, D)
+
+
+class MobiusAttentionPattern(nn.Module):
+    """Attention-паттерн с топологией ленты Мёбиуса (Ступень 6.3).
+
+    После полного обхода последовательности attention «переворачивается»:
+    вторая половина видит первую в обратном порядке.
+    Это неориентируемая поверхность в пространстве attention.
+    """
+    def __init__(self, max_seq_len: int = 512):
+        super().__init__()
+        self.scale = nn.Parameter(torch.tensor(0.1))
+        # Предвычисляем Мёбиусов bias
+        bias = torch.zeros(max_seq_len, max_seq_len)
+        for i in range(max_seq_len):
+            for j in range(max_seq_len):
+                half = max_seq_len // 2
+                if i < half and j >= half:
+                    # Верхний видит нижний в обратном порядке
+                    mirror_j = max_seq_len - 1 - j
+                    dist = abs(i - mirror_j)
+                elif i >= half and j < half:
+                    mirror_i = max_seq_len - 1 - i
+                    dist = abs(mirror_i - j)
+                else:
+                    dist = abs(i - j)
+                bias[i, j] = -dist
+        self.register_buffer('mobius_bias', bias)
+
+    def forward(self, seq_len: int) -> torch.Tensor:
+        return self.scale * self.mobius_bias[:seq_len, :seq_len]
+
+
+class PrivilegedAxisAttention(nn.Module):
+    """Attention с привилегированной осью (Ступень 4.1).
+
+    Касаткин выделяет ось (0,0,0)→(1,1,1) = ☷→☰ как «ось Z» куба.
+    Attention вдоль привилегированной оси сильнее, чем перпендикулярно.
+    """
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.proj_to_3d = nn.Linear(d_model, 3, bias=False)
+        self.axis_scale = nn.Parameter(torch.tensor(0.1))
+        # Привилегированная ось: (1,1,1)/√3
+        axis = torch.ones(3) / math.sqrt(3)
+        self.register_buffer('axis', axis)
+
+    def get_bias(self, x):
+        """x: (B, T, D) → (B, T, T) bias для attention."""
+        z = self.proj_to_3d(x)  # (B, T, 3)
+        # Проекция на привилегированную ось
+        axis_proj = (z * self.axis).sum(dim=-1)  # (B, T)
+        # Bias: произведение проекций q и k вдоль оси
+        bias = self.axis_scale * axis_proj.unsqueeze(-1) * axis_proj.unsqueeze(-2)
+        return bias  # (B, T, T)
+
+
+class MagicSquareInitializer:
+    """Инициализация attention-весов магическим квадратом (Ступень 2.4 + 5.5).
+
+    Герман конструирует магический квадрат из упаковки P=2^(2k).
+    Фомюк показывает, что Ло-шу — частный случай для 3×3.
+    """
+    @staticmethod
+    def loshu_3x3() -> torch.Tensor:
+        """Ло-шу 3×3: сумма по строкам/столбцам/диагоналям = 15."""
+        return torch.tensor([
+            [2, 7, 6],
+            [9, 5, 1],
+            [4, 3, 8]
+        ], dtype=torch.float32)
+
+    @staticmethod
+    def magic_4x4() -> torch.Tensor:
+        """Магический квадрат 4×4: сумма = 34."""
+        return torch.tensor([
+            [16, 3, 2, 13],
+            [5, 10, 11, 8],
+            [9, 6, 7, 12],
+            [4, 15, 14, 1]
+        ], dtype=torch.float32)
+
+    @staticmethod
+    def from_hermann_packing(k: int) -> torch.Tensor:
+        """Построение квадрата из упаковки Германа для P=2^(2k).
+
+        Упаковка записывается в квадрат (2^k)×(2^k).
+        Перестановки внутри столбцов дают магический квадрат.
+        """
+        n = 2 ** k
+        P = n * n
+        field = hermann_packing(2 * k)
+        return field.reshape(n, n).float()
+
+    @staticmethod
+    def init_attention_weights(weight: torch.Tensor, n_heads: int = 8):
+        """Инициализация attention-матрицы магическими квадратами.
+
+        Каждая голова получает нормализованный магический квадрат.
+        """
+        H, T, _ = weight.shape if weight.dim() == 3 else (1, *weight.shape)
+        if T <= 4:
+            ms = MagicSquareInitializer.magic_4x4()[:T, :T]
+        else:
+            ms = MagicSquareInitializer.loshu_3x3()
+            ms = F.interpolate(ms.unsqueeze(0).unsqueeze(0), size=(T, T),
+                               mode='bilinear', align_corners=False).squeeze()
+        # Нормализация
+        ms = ms / ms.sum()
+        with torch.no_grad():
+            if weight.dim() == 3:
+                for h in range(H):
+                    weight[h] = ms
+            else:
+                weight.copy_(ms)
+
+
+class WeavingLoomArchitecture(nn.Module):
+    """4-уровневая иерархия «ткацкий станок» Беляева (Ступень 6.8).
+
+    Уровень I:   2 → 2 (binary gate: инь/ян)
+    Уровень II:  8 → 8 (триграммный куб)
+    Уровень III: 64 → 64 (гексаграммный гиперкуб)
+    Уровень IV:  4096 → 4096 (мега-гиперкуб, block-sparse)
+
+    Каждый уровень использует attention своего масштаба.
+    Уровни вложены: attention уровня N определяет «ткацкую нить»
+    для уровня N+1.
+    """
+    def __init__(self, d_model: int, max_level: int = 3):
+        super().__init__()
+        self.d_model = d_model
+        self.max_level = min(max_level, 4)
+
+        # Уровень I: скалярный gate (sigmoid) — инь/ян
+        self.level1_gate = nn.Linear(d_model, 1, bias=True)
+
+        # Уровень II: attention 8×8 с кубической геометрией
+        if max_level >= 2:
+            self.level2_q = nn.Linear(d_model, d_model, bias=False)
+            self.level2_k = nn.Linear(d_model, d_model, bias=False)
+            self.level2_v = nn.Linear(d_model, d_model, bias=False)
+            trigrams = get_trigrams()
+            # Bias на основе расстояний между триграммами
+            tri_dist = torch.cdist(trigrams, trigrams)
+            self.register_buffer('level2_bias', -tri_dist * 0.1)
+
+        # Уровень III: attention с гексаграммной геометрией (= основной v50)
+        if max_level >= 3:
+            self.level3_q = nn.Linear(d_model, d_model, bias=False)
+            self.level3_k = nn.Linear(d_model, d_model, bias=False)
+            self.level3_v = nn.Linear(d_model, d_model, bias=False)
+
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x, mask=None):
+        """x: (B, T, D) → 4-уровневая обработка → (B, T, D)"""
+        B, T, D = x.shape
+        scale = D ** -0.5
+
+        # Уровень I: binary gate
+        gate = torch.sigmoid(self.level1_gate(x))  # (B, T, 1)
+        out = x * gate  # инь/ян фильтрация
+
+        if self.max_level < 2:
+            return self.out_proj(out)
+
+        # Уровень II: attention в группах по 8 (триграммный)
+        n_groups = max(1, T // 8)
+        group_size = min(8, T)
+        # Pad if needed
+        pad_len = n_groups * group_size - T
+        if pad_len > 0:
+            out_padded = F.pad(out, (0, 0, 0, pad_len))
+        else:
+            out_padded = out
+
+        out_groups = out_padded.reshape(B, n_groups, group_size, D)
+        q2 = self.level2_q(out_groups)
+        k2 = self.level2_k(out_groups)
+        v2 = self.level2_v(out_groups)
+        attn2 = torch.matmul(q2, k2.transpose(-2, -1)) * scale
+        if group_size <= 8:
+            attn2 = attn2 + self.level2_bias[:group_size, :group_size]
+        attn2 = F.softmax(attn2, dim=-1)
+        out2 = torch.matmul(attn2, v2)
+        out2 = out2.reshape(B, n_groups * group_size, D)
+        if pad_len > 0:
+            out2 = out2[:, :T, :]
+
+        if self.max_level < 3:
+            return self.out_proj(out2)
+
+        # Уровень III: полный attention (гексаграммный)
+        q3 = self.level3_q(out2)
+        k3 = self.level3_k(out2)
+        v3 = self.level3_v(out2)
+        attn3 = torch.matmul(q3, k3.transpose(-2, -1)) * scale
+        if mask is not None:
+            attn3 = attn3.masked_fill(mask == 0, float('-inf'))
+        attn3 = F.softmax(attn3, dim=-1)
+        out3 = torch.matmul(attn3, v3)
+
+        return self.out_proj(out3)
+
+
 # ==================== ROTARY POSITION EMBEDDINGS ====================
 
 class RotaryEmbedding(nn.Module):
