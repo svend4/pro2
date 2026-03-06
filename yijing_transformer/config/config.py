@@ -203,6 +203,13 @@ class YiJingConfig:
     agc_clip_factor: float = 0.0          # Adaptive Gradient Clipping factor (0 = выкл, 0.01 типично)
     weight_standardization: bool = False  # Weight Standardization
 
+    # v37: Gradient Centralization, Lookahead, SWA, Batch Warmup, Gradient Penalty
+    gradient_centralization: bool = False  # Gradient Centralization
+    lookahead_k: int = 0                  # Lookahead k (0 = выкл, 5 типично)
+    swa_start_epoch: int = 0              # SWA start epoch (0 = выкл)
+    batch_size_warmup_steps: int = 0      # Batch size warmup steps (0 = выкл)
+    gradient_penalty_lambda: float = 0.0  # R1 gradient penalty (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

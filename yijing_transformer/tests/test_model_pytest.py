@@ -9489,3 +9489,329 @@ class TestV36Integration:
             opt.step()
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v37 Tests ====================
+
+
+class TestGradientCentralization:
+    """Тесты для Gradient Centralization."""
+
+    def test_centralize(self):
+        from training.utils_v37 import GradientCentralization
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        result = gc.centralize(model)
+        assert result['n_centralized'] >= 1
+
+    def test_centralized_mean_zero(self):
+        from training.utils_v37 import GradientCentralization
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        gc.centralize(model)
+        # After centralization, mean over fan-in should be ~0
+        mean = model.weight.grad.mean(dim=1)
+        assert torch.allclose(mean, torch.zeros_like(mean), atol=1e-6)
+
+    def test_skip_1d(self):
+        from training.utils_v37 import GradientCentralization
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        result = gc.centralize(model)
+        # Bias is 1D, should be skipped
+        assert result['n_centralized'] == 1  # Only weight
+
+    def test_centralize_optimizer(self):
+        from training.utils_v37 import GradientCentralization
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        count = gc.centralize_optimizer(opt)
+        assert count >= 1
+
+
+class TestLookahead:
+    """Тесты для Lookahead."""
+
+    def test_step(self):
+        from training.utils_v37 import Lookahead
+        model = nn.Linear(10, 5)
+        inner_opt = torch.optim.Adam(model.parameters())
+        la = Lookahead(inner_opt, k=5, alpha=0.5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        result = la.step()
+        assert result['inner_step'] == 1
+        assert not result['lookahead_update']
+
+    def test_lookahead_update(self):
+        from training.utils_v37 import Lookahead
+        model = nn.Linear(10, 5)
+        inner_opt = torch.optim.Adam(model.parameters())
+        la = Lookahead(inner_opt, k=3, alpha=0.5)
+        for i in range(3):
+            la.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            result = la.step()
+        assert result['lookahead_update']
+
+    def test_slow_weights_change(self):
+        from training.utils_v37 import Lookahead
+        model = nn.Linear(10, 5)
+        inner_opt = torch.optim.Adam(model.parameters(), lr=0.1)
+        la = Lookahead(inner_opt, k=2, alpha=0.5)
+        slow_before = la._slow_params[0][0].clone()
+        for _ in range(2):
+            la.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            la.step()
+        assert not torch.equal(la._slow_params[0][0], slow_before)
+
+    def test_get_info(self):
+        from training.utils_v37 import Lookahead
+        model = nn.Linear(10, 5)
+        inner_opt = torch.optim.Adam(model.parameters())
+        la = Lookahead(inner_opt, k=5)
+        info = la.get_info()
+        assert info['k'] == 5
+
+    def test_param_groups(self):
+        from training.utils_v37 import Lookahead
+        model = nn.Linear(10, 5)
+        inner_opt = torch.optim.Adam(model.parameters())
+        la = Lookahead(inner_opt)
+        assert len(la.param_groups) == 1
+
+
+class TestSWACollector:
+    """Тесты для SWA."""
+
+    def test_collect(self):
+        from training.utils_v37 import SWACollector
+        model = nn.Linear(10, 5)
+        swa = SWACollector(model, swa_start=0, swa_freq=1)
+        result = swa.update(model)
+        assert result['collected']
+        assert swa.n_averaged == 1
+
+    def test_delayed_start(self):
+        from training.utils_v37 import SWACollector
+        model = nn.Linear(10, 5)
+        swa = SWACollector(model, swa_start=5, swa_freq=1)
+        for _ in range(3):
+            result = swa.update(model)
+        assert not result['collected']
+        assert swa.n_averaged == 0
+
+    def test_apply_averaged(self):
+        from training.utils_v37 import SWACollector
+        model = nn.Linear(10, 5)
+        swa = SWACollector(model, swa_start=0, swa_freq=1)
+        # Collect original
+        swa.update(model)
+        # Change model
+        model.weight.data.add_(1.0)
+        swa.update(model)
+        # Apply average
+        swa.apply_averaged(model)
+        # Should be between original and modified
+        assert swa.n_averaged == 2
+
+    def test_frequency(self):
+        from training.utils_v37 import SWACollector
+        model = nn.Linear(10, 5)
+        swa = SWACollector(model, swa_start=0, swa_freq=3)
+        results = []
+        for _ in range(6):
+            results.append(swa.update(model))
+        collected = sum(1 for r in results if r['collected'])
+        assert collected == 2  # At steps 3, 6
+
+
+class TestBatchSizeWarmup:
+    """Тесты для Batch Size Warmup."""
+
+    def test_initial(self):
+        from training.utils_v37 import BatchSizeWarmup
+        bsw = BatchSizeWarmup(initial_batch_size=4, target_batch_size=32,
+                               warmup_steps=100)
+        assert bsw.get_batch_size() == 4
+
+    def test_final(self):
+        from training.utils_v37 import BatchSizeWarmup
+        bsw = BatchSizeWarmup(initial_batch_size=4, target_batch_size=32,
+                               warmup_steps=10)
+        for _ in range(20):
+            bsw.step()
+        assert bsw.get_batch_size() == 32
+
+    def test_increases(self):
+        from training.utils_v37 import BatchSizeWarmup
+        bsw = BatchSizeWarmup(initial_batch_size=4, target_batch_size=64,
+                               warmup_steps=100)
+        bs1 = bsw.get_batch_size()
+        for _ in range(50):
+            bsw.step()
+        bs2 = bsw.get_batch_size()
+        assert bs2 > bs1
+
+    def test_exponential(self):
+        from training.utils_v37 import BatchSizeWarmup
+        bsw = BatchSizeWarmup(initial_batch_size=4, target_batch_size=64,
+                               warmup_steps=100, strategy='exponential')
+        for _ in range(50):
+            bsw.step()
+        bs = bsw.get_batch_size()
+        assert 4 <= bs <= 64
+
+    def test_lr_scale(self):
+        from training.utils_v37 import BatchSizeWarmup
+        bsw = BatchSizeWarmup(initial_batch_size=8, target_batch_size=32)
+        scale = bsw.get_lr_scale()
+        assert scale == 8 / 32
+
+    def test_is_warmup_done(self):
+        from training.utils_v37 import BatchSizeWarmup
+        bsw = BatchSizeWarmup(warmup_steps=5)
+        assert not bsw.is_warmup_done
+        for _ in range(5):
+            bsw.step()
+        assert bsw.is_warmup_done
+
+    def test_get_info(self):
+        from training.utils_v37 import BatchSizeWarmup
+        bsw = BatchSizeWarmup()
+        info = bsw.get_info()
+        assert 'batch_size' in info
+
+
+class TestGradientPenalty:
+    """Тесты для Gradient Penalty."""
+
+    def test_compute(self):
+        from training.utils_v37 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=10.0)
+        x = torch.randn(4, 10)
+        result = gp.compute(model, x)
+        assert result['penalty'].item() > 0
+        assert result['grad_norm'] > 0
+
+    def test_custom_output_fn(self):
+        from training.utils_v37 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=1.0)
+        x = torch.randn(4, 10)
+
+        def out_fn(m, inp):
+            return m(inp).sum()
+
+        result = gp.compute(model, x, output_fn=out_fn)
+        assert result['penalty'].item() > 0
+
+    def test_l1_norm(self):
+        from training.utils_v37 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=1.0, norm_type='l1')
+        x = torch.randn(4, 10)
+        result = gp.compute(model, x)
+        assert result['penalty'].item() > 0
+
+    def test_simple_penalty(self):
+        from training.utils_v37 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=0.1)
+        penalty = gp.compute_simple(model)
+        assert penalty.item() > 0
+
+    def test_penalty_backward(self):
+        from training.utils_v37 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=1.0)
+        penalty = gp.compute_simple(model)
+        penalty.backward()
+        assert model.weight.grad is not None
+
+
+class TestV37Integration:
+    """Интеграционные тесты v37."""
+
+    def test_gc_training(self):
+        from training.utils_v37 import GradientCentralization
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gc = GradientCentralization()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gc.centralize(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_lookahead_training(self):
+        from training.utils_v37 import Lookahead
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        inner_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        la = Lookahead(inner_opt, k=3, alpha=0.5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(6):
+            la.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            la.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_swa_training(self):
+        from training.utils_v37 import SWACollector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        swa = SWACollector(model, swa_start=3, swa_freq=1)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            swa.update(model)
+        swa.apply_averaged(model)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+        assert swa.n_averaged > 0
+
+    def test_gradient_penalty_training(self):
+        from training.utils_v37 import GradientPenalty
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gp = GradientPenalty(lambda_gp=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            penalty = gp.compute_simple(model)
+            total = loss + penalty
+            total.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
