@@ -12542,3 +12542,693 @@ class TestKVCacheManager:
         info = kv.get_info()
         assert info['n_layers_cached'] == 1
         assert info['total_length'] == 5
+
+
+# ==================== v49 Tests ====================
+
+
+class TestGradientSurgery:
+    """Тесты для PCGrad."""
+
+    def test_project_no_conflict(self):
+        from training.utils_v49 import GradientSurgery
+        gs = GradientSurgery()
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([0.0, 1.0])
+        result = gs.project([g1, g2])
+        assert result['n_conflicts'] == 0
+
+    def test_project_with_conflict(self):
+        from training.utils_v49 import GradientSurgery
+        gs = GradientSurgery()
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([-1.0, 0.0])
+        result = gs.project([g1, g2])
+        assert result['n_conflicts'] > 0
+
+    def test_stats(self):
+        from training.utils_v49 import GradientSurgery
+        gs = GradientSurgery()
+        gs.project([torch.randn(10), torch.randn(10)])
+        stats = gs.get_stats()
+        assert 'total_conflicts' in stats
+
+
+class TestAdaptiveGradientClipping:
+    """Тесты для AGC."""
+
+    def test_clip(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc = AdaptiveGradientClipping(clip_factor=0.001)
+        result = agc.clip(model)
+        assert result['n_total'] > 0
+
+    def test_no_clip_with_large_factor(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc = AdaptiveGradientClipping(clip_factor=100.0)
+        result = agc.clip(model)
+        assert result['n_clipped'] == 0
+
+    def test_stats(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        agc = AdaptiveGradientClipping()
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        agc.clip(model)
+        stats = agc.get_stats()
+        assert 'clip_rate' in stats
+
+
+class TestCosineSimilarityLoss:
+    """Тесты для Cosine Similarity Loss."""
+
+    def test_positive_pairs(self):
+        from training.utils_v49 import CosineSimilarityLoss
+        csl = CosineSimilarityLoss()
+        x = torch.randn(4, 32)
+        loss = csl(x, x)
+        assert loss.item() < 0.01  # Same vectors → loss ≈ 0
+
+    def test_with_labels(self):
+        from training.utils_v49 import CosineSimilarityLoss
+        csl = CosineSimilarityLoss(margin=0.5)
+        x = torch.randn(4, 32)
+        y = torch.randn(4, 32)
+        labels = torch.tensor([1, 1, -1, -1]).float()
+        loss = csl(x, y, labels)
+        assert loss.item() >= 0
+
+    def test_similarity_matrix(self):
+        from training.utils_v49 import CosineSimilarityLoss
+        csl = CosineSimilarityLoss()
+        emb = torch.randn(4, 32)
+        sim = csl.compute_similarity_matrix(emb)
+        assert sim.shape == (4, 4)
+        # Diagonal should be ~1
+        assert (sim.diag() - 1.0).abs().max().item() < 0.01
+
+
+class TestMixupAugmentation:
+    """Тесты для Mixup."""
+
+    def test_mix(self):
+        from training.utils_v49 import MixupAugmentation
+        mixup = MixupAugmentation(alpha=0.2)
+        x = torch.randn(4, 10)
+        result = mixup.mix(x)
+        assert result['mixed_x'].shape == (4, 10)
+        assert 0.5 <= result['lam'] <= 1.0
+
+    def test_mix_with_labels(self):
+        from training.utils_v49 import MixupAugmentation
+        mixup = MixupAugmentation(alpha=0.4)
+        x = torch.randn(4, 10)
+        y = torch.randint(0, 5, (4,))
+        result = mixup.mix(x, y)
+        assert 'mixed_y' in result
+
+    def test_criterion(self):
+        from training.utils_v49 import MixupAugmentation
+        mixup = MixupAugmentation()
+        pred = torch.randn(4, 10)
+        y_a = torch.randint(0, 10, (4,))
+        y_b = torch.randint(0, 10, (4,))
+        loss = mixup.mixup_criterion(F.cross_entropy, pred, y_a, y_b, 0.7)
+        assert loss.item() > 0
+
+
+class TestSequenceCutMix:
+    """Тесты для CutMix."""
+
+    def test_cut_mix(self):
+        from training.utils_v49 import SequenceCutMix
+        cm = SequenceCutMix(alpha=1.0)
+        ids = torch.randint(0, 100, (4, 20))
+        result = cm.cut_mix(ids)
+        assert result['mixed_ids'].shape == (4, 20)
+        assert result['cut_start'] < result['cut_end']
+
+    def test_with_labels(self):
+        from training.utils_v49 import SequenceCutMix
+        cm = SequenceCutMix()
+        ids = torch.randint(0, 100, (4, 20))
+        labels = torch.randint(0, 100, (4, 20))
+        result = cm.cut_mix(ids, labels)
+        assert 'mixed_labels' in result
+        assert result['mixed_labels'].shape == (4, 20)
+
+    def test_criterion(self):
+        from training.utils_v49 import SequenceCutMix
+        cm = SequenceCutMix()
+        pred = torch.randn(4, 10)
+        y1 = torch.randint(0, 10, (4,))
+        y2 = torch.randint(0, 10, (4,))
+        loss = cm.cutmix_criterion(F.cross_entropy, pred, y1, y2, 0.8)
+        assert loss.item() > 0
+
+
+class TestV49Integration:
+    """Интеграционные тесты v49."""
+
+    def test_agc_training(self):
+        from training.utils_v49 import AdaptiveGradientClipping
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        agc = AdaptiveGradientClipping(clip_factor=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            agc.clip(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+
+# ==================== v50 Tests ====================
+
+
+class TestEntropyRegularization:
+    """Тесты для Entropy Regularization."""
+
+    def test_maximize(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization(weight=0.1, mode='maximize')
+        logits = torch.randn(4, 10)
+        result = er.compute(logits)
+        assert result['loss'].item() < 0  # Negative = maximize
+
+    def test_minimize(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization(weight=0.1, mode='minimize')
+        logits = torch.randn(4, 10)
+        result = er.compute(logits)
+        assert result['loss'].item() > 0
+
+    def test_3d_logits(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization()
+        logits = torch.randn(2, 8, 10)
+        result = er.compute(logits)
+        assert 0 <= result['normalized_entropy'] <= 1.0
+
+    def test_target_entropy(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization(target_entropy=1.0)
+        result = er.compute(torch.randn(4, 10))
+        assert result['loss'].item() >= 0
+
+    def test_stats(self):
+        from training.utils_v50 import EntropyRegularization
+        er = EntropyRegularization()
+        for _ in range(5):
+            er.compute(torch.randn(4, 10))
+        stats = er.get_stats()
+        assert stats['avg_entropy'] > 0
+
+
+class TestConfidencePenalty:
+    """Тесты для Confidence Penalty."""
+
+    def test_entropy_method(self):
+        from training.utils_v50 import ConfidencePenalty
+        cp = ConfidencePenalty(weight=0.1, threshold=0.5, method='entropy')
+        logits = torch.tensor([[10.0, 0, 0, 0, 0]])  # Very confident
+        result = cp.compute(logits)
+        assert result['avg_confidence'] > 0.9
+
+    def test_max_prob_method(self):
+        from training.utils_v50 import ConfidencePenalty
+        cp = ConfidencePenalty(method='max_prob', threshold=0.5)
+        logits = torch.tensor([[10.0, 0, 0, 0, 0]])
+        result = cp.compute(logits)
+        assert result['pct_overconfident'] > 0
+
+    def test_no_penalty_below_threshold(self):
+        from training.utils_v50 import ConfidencePenalty
+        cp = ConfidencePenalty(threshold=0.99, method='entropy')
+        logits = torch.randn(4, 100)  # Uniform-ish
+        result = cp.compute(logits)
+        # Most samples should not be overconfident with 100 classes
+        assert result['pct_overconfident'] < 0.5
+
+
+class TestDistillationTemperatureAnnealing:
+    """Тесты для Distillation Temperature Annealing."""
+
+    def test_linear(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing(
+            initial_temp=10.0, final_temp=1.0,
+            total_steps=100, schedule='linear'
+        )
+        t1 = dta.step()
+        for _ in range(98):
+            dta.step()
+        t2 = dta.step()
+        assert t1 > t2
+
+    def test_cosine(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing(schedule='cosine')
+        temps = [dta.step() for _ in range(100)]
+        assert temps[0] > temps[-1]
+
+    def test_exponential(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing(schedule='exponential')
+        t1 = dta.step()
+        for _ in range(98):
+            dta.step()
+        t2 = dta.step()
+        assert t1 > t2
+
+    def test_get_info(self):
+        from training.utils_v50 import DistillationTemperatureAnnealing
+        dta = DistillationTemperatureAnnealing()
+        dta.step()
+        info = dta.get_info()
+        assert 'current_temp' in info
+
+
+class TestProgressiveLayerFreezing:
+    """Тесты для Progressive Layer Freezing."""
+
+    def test_unfreeze_mode(self):
+        from training.utils_v50 import ProgressiveLayerFreezing
+        plf = ProgressiveLayerFreezing(n_layers=4, mode='unfreeze', steps_per_layer=1)
+        model = nn.ModuleDict({
+            'layers': nn.ModuleList([nn.Linear(10, 10) for _ in range(4)])
+        })
+        # Step 1: unfreeze top 1 layer
+        result = plf.step(model)
+        assert len(result['frozen_layers']) == 3
+
+    def test_freeze_mode(self):
+        from training.utils_v50 import ProgressiveLayerFreezing
+        plf = ProgressiveLayerFreezing(n_layers=4, mode='freeze', steps_per_layer=1)
+        model = nn.ModuleDict({
+            'layers': nn.ModuleList([nn.Linear(10, 10) for _ in range(4)])
+        })
+        result = plf.step(model)
+        assert len(result['frozen_layers']) == 1
+
+    def test_get_info(self):
+        from training.utils_v50 import ProgressiveLayerFreezing
+        plf = ProgressiveLayerFreezing()
+        info = plf.get_info()
+        assert 'mode' in info
+
+
+class TestTrainingMetricsAggregator:
+    """Тесты для Training Metrics Aggregator."""
+
+    def test_update(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator(window_size=10)
+        for i in range(20):
+            agg.update(loss=1.0 / (i + 1), accuracy=i * 0.05)
+        avgs = agg.get_averages()
+        assert 'loss' in avgs
+        assert 'accuracy' in avgs
+
+    def test_trends(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator(window_size=5)
+        for i in range(10):
+            agg.update(loss=10.0 - i)
+        trends = agg.get_trends()
+        assert trends['loss']['improving'] is True
+
+    def test_summary(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator()
+        agg.update(loss=1.0)
+        summary = agg.get_summary()
+        assert 'step' in summary
+        assert summary['step'] == 1
+
+    def test_reset(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator()
+        agg.update(loss=1.0)
+        agg.reset()
+        assert agg.get_averages() == {}
+
+    def test_tensor_input(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        agg = TrainingMetricsAggregator()
+        agg.update(loss=torch.tensor(1.5))
+        avgs = agg.get_averages()
+        assert abs(avgs['loss'] - 1.5) < 0.01
+
+
+class TestV50Integration:
+    """Интеграционные тесты v50."""
+
+    def test_entropy_reg_training(self):
+        from training.utils_v50 import EntropyRegularization
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        er = EntropyRegularization(weight=0.01, mode='maximize')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            logits, loss, _ = model(x, y)
+            ent_result = er.compute(logits)
+            total = loss + ent_result['loss']
+            total.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_metrics_with_model(self):
+        from training.utils_v50 import TrainingMetricsAggregator
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        agg = TrainingMetricsAggregator(window_size=3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            agg.update(loss=loss)
+        summary = agg.get_summary()
+        assert summary['step'] == 5
+
+
+# ==================== v51 Tests ====================
+
+
+class TestGradientVaccine:
+    """Тесты для Gradient Vaccine."""
+
+    def test_first_call_accepted(self):
+        from training.utils_v51 import GradientVaccine
+        gv = GradientVaccine()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        result = gv.check_and_filter(model)
+        assert result['accepted'] is True
+
+    def test_similar_gradients_accepted(self):
+        from training.utils_v51 import GradientVaccine
+        gv = GradientVaccine(threshold=0.1)
+        model = nn.Linear(10, 5)
+        x = torch.randn(2, 10)
+        model(x).sum().backward()
+        gv.check_and_filter(model)
+        model.zero_grad()
+        model(x).sum().backward()
+        result = gv.check_and_filter(model)
+        assert result['accepted'] is True
+
+    def test_stats(self):
+        from training.utils_v51 import GradientVaccine
+        gv = GradientVaccine()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        gv.check_and_filter(model)
+        stats = gv.get_stats()
+        assert stats['accepted'] == 1
+
+
+class TestScaledWeightStandardization:
+    """Тесты для Norm-Free."""
+
+    def test_forward(self):
+        from training.utils_v51 import ScaledWeightStandardization
+        linear = nn.Linear(10, 5)
+        sws = ScaledWeightStandardization(linear)
+        output = sws(torch.randn(2, 10))
+        assert output.shape == (2, 5)
+
+    def test_wrap_model(self):
+        from training.utils_v51 import ScaledWeightStandardization
+        model = nn.Sequential(nn.Linear(10, 5), nn.ReLU(), nn.Linear(5, 3))
+        count = ScaledWeightStandardization.wrap_model(model)
+        assert count == 2
+
+
+class TestSharpnessEstimator:
+    """Тесты для Sharpness Estimator."""
+
+    def test_estimate(self):
+        from training.utils_v51 import SharpnessEstimator
+        se = SharpnessEstimator(n_perturbations=3, epsilon=0.01)
+        model = nn.Linear(10, 5)
+        def loss_fn(m, d):
+            return m(d).sum()
+        result = se.estimate(model, loss_fn, torch.randn(2, 10))
+        assert result['sharpness'] >= 0
+        assert 'base_loss' in result
+
+    def test_trend(self):
+        from training.utils_v51 import SharpnessEstimator
+        se = SharpnessEstimator(n_perturbations=2)
+        model = nn.Linear(10, 5)
+        def loss_fn(m, d):
+            return m(d).sum()
+        for _ in range(3):
+            se.estimate(model, loss_fn, torch.randn(2, 10))
+        trend = se.get_trend()
+        assert 'trend' in trend
+
+
+class TestGradientFlowMonitor:
+    """Тесты для Gradient Flow Monitor."""
+
+    def test_record(self):
+        from training.utils_v51 import GradientFlowMonitor
+        gfm = GradientFlowMonitor()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        result = gfm.record(model)
+        assert len(result['layers']) == 2
+
+    def test_diagnose_healthy(self):
+        from training.utils_v51 import GradientFlowMonitor
+        gfm = GradientFlowMonitor()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        gfm.record(model)
+        diag = gfm.diagnose()
+        assert diag['healthy'] is True
+
+    def test_summary(self):
+        from training.utils_v51 import GradientFlowMonitor
+        gfm = GradientFlowMonitor()
+        model = nn.Linear(10, 5)
+        model(torch.randn(2, 10)).sum().backward()
+        gfm.record(model)
+        summary = gfm.get_summary()
+        assert summary['n_layers'] == 2
+
+
+class TestV51Integration:
+    """Интеграционные тесты v51."""
+
+    def test_grad_flow_training(self):
+        from training.utils_v51 import GradientFlowMonitor
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gfm = GradientFlowMonitor()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gfm.record(model)
+            opt.step()
+        diag = gfm.diagnose()
+        assert isinstance(diag['healthy'], bool)
+
+
+# ==================== v52 Tests ====================
+
+
+class TestSlidingWindowAttention:
+    """Тесты для Sliding Window Attention."""
+
+    def test_create_mask(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=2, causal=True)
+        mask = swa.create_mask(6)
+        assert mask.shape == (1, 1, 6, 6)
+        # Position 0 can only see itself
+        assert mask[0, 0, 0, 0] == 1
+        assert mask[0, 0, 0, 1] == 0
+
+    def test_causal(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=10, causal=True)
+        mask = swa.create_mask(4)
+        # No future tokens
+        assert mask[0, 0, 0, 1] == 0
+        assert mask[0, 0, 1, 0] == 1
+
+    def test_non_causal(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=1, causal=False)
+        mask = swa.create_mask(4)
+        assert mask[0, 0, 0, 1] == 1  # Can see future within window
+        assert mask[0, 0, 0, 2] == 0  # Outside window
+
+    def test_apply_mask(self):
+        from training.utils_v52 import SlidingWindowAttention
+        swa = SlidingWindowAttention(window_size=2)
+        scores = torch.zeros(1, 1, 4, 4)
+        masked = swa.apply_mask(scores, 4)
+        assert (masked[0, 0, 0, 3] < -1e8)  # Far away = masked
+
+
+class TestALiBiPositionalBias:
+    """Тесты для ALiBi."""
+
+    def test_get_bias(self):
+        from training.utils_v52 import ALiBiPositionalBias
+        alibi = ALiBiPositionalBias(n_heads=4)
+        bias = alibi.get_bias(8)
+        assert bias.shape == (1, 4, 8, 8)
+        # Diagonal should be 0
+        assert (bias[0, :, 0, 0] == 0).all()
+
+    def test_negative_bias(self):
+        from training.utils_v52 import ALiBiPositionalBias
+        alibi = ALiBiPositionalBias(n_heads=2)
+        bias = alibi.get_bias(4)
+        # Off-diagonal should be negative
+        assert (bias[0, :, 0, 1] < 0).all()
+
+    def test_forward(self):
+        from training.utils_v52 import ALiBiPositionalBias
+        alibi = ALiBiPositionalBias(n_heads=4)
+        scores = torch.zeros(2, 4, 8, 8)
+        biased = alibi(scores)
+        assert biased.shape == (2, 4, 8, 8)
+
+
+class TestRotaryPositionEmbedding:
+    """Тесты для RoPE."""
+
+    def test_forward_4d(self):
+        from training.utils_v52 import RotaryPositionEmbedding
+        rope = RotaryPositionEmbedding(dim=16, max_seq_len=64)
+        x = torch.randn(2, 4, 8, 16)
+        out = rope(x)
+        assert out.shape == (2, 4, 8, 16)
+
+    def test_forward_3d(self):
+        from training.utils_v52 import RotaryPositionEmbedding
+        rope = RotaryPositionEmbedding(dim=16)
+        x = torch.randn(2, 8, 16)
+        out = rope(x)
+        assert out.shape == (2, 8, 16)
+
+    def test_relative_position(self):
+        from training.utils_v52 import RotaryPositionEmbedding
+        rope = RotaryPositionEmbedding(dim=32)
+        q = torch.randn(1, 1, 4, 32)
+        q_rot = rope(q)
+        # RoPE should change the actual values
+        assert not torch.allclose(q, q_rot, atol=1e-4)
+        # But preserve norms (rotation preserves L2 norm)
+        norm_orig = q.norm(dim=-1)
+        norm_rot = q_rot.norm(dim=-1)
+        assert torch.allclose(norm_orig, norm_rot, atol=1e-3)
+
+
+class TestFlashAttentionApprox:
+    """Тесты для Flash Attention."""
+
+    def test_small_sequence(self):
+        from training.utils_v52 import FlashAttentionApprox
+        fa = FlashAttentionApprox(chunk_size=256, causal=True)
+        q = torch.randn(1, 2, 8, 16)
+        k = torch.randn(1, 2, 8, 16)
+        v = torch.randn(1, 2, 8, 16)
+        out = fa(q, k, v)
+        assert out.shape == (1, 2, 8, 16)
+
+    def test_chunked(self):
+        from training.utils_v52 import FlashAttentionApprox
+        fa = FlashAttentionApprox(chunk_size=4, causal=True)
+        q = torch.randn(1, 2, 12, 16)
+        k = torch.randn(1, 2, 12, 16)
+        v = torch.randn(1, 2, 12, 16)
+        out = fa(q, k, v)
+        assert out.shape == (1, 2, 12, 16)
+
+    def test_non_causal(self):
+        from training.utils_v52 import FlashAttentionApprox
+        fa = FlashAttentionApprox(chunk_size=4, causal=False)
+        q = torch.randn(1, 2, 8, 16)
+        k = torch.randn(1, 2, 8, 16)
+        v = torch.randn(1, 2, 8, 16)
+        out = fa(q, k, v)
+        assert out.shape == (1, 2, 8, 16)
+
+
+class TestMultiQueryAttentionHelper:
+    """Тесты для MQA/GQA."""
+
+    def test_mqa_expand(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=1)
+        kv = torch.randn(1, 1, 10, 16)
+        expanded = mqa.expand_kv(kv)
+        assert expanded.shape == (1, 8, 10, 16)
+
+    def test_gqa_expand(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        gqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=2)
+        kv = torch.randn(1, 2, 10, 16)
+        expanded = gqa.expand_kv(kv)
+        assert expanded.shape == (1, 8, 10, 16)
+
+    def test_mha_no_expand(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mha = MultiQueryAttentionHelper(n_heads=4, n_kv_heads=4)
+        kv = torch.randn(1, 4, 10, 16)
+        expanded = mha.expand_kv(kv)
+        assert torch.equal(expanded, kv)
+
+    def test_compute_attention(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        gqa = MultiQueryAttentionHelper(n_heads=4, n_kv_heads=2)
+        q = torch.randn(1, 4, 8, 16)
+        k = torch.randn(1, 2, 8, 16)
+        v = torch.randn(1, 2, 8, 16)
+        out = gqa.compute_attention(q, k, v)
+        assert out.shape == (1, 4, 8, 16)
+
+    def test_memory_savings(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=1)
+        savings = mqa.get_memory_savings(seq_len=1024, head_dim=64)
+        assert savings['savings_ratio'] > 0.8
+
+    def test_get_info(self):
+        from training.utils_v52 import MultiQueryAttentionHelper
+        mqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=1)
+        info = mqa.get_info()
+        assert info['type'] == 'MQA'
+        gqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=2)
+        assert gqa.get_info()['type'] == 'GQA'
