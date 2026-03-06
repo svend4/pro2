@@ -149,6 +149,13 @@ class YiJingConfig:
     dynamic_temperature: bool = False  # Dynamic temperature scaling
     use_sequence_packing: bool = False  # Sequence packing for efficiency
 
+    # v28: Lookahead, SWA, Grad Accumulation, Label Smoothing
+    lookahead_k: int = 0               # Lookahead sync every k steps (0 = выкл)
+    lookahead_alpha: float = 0.5       # Lookahead interpolation
+    swa_start: int = 0                 # SWA start step (0 = выкл)
+    grad_accum_steps: int = 1          # Gradient accumulation steps
+    label_smoothing_warmup: int = 0    # Label smoothing warmup steps (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

@@ -6654,3 +6654,303 @@ class TestV27Integration:
         result = dt.adapt(logits)
         assert not torch.isnan(scaled).any()
         assert result['temperature'] > 0
+
+
+# ==================== v28 Tests ====================
+
+
+class TestLookahead:
+    """Тесты для Lookahead Optimizer."""
+
+    def test_basic_step(self):
+        from training.utils_v28 import Lookahead
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        la = Lookahead(opt, k=3, alpha=0.5)
+        for _ in range(6):
+            la.zero_grad()
+            loss = model(torch.randn(4, 10)).sum()
+            loss.backward()
+            la.step()
+
+    def test_slow_update_at_k(self):
+        from training.utils_v28 import Lookahead
+        model = nn.Linear(10, 5, bias=False)
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        la = Lookahead(opt, k=3, alpha=1.0)  # alpha=1 → full copy
+        w_init = model.weight.data.clone()
+        for i in range(3):
+            la.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            la.step()
+        # After k=3 steps, slow update happens
+        assert not torch.equal(w_init, model.weight.data)
+
+    def test_sync_lookahead(self):
+        from training.utils_v28 import Lookahead
+        model = nn.Linear(10, 5)
+        la = Lookahead(torch.optim.Adam(model.parameters()), k=10)
+        la.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        la.step()
+        la.sync_lookahead()  # Force sync
+
+    def test_state_dict(self):
+        from training.utils_v28 import Lookahead
+        model = nn.Linear(10, 5)
+        la = Lookahead(torch.optim.Adam(model.parameters()))
+        sd = la.state_dict()
+        assert 'optimizer' in sd
+        assert 'slow_params' in sd
+
+
+class TestSWA:
+    """Тесты для Stochastic Weight Averaging."""
+
+    def test_no_update_before_start(self):
+        from training.utils_v28 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=10, swa_freq=5)
+        assert not swa.update(0)
+        assert not swa.update(5)
+        assert swa.n_averaged == 0
+
+    def test_update_after_start(self):
+        from training.utils_v28 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=5, swa_freq=5)
+        assert swa.update(5)
+        assert swa.n_averaged == 1
+        assert swa.update(10)
+        assert swa.n_averaged == 2
+
+    def test_apply_weights(self):
+        from training.utils_v28 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=0, swa_freq=1)
+        w_before = model.weight.data.clone()
+        swa.update(0)
+        # Change model weights
+        model.weight.data.fill_(99.0)
+        swa.update(1)
+        # Apply SWA (should be average)
+        swa.apply_swa_weights()
+        assert not torch.equal(model.weight.data, torch.full_like(model.weight.data, 99.0))
+
+    def test_reset(self):
+        from training.utils_v28 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=0, swa_freq=1)
+        swa.update(0)
+        swa.reset()
+        assert swa.n_averaged == 0
+
+    def test_apply_without_update(self):
+        from training.utils_v28 import SWA
+        model = nn.Linear(10, 5)
+        swa = SWA(model, swa_start=0, swa_freq=1)
+        assert not swa.apply_swa_weights()
+
+
+class TestGradAccumulationManager:
+    """Тесты для Gradient Accumulation Manager."""
+
+    def test_should_step(self):
+        from training.utils_v28 import GradAccumulationManager
+        mgr = GradAccumulationManager(base_accum_steps=4)
+        for i in range(3):
+            assert not mgr.should_step()
+        assert mgr.should_step()
+
+    def test_reset_micro_steps(self):
+        from training.utils_v28 import GradAccumulationManager
+        mgr = GradAccumulationManager(base_accum_steps=2)
+        mgr.should_step()
+        mgr.should_step()
+        mgr.reset_micro_steps()
+        assert mgr.micro_step == 0
+
+    def test_scale_loss(self):
+        from training.utils_v28 import GradAccumulationManager
+        mgr = GradAccumulationManager(base_accum_steps=4)
+        loss = torch.tensor(8.0)
+        scaled = mgr.scale_loss(loss)
+        assert scaled.item() == 2.0
+
+    def test_adapt_static(self):
+        from training.utils_v28 import GradAccumulationManager
+        mgr = GradAccumulationManager(base_accum_steps=4, dynamic=False)
+        result = mgr.adapt()
+        assert result['accum_steps'] == 4
+
+    def test_adapt_dynamic(self):
+        from training.utils_v28 import GradAccumulationManager
+        mgr = GradAccumulationManager(base_accum_steps=4, dynamic=True)
+        # Fill loss history
+        for _ in range(20):
+            mgr.scale_loss(torch.tensor(float(torch.randn(1).item() * 10)))
+        result = mgr.adapt()
+        assert result['accum_steps'] >= 1
+
+    def test_progress(self):
+        from training.utils_v28 import GradAccumulationManager
+        mgr = GradAccumulationManager(base_accum_steps=4)
+        mgr.should_step()
+        mgr.should_step()
+        assert mgr.get_progress() == 0.5
+
+
+class TestWarmupLabelSmoothing:
+    """Тесты для Label Smoothing with Warmup."""
+
+    def test_no_smoothing_at_start(self):
+        from training.utils_v28 import WarmupLabelSmoothing
+        wls = WarmupLabelSmoothing(vocab_size=100, target_smoothing=0.1, warmup_steps=100)
+        assert wls.current_smoothing == 0.0
+
+    def test_full_smoothing_after_warmup(self):
+        from training.utils_v28 import WarmupLabelSmoothing
+        wls = WarmupLabelSmoothing(vocab_size=100, target_smoothing=0.1, warmup_steps=10)
+        logits = torch.randn(2, 4, 100)
+        targets = torch.randint(0, 100, (2, 4))
+        for _ in range(10):
+            wls(logits, targets)
+        assert abs(wls.current_smoothing - 0.1) < 0.02
+
+    def test_forward_2d(self):
+        from training.utils_v28 import WarmupLabelSmoothing
+        wls = WarmupLabelSmoothing(vocab_size=50, warmup_steps=0)
+        logits = torch.randn(4, 50)
+        targets = torch.randint(0, 50, (4,))
+        loss = wls(logits, targets)
+        assert loss.item() > 0
+
+    def test_forward_3d(self):
+        from training.utils_v28 import WarmupLabelSmoothing
+        wls = WarmupLabelSmoothing(vocab_size=50, warmup_steps=0)
+        logits = torch.randn(2, 8, 50)
+        targets = torch.randint(0, 50, (2, 8))
+        loss = wls(logits, targets)
+        assert loss.item() > 0
+
+    def test_ignore_index(self):
+        from training.utils_v28 import WarmupLabelSmoothing
+        wls = WarmupLabelSmoothing(vocab_size=50, ignore_index=-100, warmup_steps=0)
+        logits = torch.randn(2, 4, 50)
+        targets = torch.full((2, 4), -100, dtype=torch.long)
+        loss = wls(logits, targets)
+        assert loss.item() == 0.0
+
+    def test_reset(self):
+        from training.utils_v28 import WarmupLabelSmoothing
+        wls = WarmupLabelSmoothing(vocab_size=50, warmup_steps=10)
+        wls._step = 5
+        wls.reset()
+        assert wls._step == 0
+
+
+class TestBatchSizeFinder:
+    """Тесты для Batch Size Finder."""
+
+    def test_find_cpu(self):
+        from training.utils_v28 import BatchSizeFinder
+        model = nn.Linear(16, 8)
+        # Wrap to accept (x, y) like model expects
+        class Wrapper(nn.Module):
+            def __init__(self, m):
+                super().__init__()
+                self.m = m
+            def forward(self, x, y=None):
+                out = self.m(x.float().mean(dim=-1, keepdim=True).expand(-1, 16))
+                return out, out.sum()
+        finder = BatchSizeFinder(Wrapper(model), min_batch=1, max_batch=16,
+                                 seq_len=4, vocab_size=32)
+        result = finder.find(device='cpu')
+        assert result['max_batch_size'] >= 1
+        assert result['recommended'] >= 1
+
+    def test_estimate_memory(self):
+        from training.utils_v28 import BatchSizeFinder
+        model = nn.Linear(64, 32)
+        finder = BatchSizeFinder(model)
+        mem = finder.estimate_memory(batch_size=8)
+        assert mem['param_mb'] > 0
+        assert mem['total_estimate_mb'] > 0
+
+
+class TestV28Integration:
+    """Интеграционные тесты v28."""
+
+    def test_lookahead_training(self):
+        from training.utils_v28 import Lookahead
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        la = Lookahead(opt, k=3, alpha=0.5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(6):
+            la.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            la.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_swa_training(self):
+        from training.utils_v28 import SWA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        swa = SWA(model, swa_start=2, swa_freq=2)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for step in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            swa.update(step)
+        swa.apply_swa_weights()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+        assert swa.n_averaged >= 1
+
+    def test_grad_accum_training(self):
+        from training.utils_v28 import GradAccumulationManager
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        mgr = GradAccumulationManager(base_accum_steps=2)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        steps_taken = 0
+        for _ in range(6):
+            _, loss, _ = model(x, y)
+            loss = mgr.scale_loss(loss)
+            loss.backward()
+            if mgr.should_step():
+                opt.step()
+                opt.zero_grad()
+                mgr.reset_micro_steps()
+                steps_taken += 1
+        assert steps_taken == 3
+
+    def test_warmup_label_smoothing_training(self):
+        from training.utils_v28 import WarmupLabelSmoothing
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        wls = WarmupLabelSmoothing(vocab_size=cfg.vocab_size, warmup_steps=5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            logits, _, _ = model(x)
+            loss = wls(logits, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
