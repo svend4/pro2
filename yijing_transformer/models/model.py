@@ -32,6 +32,11 @@ from .geometry import (
     GeometricFFN,
     GateLogger,
     GeometryCurriculumScheduler,
+    # Phase 3: Adaptive specialization
+    AdaptiveGatedPathSelector,
+    TaskAwareRouter,
+    DynamicCurriculumController,
+    MultiScaleHypercubeLayer,
 )
 
 
@@ -1119,6 +1124,251 @@ class HybridGatedGPT(nn.Module):
 
     def get_gate_summary(self):
         """Сводка по всем гейтам для отчёта."""
+        summary = {}
+        for i, layer in enumerate(self.layers):
+            summary[f'layer_{i}'] = layer.get_all_gate_stats()
+        return summary
+
+
+# ==================== PHASE 3: ADAPTIVE HYBRID GPT ====================
+
+class AdaptiveHybridLayer(nn.Module):
+    """
+    Адаптивный гибридный слой с расширенными гейтами:
+    - AdaptiveGatedPathSelector (контентно-зависимый, с температурой)
+    - TaskAwareRouter (sequence-level routing)
+    - MultiScaleHypercubeLayer (разный масштаб гиперкуба по слоям)
+    """
+    def __init__(self, cfg, layer_idx: int, hypercube_dim: int = 3):
+        super().__init__()
+        self.layer_idx = layer_idx
+        gate_bias = cfg.gate_init_bias
+
+        # === Attention ===
+        self.ln_attn = nn.LayerNorm(cfg.d_model)
+        self.std_attn = YiJingAttention(cfg)
+        self.geo_attn = GeometricAttention(cfg)
+        self.attn_gate = AdaptiveGatedPathSelector(
+            cfg.d_model, n_heads=min(cfg.n_heads, 4), init_bias=gate_bias
+        )
+
+        # === Multi-scale hypercube quantization ===
+        self.ln_hex = nn.LayerNorm(cfg.d_model)
+        self.multiscale_quant = MultiScaleHypercubeLayer(
+            cfg.d_model, hypercube_dim=hypercube_dim
+        )
+        self.quant_gate = AdaptiveGatedPathSelector(cfg.d_model, init_bias=gate_bias)
+
+        # BianGua
+        if cfg.use_bian_gua:
+            self.bian_gua = BianGuaTransform(cfg.d_model)
+        else:
+            self.bian_gua = None
+
+        # === FFN ===
+        self.ln_ffn = nn.LayerNorm(cfg.d_model)
+        if cfg.use_swiglu:
+            self.std_ffn = SwiGLU(cfg.d_model, cfg.ffn_hidden, cfg.dropout)
+        else:
+            self.std_ffn = nn.Sequential(
+                nn.Linear(cfg.d_model, cfg.ffn_hidden),
+                nn.GELU(),
+                nn.Linear(cfg.ffn_hidden, cfg.d_model),
+                nn.Dropout(cfg.dropout),
+            )
+        self.geo_ffn = GeometricFFN(cfg)
+        self.ffn_gate = AdaptiveGatedPathSelector(cfg.d_model, init_bias=gate_bias)
+
+        # Task-aware router (sequence-level)
+        self.task_router = TaskAwareRouter(cfg.d_model, n_strategies=4)
+
+        self._aux_loss = 0.0
+
+    def forward(self, x, kv_cache=None):
+        # Task-aware bias (sequence-level)
+        task_bias = self.task_router(x)  # (B, 1, 1)
+
+        # 1. Attention
+        h = self.ln_attn(x)
+        std_out, new_kv = self.std_attn(h, kv_cache=kv_cache)
+        geo_out = self.geo_attn(h)
+        attn_out = self.attn_gate(std_out, geo_out)
+        x = x + attn_out
+
+        # 2. Multi-scale quantization + BianGua
+        h = self.ln_hex(x)
+        identity = torch.zeros_like(h)
+        geo_contrib = self.multiscale_quant(h)
+        if self.bian_gua is not None:
+            geo_contrib = geo_contrib + self.bian_gua(h) - h
+        quant_out = self.quant_gate(identity, geo_contrib - h)
+        x = x + quant_out
+
+        # 3. FFN
+        h = self.ln_ffn(x)
+        std_ffn_out = self.std_ffn(h)
+        geo_ffn_out, aux_loss = self.geo_ffn(h)
+        ffn_out = self.ffn_gate(std_ffn_out, geo_ffn_out)
+        x = x + ffn_out
+        self._aux_loss = aux_loss
+
+        return x, new_kv
+
+    def get_all_gate_stats(self):
+        stats = {
+            'attention': self.attn_gate.get_gate_stats(),
+            'quantization': self.quant_gate.get_gate_stats(),
+            'ffn': self.ffn_gate.get_gate_stats(),
+            'task_router': self.task_router.get_strategy_stats(),
+        }
+        return stats
+
+
+class AdaptiveHybridGPT(nn.Module):
+    """
+    Phase 3: Adaptive Hybrid GPT.
+
+    Расширения по сравнению с HybridGatedGPT:
+    - AdaptiveGatedPathSelector (контентно-зависимый + температура)
+    - TaskAwareRouter (определяет тип задачи на уровне последовательности)
+    - MultiScaleHypercubeLayer (разный масштаб по слоям)
+    - DynamicCurriculumController (адаптирует силу геометрии)
+    """
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
+
+        if not cfg.use_rope:
+            self.pos_emb = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
+        else:
+            self.pos_emb = None
+
+        # Multi-scale: нижние слои — малые гиперкубы, верхние — большие
+        # Layer 0,1 → dim 2 (биграммы), Layer 2,3 → dim 3 (триграммы),
+        # Layer 4,5 → dim 4 (тетраграммы), Layer 6+ → dim 6 (гексаграммы)
+        def get_hypercube_dim(layer_idx, n_layers):
+            progress = layer_idx / max(n_layers - 1, 1)
+            if progress < 0.25:
+                return 2
+            elif progress < 0.5:
+                return 3
+            elif progress < 0.75:
+                return 4
+            else:
+                return 6
+
+        self.layers = nn.ModuleList([
+            AdaptiveHybridLayer(
+                cfg, layer_idx=i,
+                hypercube_dim=get_hypercube_dim(i, cfg.n_layers)
+            )
+            for i in range(cfg.n_layers)
+        ])
+        self.final_norm = nn.LayerNorm(cfg.d_model)
+        self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+
+        # Gate logger
+        self.gate_logger = GateLogger()
+
+        # Dynamic curriculum
+        self.dynamic_curriculum = DynamicCurriculumController(
+            base_strength=cfg.curriculum_target_strength,
+            adapt_rate=0.005,
+        )
+
+        self.apply(self._init_weights)
+        if cfg.weight_tying:
+            self.head.weight = self.tok_emb.weight
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.trunc_normal_(module.weight, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.trunc_normal_(module.weight, std=0.02)
+
+    def update_curriculum(self, step):
+        """Обновляет curriculum на основе текущих гейтов."""
+        # Собираем среднее значение гейтов
+        gate_values = []
+        gate_stds = []
+        for layer in self.layers:
+            stats = layer.get_all_gate_stats()
+            for gate_name, s in stats.items():
+                if 'gate_mean' in s:
+                    gate_values.append(s['gate_mean'])
+                if 'gate_std' in s:
+                    gate_stds.append(s['gate_std'])
+
+        if gate_values:
+            avg_gate = sum(gate_values) / len(gate_values)
+            avg_std = sum(gate_stds) / len(gate_stds) if gate_stds else 0.1
+            new_strength = self.dynamic_curriculum.update(avg_gate, avg_std)
+
+            # Обновляем масштаб геометрии
+            for layer in self.layers:
+                layer.multiscale_quant.scale.data.fill_(new_strength)
+
+    def log_gates(self, step):
+        return self.gate_logger.log_step(step, self.layers)
+
+    def forward(self, idx, targets=None, kv_cache=None):
+        b, t = idx.size()
+        x = self.tok_emb(idx)
+        if self.pos_emb is not None:
+            x = x + self.pos_emb[:, :t, :]
+
+        new_kv_cache = []
+        for i, layer in enumerate(self.layers):
+            layer_cache = kv_cache[i] if kv_cache is not None else None
+            x, new_kv = layer(x, kv_cache=layer_cache)
+            new_kv_cache.append(new_kv)
+
+        x = self.final_norm(x)
+        logits = self.head(x)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)),
+                targets.reshape(-1),
+            )
+            for layer in self.layers:
+                aux = layer._aux_loss
+                if isinstance(aux, torch.Tensor):
+                    loss = loss + aux
+
+        return logits, loss, new_kv_cache
+
+    def count_parameters(self):
+        total = sum(p.numel() for p in self.parameters())
+        geo_keys = ['to_qd', 'from_qd', 'hex_scale', 'head_scales', 'head_dirs',
+                     'bian_gua', 'quantizer', 'trigram_dirs', 'router_proj',
+                     'geo_attn', 'geo_ffn', 'gate_proj', 'path_gate',
+                     'attn_gate', 'quant_gate', 'ffn_gate', 'multiscale',
+                     'task_router', 'strategy', 'vertices']
+        geo_params = 0
+        for name, p in self.named_parameters():
+            if any(k in name for k in geo_keys):
+                geo_params += p.numel()
+        return total, geo_params
+
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        for _ in range(max_new_tokens):
+            idx_input = idx if idx.size(1) <= self.cfg.block_size else idx[:, -self.cfg.block_size:]
+            logits, _, _ = self(idx_input)
+            logits = logits[:, -1, :] / temperature
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, idx_next), dim=1)
+        return idx
+
+    def get_gate_summary(self):
         summary = {}
         for i, layer in enumerate(self.layers):
             summary[f'layer_{i}'] = layer.get_all_gate_stats()

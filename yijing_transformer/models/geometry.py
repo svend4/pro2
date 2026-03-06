@@ -1176,3 +1176,197 @@ class GeometryCurriculumScheduler:
             # Начинаем с bias=2 (сильное предпочтение геометрии), снижаем до 0
             return 2.0 * (1 - progress)
         return 0.0
+
+
+# ==================== ФАЗА 3: АДАПТИВНАЯ СПЕЦИАЛИЗАЦИЯ ====================
+
+class AdaptiveGatedPathSelector(nn.Module):
+    """
+    Расширенный гейт с layer-specific и input-dependent поведением.
+
+    Отличия от GatedPathSelector:
+    1. Гейт зависит от КОНТЕНТА входа (не только среднего)
+    2. Поддерживает multi-head gate (разный гейт для разных голов)
+    3. Temperature scheduling для управления уверенностью
+    """
+    def __init__(self, d_model: int, n_heads: int = 1, init_bias: float = 0.0):
+        super().__init__()
+        self.n_heads = n_heads
+
+        # Контентно-зависимый гейт: входная + позиционная информация
+        self.gate_proj = nn.Linear(d_model, n_heads, bias=True)
+        nn.init.zeros_(self.gate_proj.weight)
+        nn.init.constant_(self.gate_proj.bias, init_bias)
+
+        # Обучаемая температура для управления «уверенностью»
+        self.log_temperature = nn.Parameter(torch.tensor(0.0))  # T=1.0
+
+        # Статистика
+        self._last_gate_mean = 0.5
+        self._last_gate_std = 0.0
+        self._last_gate_entropy = 0.0
+
+    def forward(self, x_standard, x_geometric):
+        combined = (x_standard + x_geometric) * 0.5
+        temp = self.log_temperature.exp().clamp(min=0.1, max=10.0)
+
+        raw_gate = self.gate_proj(combined) / temp  # (B, T, n_heads)
+        gate = torch.sigmoid(raw_gate)
+
+        if self.n_heads == 1:
+            gate = gate  # (B, T, 1)
+        else:
+            # Multi-head: средний гейт для смешивания
+            gate = gate.mean(dim=-1, keepdim=True)  # (B, T, 1)
+
+        # Логирование
+        with torch.no_grad():
+            self._last_gate_mean = gate.mean().item()
+            self._last_gate_std = gate.std().item()
+            # Энтропия гейта (мера неопределённости решения)
+            g = gate.mean().clamp(1e-6, 1 - 1e-6)
+            self._last_gate_entropy = -(g * g.log() + (1-g) * (1-g).log()).item()
+
+        return gate * x_geometric + (1 - gate) * x_standard
+
+    def get_gate_stats(self):
+        return {
+            'gate_mean': self._last_gate_mean,
+            'gate_std': self._last_gate_std,
+            'gate_entropy': self._last_gate_entropy,
+            'temperature': self.log_temperature.exp().item(),
+            'prefers_geometry': self._last_gate_mean > 0.5,
+        }
+
+
+class TaskAwareRouter(nn.Module):
+    """
+    Task-aware routing: определяет тип входного паттерна и направляет
+    через соответствующий путь.
+
+    Механизм:
+    1. Проецирует средний вектор последовательности в пространство «задач»
+    2. Определяет softmax-веса для K стратегий
+    3. Каждая стратегия = своя комбинация gate biases
+
+    Это позволяет модели адаптивно выбирать стратегию на уровне
+    входной последовательности, а не только на уровне токена.
+    """
+    def __init__(self, d_model: int, n_strategies: int = 4):
+        super().__init__()
+        self.n_strategies = n_strategies
+        self.strategy_proj = nn.Linear(d_model, n_strategies, bias=True)
+        # Каждая стратегия задаёт bias для гейта: от -2 (standard) до +2 (geometry)
+        self.strategy_biases = nn.Parameter(
+            torch.linspace(-1.0, 1.0, n_strategies)
+        )
+        self._last_strategy_probs = None
+
+    def forward(self, x):
+        """
+        Args:
+            x: (B, T, D) — входная последовательность
+        Returns:
+            gate_bias: (B, 1, 1) — bias для гейта на уровне последовательности
+        """
+        x_mean = x.mean(dim=1)  # (B, D)
+        logits = self.strategy_proj(x_mean)  # (B, n_strategies)
+        probs = F.softmax(logits, dim=-1)  # (B, n_strategies)
+
+        # Взвешенный bias
+        gate_bias = (probs * self.strategy_biases.unsqueeze(0)).sum(dim=-1)  # (B,)
+
+        with torch.no_grad():
+            self._last_strategy_probs = probs.mean(dim=0).tolist()
+
+        return gate_bias.unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
+
+    def get_strategy_stats(self):
+        if self._last_strategy_probs is not None:
+            return {f'strategy_{i}': p for i, p in enumerate(self._last_strategy_probs)}
+        return {}
+
+
+class DynamicCurriculumController:
+    """
+    Dynamic curriculum: адаптирует стратегию обучения на основе
+    текущего состояния гейтов.
+
+    Если модель «отвергает» геометрию (гейты < 0.3) — уменьшаем давление.
+    Если модель «принимает» геометрию (гейты > 0.7) — можно увеличить.
+    Если гейты нестабильны (std > 0.2) — замедляем изменения.
+    """
+    def __init__(self, base_strength: float = 0.1, adapt_rate: float = 0.01):
+        self.base_strength = base_strength
+        self.adapt_rate = adapt_rate
+        self.current_strength = base_strength
+        self.history = []
+
+    def update(self, avg_gate_value: float, gate_std: float):
+        """Обновляет силу геометрии на основе текущих гейтов."""
+        if gate_std > 0.2:
+            # Нестабильные гейты — не менять
+            pass
+        elif avg_gate_value > 0.6:
+            # Модель принимает геометрию — можно немного усилить
+            self.current_strength = min(
+                self.current_strength + self.adapt_rate,
+                self.base_strength * 3.0
+            )
+        elif avg_gate_value < 0.35:
+            # Модель отвергает — уменьшить давление
+            self.current_strength = max(
+                self.current_strength - self.adapt_rate,
+                self.base_strength * 0.1
+            )
+
+        self.history.append({
+            'strength': self.current_strength,
+            'avg_gate': avg_gate_value,
+            'gate_std': gate_std,
+        })
+
+        return self.current_strength
+
+
+class MultiScaleHypercubeLayer(nn.Module):
+    """
+    Фаза 6: Multi-scale hypercube — разные размерности гиперкуба по слоям.
+
+    Идея: нижние слои используют маленькие гиперкубы (биграммы 2D),
+    верхние — большие (гексаграммы 6D, октограммы 8D).
+
+    Это соответствует иерархии абстракций:
+    - Низкоуровневые → простые бинарные решения (2D)
+    - Высокоуровневые → сложные комбинации (6D, 8D)
+    """
+    def __init__(self, d_model: int, hypercube_dim: int = 3, temp: float = 0.3):
+        super().__init__()
+        self.dim = hypercube_dim
+        n_vertices = 2 ** hypercube_dim
+
+        # Генерируем вершины гиперкуба нужной размерности
+        vertices = generate_hypercube(hypercube_dim)  # (2^dim, dim)
+        self.register_buffer('vertices', vertices)
+
+        # Проекции
+        self.proj_to = nn.Linear(d_model, hypercube_dim, bias=False)
+        self.proj_from = nn.Linear(hypercube_dim, d_model, bias=False)
+        self.temp = nn.Parameter(torch.tensor(temp).log())
+        self.scale = nn.Parameter(torch.tensor(0.01))
+
+    def forward(self, x):
+        """
+        x: (B, T, D) → квантизация к вершинам {-1,+1}^dim → (B, T, D)
+        """
+        z = self.proj_to(x)  # (B, T, dim)
+        temp = self.temp.exp().clamp(min=0.01, max=5.0)
+
+        # Soft quantization к ближайшим вершинам
+        z_flat = z.reshape(-1, self.dim)  # (B*T, dim)
+        dists = torch.cdist(z_flat.unsqueeze(0), self.vertices.unsqueeze(0)).squeeze(0)  # (B*T, 2^dim)
+        weights = F.softmax(-dists / temp, dim=-1)  # (B*T, 2^dim)
+        quantized = weights @ self.vertices  # (B*T, dim)
+        quantized = quantized.reshape_as(z)
+
+        return x + self.scale * self.proj_from(quantized)
