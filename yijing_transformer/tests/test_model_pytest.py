@@ -9815,3 +9815,314 @@ class TestV37Integration:
             opt.step()
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v38 Tests ====================
+
+
+class TestMultiScaleLoss:
+    """Тесты для Multi-Scale Loss."""
+
+    def test_compute(self):
+        from training.utils_v38 import MultiScaleLoss
+        msl = MultiScaleLoss(scales=[1.0, 0.5, 0.25])
+        losses = [torch.tensor(2.0), torch.tensor(3.0), torch.tensor(4.0)]
+        result = msl.compute(losses)
+        assert result['total_loss'].item() > 0
+        assert len(result['per_scale']) == 3
+
+    def test_mean_reduction(self):
+        from training.utils_v38 import MultiScaleLoss
+        msl = MultiScaleLoss(scales=[1.0, 1.0], reduction='mean')
+        losses = [torch.tensor(2.0), torch.tensor(4.0)]
+        result = msl.compute(losses)
+        # Weights normalized: [0.5, 0.5], loss = 0.5*2 + 0.5*4 = 3.0
+        assert abs(result['total_loss'].item() - 3.0) < 1e-5
+
+    def test_sum_reduction(self):
+        from training.utils_v38 import MultiScaleLoss
+        msl = MultiScaleLoss(scales=[1.0, 0.5], reduction='sum')
+        losses = [torch.tensor(2.0), torch.tensor(4.0)]
+        result = msl.compute(losses)
+        # 1.0*2 + 0.5*4 = 4.0
+        assert abs(result['total_loss'].item() - 4.0) < 1e-5
+
+    def test_fewer_losses_than_scales(self):
+        from training.utils_v38 import MultiScaleLoss
+        msl = MultiScaleLoss(scales=[1.0, 0.5, 0.25])
+        losses = [torch.tensor(2.0)]
+        result = msl.compute(losses)
+        assert len(result['per_scale']) == 1
+
+    def test_with_projections(self):
+        from training.utils_v38 import MultiScaleLoss
+        msl = MultiScaleLoss(scales=[1.0, 0.5])
+        hidden = [torch.randn(2, 4, 16), torch.randn(2, 4, 16)]
+        target = torch.randint(0, 10, (2, 4))
+        projs = [nn.Linear(16, 10), nn.Linear(16, 10)]
+        loss_fn = nn.CrossEntropyLoss()
+        result = msl.compute_with_projections(hidden, target, loss_fn, projs)
+        assert result['total_loss'].item() > 0
+
+
+class TestGradAccumScheduler:
+    """Тесты для Gradient Accumulation Scheduler."""
+
+    def test_initial(self):
+        from training.utils_v38 import GradAccumScheduler
+        gas = GradAccumScheduler(initial_steps=1, max_steps=8)
+        assert gas.get_accum_steps() == 1
+
+    def test_increases(self):
+        from training.utils_v38 import GradAccumScheduler
+        gas = GradAccumScheduler(initial_steps=1, max_steps=16,
+                                  increase_every=5, increase_factor=2)
+        for _ in range(5):
+            gas.step()
+        assert gas.get_accum_steps() == 2
+
+    def test_max_cap(self):
+        from training.utils_v38 import GradAccumScheduler
+        gas = GradAccumScheduler(initial_steps=1, max_steps=4,
+                                  increase_every=1, increase_factor=2)
+        for _ in range(20):
+            gas.step()
+        assert gas.get_accum_steps() == 4
+
+    def test_effective_batch_size(self):
+        from training.utils_v38 import GradAccumScheduler
+        gas = GradAccumScheduler(initial_steps=4)
+        assert gas.get_effective_batch_size(8) == 32
+
+    def test_get_info(self):
+        from training.utils_v38 import GradAccumScheduler
+        gas = GradAccumScheduler()
+        info = gas.get_info()
+        assert 'current_steps' in info
+
+
+class TestParameterFreezingScheduler:
+    """Тесты для Parameter Freezing."""
+
+    def test_initial_freeze(self):
+        from training.utils_v38 import ParameterFreezingScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3), nn.Linear(3, 2))
+        pfs = ParameterFreezingScheduler(model, initial_unfrozen=1)
+        frozen = pfs.get_frozen_layers()
+        assert len(frozen) == 2  # 2 of 3 frozen
+
+    def test_gradual_unfreeze(self):
+        from training.utils_v38 import ParameterFreezingScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3), nn.Linear(3, 2))
+        pfs = ParameterFreezingScheduler(model, unfreeze_every=5, initial_unfrozen=1)
+        for _ in range(5):
+            pfs.step()
+        frozen = pfs.get_frozen_layers()
+        assert len(frozen) == 1  # One unfrozen
+
+    def test_unfreeze_all(self):
+        from training.utils_v38 import ParameterFreezingScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        pfs = ParameterFreezingScheduler(model, initial_unfrozen=0)
+        pfs.unfreeze_all()
+        assert len(pfs.get_frozen_layers()) == 0
+
+    def test_trainable_params(self):
+        from training.utils_v38 import ParameterFreezingScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        total = sum(p.numel() for p in model.parameters())
+        pfs = ParameterFreezingScheduler(model, initial_unfrozen=1)
+        trainable = pfs.get_trainable_params()
+        assert trainable < total
+
+    def test_get_info(self):
+        from training.utils_v38 import ParameterFreezingScheduler
+        model = nn.Sequential(nn.Linear(10, 5))
+        pfs = ParameterFreezingScheduler(model)
+        info = pfs.get_info()
+        assert 'n_frozen' in info
+
+
+class TestCheckpointManager:
+    """Тесты для Checkpoint Manager."""
+
+    def test_save(self):
+        from training.utils_v38 import CheckpointManager
+        cm = CheckpointManager(max_checkpoints=3, mode='min')
+        model = nn.Linear(10, 5)
+        result = cm.update(model, 2.0)
+        assert result['saved']
+
+    def test_top_k(self):
+        from training.utils_v38 import CheckpointManager
+        cm = CheckpointManager(max_checkpoints=2, mode='min')
+        model = nn.Linear(10, 5)
+        cm.update(model, 3.0)
+        cm.update(model, 1.0)
+        cm.update(model, 2.0)
+        summary = cm.get_summary()
+        assert summary['n_checkpoints'] == 2
+        assert summary['best_metric'] == 1.0
+
+    def test_load_best(self):
+        from training.utils_v38 import CheckpointManager
+        cm = CheckpointManager(max_checkpoints=2, mode='min')
+        model = nn.Linear(10, 5)
+        original = model.weight.data.clone()
+        cm.update(model, 1.0)
+        model.weight.data.add_(1.0)
+        cm.update(model, 2.0)
+        info = cm.load_best(model)
+        assert info['metric'] == 1.0
+        assert torch.allclose(model.weight.data, original)
+
+    def test_max_mode(self):
+        from training.utils_v38 import CheckpointManager
+        cm = CheckpointManager(max_checkpoints=2, mode='max')
+        model = nn.Linear(10, 5)
+        cm.update(model, 0.8)
+        cm.update(model, 0.95)
+        cm.update(model, 0.7)
+        assert cm.get_summary()['best_metric'] == 0.95
+
+    def test_empty(self):
+        from training.utils_v38 import CheckpointManager
+        cm = CheckpointManager()
+        assert cm.get_best() is None
+
+
+class TestCosineWarmRestarts:
+    """Тесты для SGDR."""
+
+    def test_initial_lr(self):
+        from training.utils_v38 import CosineWarmRestarts
+        cwr = CosineWarmRestarts(base_lr=1e-3, warmup_steps=0)
+        assert abs(cwr.get_lr() - 1e-3) < 1e-7
+
+    def test_lr_decreases(self):
+        from training.utils_v38 import CosineWarmRestarts
+        cwr = CosineWarmRestarts(base_lr=1e-3, min_lr=1e-6, T_0=100, warmup_steps=0)
+        lr1 = cwr.get_lr()
+        for _ in range(50):
+            cwr.step()
+        lr2 = cwr.get_lr()
+        assert lr2 < lr1
+
+    def test_restart(self):
+        from training.utils_v38 import CosineWarmRestarts
+        cwr = CosineWarmRestarts(base_lr=1e-3, T_0=10, warmup_steps=0)
+        restarts = 0
+        for _ in range(30):
+            result = cwr.step()
+            if result['restart']:
+                restarts += 1
+        assert restarts >= 1
+
+    def test_warmup_in_cycle(self):
+        from training.utils_v38 import CosineWarmRestarts
+        cwr = CosineWarmRestarts(base_lr=1e-3, min_lr=1e-6,
+                                  T_0=20, warmup_steps=5)
+        lr_start = cwr.get_lr()
+        assert lr_start < 1e-3  # Should be in warmup
+
+    def test_apply_to_optimizer(self):
+        from training.utils_v38 import CosineWarmRestarts
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        cwr = CosineWarmRestarts(base_lr=1e-3)
+        lr = cwr.apply_to_optimizer(opt)
+        assert opt.param_groups[0]['lr'] == lr
+
+    def test_t_mult(self):
+        from training.utils_v38 import CosineWarmRestarts
+        cwr = CosineWarmRestarts(T_0=5, T_mult=2, warmup_steps=0)
+        # First cycle: 5 steps
+        for _ in range(5):
+            cwr.step()
+        assert cwr.current_cycle == 1
+        # Second cycle: 10 steps
+        info = cwr.get_info()
+        assert info['cycle_length'] == 10
+
+    def test_get_info(self):
+        from training.utils_v38 import CosineWarmRestarts
+        cwr = CosineWarmRestarts()
+        info = cwr.get_info()
+        assert 'lr' in info
+        assert 'cycle' in info
+
+
+class TestV38Integration:
+    """Интеграционные тесты v38."""
+
+    def test_multi_scale_training(self):
+        from training.utils_v38 import MultiScaleLoss
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        msl = MultiScaleLoss(scales=[1.0, 0.3])
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            result = msl.compute([loss, loss * 0.5])
+            result['total_loss'].backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_freezing_training(self):
+        from training.utils_v38 import ParameterFreezingScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        pfs = ParameterFreezingScheduler(model, unfreeze_every=3, initial_unfrozen=2)
+        opt = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for i in range(6):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            pfs.step()
+        pfs.unfreeze_all()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_sgdr_training(self):
+        from training.utils_v38 import CosineWarmRestarts
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        cwr = CosineWarmRestarts(base_lr=1e-3, T_0=5, warmup_steps=2)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            cwr.apply_to_optimizer(opt)
+            opt.step()
+            cwr.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_checkpoint_training(self):
+        from training.utils_v38 import CheckpointManager
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        cm = CheckpointManager(max_checkpoints=2, mode='min')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            cm.update(model, loss.item())
+        info = cm.load_best(model)
+        assert info is not None
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()

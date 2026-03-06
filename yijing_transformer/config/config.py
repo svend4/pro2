@@ -210,6 +210,13 @@ class YiJingConfig:
     batch_size_warmup_steps: int = 0      # Batch size warmup steps (0 = выкл)
     gradient_penalty_lambda: float = 0.0  # R1 gradient penalty (0 = выкл)
 
+    # v38: Multi-Scale Loss, Grad Accum Scheduler, Freezing, Checkpoints, SGDR
+    multi_scale_loss: bool = False        # Multi-scale loss
+    grad_accum_schedule: bool = False     # Dynamic gradient accumulation
+    gradual_unfreezing: bool = False      # Gradual layer unfreezing (ULMFiT)
+    checkpoint_top_k: int = 0            # Top-k checkpoint saving (0 = выкл)
+    cosine_warm_restarts: bool = False    # SGDR cosine warm restarts
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
