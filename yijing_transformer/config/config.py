@@ -236,6 +236,13 @@ class YiJingConfig:
     optimizer_inspector: bool = False     # Optimizer state inspector
     batch_size_finder: bool = False       # Batch size finder
 
+    # v42: SGDR, Gradient Accumulation, Model EMA, Curriculum, Stability Monitor
+    cosine_warm_restarts: bool = False    # SGDR scheduler
+    gradient_accumulation: int = 1        # Gradient accumulation steps
+    model_ema: bool = False               # Model EMA
+    curriculum_learning: bool = False     # Curriculum learning
+    stability_monitor: bool = False       # Training stability monitor
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

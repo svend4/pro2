@@ -11029,3 +11029,302 @@ class TestV41Integration:
         probe = LossLandscapeProbe(step_sizes=[-0.1, 0.0, 0.1])
         result = probe.probe_1d(model, loss_fn)
         assert len(result['losses']) == 3
+
+
+# ==================== v42 Tests ====================
+
+
+class TestCosineAnnealingWarmRestarts:
+    """Тесты для SGDR scheduler."""
+
+    def test_step(self):
+        from training.utils_v42 import CosineAnnealingWarmRestarts
+        sched = CosineAnnealingWarmRestarts(base_lr=0.01, T_0=10)
+        lrs = [sched.step() for _ in range(20)]
+        assert len(lrs) == 20
+        assert all(lr >= 1e-6 for lr in lrs)
+
+    def test_restart(self):
+        from training.utils_v42 import CosineAnnealingWarmRestarts
+        sched = CosineAnnealingWarmRestarts(base_lr=0.01, T_0=10, T_mult=1)
+        # After T_0 steps, LR should restart (go back up)
+        lrs = [sched.step() for _ in range(15)]
+        # At step 10, restart happens; step 11 should be higher than step 9
+        assert lrs[10] > lrs[8]
+
+    def test_apply_optimizer(self):
+        from training.utils_v42 import CosineAnnealingWarmRestarts
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=0.01)
+        sched = CosineAnnealingWarmRestarts(base_lr=0.01, T_0=10)
+        lr = sched.apply(opt)
+        assert opt.param_groups[0]['lr'] == lr
+
+    def test_get_info(self):
+        from training.utils_v42 import CosineAnnealingWarmRestarts
+        sched = CosineAnnealingWarmRestarts()
+        sched.step()
+        info = sched.get_info()
+        assert 'current_lr' in info
+        assert info['total_steps'] == 1
+
+
+class TestGradientAccumulationManager:
+    """Тесты для Gradient Accumulation."""
+
+    def test_should_step(self):
+        from training.utils_v42 import GradientAccumulationManager
+        gam = GradientAccumulationManager(accumulation_steps=4)
+        steps = []
+        model = nn.Linear(10, 5)
+        for i in range(8):
+            loss = model(torch.randn(2, 10)).sum()
+            result = gam.accumulate(loss)
+            steps.append(result['should_step'])
+            if result['should_step']:
+                model.zero_grad()
+        # Steps 4 and 8 should trigger optimizer step
+        assert steps[3] is True
+        assert steps[7] is True
+        assert steps[0] is False
+
+    def test_effective_batch_size(self):
+        from training.utils_v42 import GradientAccumulationManager
+        gam = GradientAccumulationManager(accumulation_steps=8)
+        assert gam.get_effective_batch_size(16) == 128
+
+    def test_normalize(self):
+        from training.utils_v42 import GradientAccumulationManager
+        gam = GradientAccumulationManager(accumulation_steps=2, normalize=True)
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        result = gam.accumulate(loss)
+        assert result['micro_step'] == 1
+
+    def test_get_info(self):
+        from training.utils_v42 import GradientAccumulationManager
+        gam = GradientAccumulationManager(accumulation_steps=4)
+        info = gam.get_info()
+        assert info['accumulation_steps'] == 4
+
+
+class TestModelEMA:
+    """Тесты для Model EMA."""
+
+    def test_update(self):
+        from training.utils_v42 import ModelEMA
+        model = nn.Linear(10, 5)
+        ema = ModelEMA(model, decay=0.9)
+        # Modify model
+        model.weight.data.add_(1.0)
+        result = ema.update(model)
+        assert result['step'] == 1
+
+    def test_shadow_differs(self):
+        from training.utils_v42 import ModelEMA
+        model = nn.Linear(10, 5)
+        ema = ModelEMA(model, decay=0.9)
+        model.weight.data.add_(1.0)
+        ema.update(model)
+        div = ema.divergence(model)
+        assert div['mean_divergence'] > 0
+
+    def test_apply_restore(self):
+        from training.utils_v42 import ModelEMA
+        model = nn.Linear(10, 5)
+        original = model.weight.data.clone()
+        ema = ModelEMA(model, decay=0.9)
+        model.weight.data.add_(1.0)
+        ema.update(model)
+        ema.apply_shadow(model)
+        # Now model has EMA weights
+        assert not torch.equal(model.weight.data, original + 1.0)
+        ema.restore(model)
+        # Now model has original modified weights
+        assert torch.equal(model.weight.data, original + 1.0)
+
+    def test_warmup(self):
+        from training.utils_v42 import ModelEMA
+        model = nn.Linear(10, 5)
+        ema = ModelEMA(model, decay=0.999, warmup_steps=10)
+        model.weight.data.add_(0.1)
+        result = ema.update(model)
+        assert result['decay_used'] < 0.999  # Lower during warmup
+
+    def test_get_shadow_state(self):
+        from training.utils_v42 import ModelEMA
+        model = nn.Linear(10, 5)
+        ema = ModelEMA(model)
+        state = ema.get_shadow_state()
+        assert 'weight' in state
+
+
+class TestCurriculumScheduler:
+    """Тесты для Curriculum Learning."""
+
+    def test_linear(self):
+        from training.utils_v42 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='linear',
+                                 warmup_fraction=0.0)
+        d1 = cs.step()
+        for _ in range(98):
+            cs.step()
+        d100 = cs.step()
+        assert d100 > d1
+
+    def test_sqrt(self):
+        from training.utils_v42 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='sqrt',
+                                 warmup_fraction=0.0)
+        for _ in range(50):
+            cs.step()
+        d = cs.step()
+        assert d > 0.5  # sqrt(0.51) > 0.7
+
+    def test_step_strategy(self):
+        from training.utils_v42 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=100, strategy='step',
+                                 warmup_fraction=0.0)
+        for _ in range(10):
+            cs.step()
+        d = cs.step()
+        assert d == 0.33
+
+    def test_sequence_length(self):
+        from training.utils_v42 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=10, warmup_fraction=0.0)
+        for _ in range(10):
+            cs.step()
+        length = cs.get_sequence_length(min_len=8, max_len=128)
+        assert 8 <= length <= 128
+
+    def test_noise_level(self):
+        from training.utils_v42 import CurriculumScheduler
+        cs = CurriculumScheduler(total_steps=10, warmup_fraction=0.0)
+        for _ in range(10):
+            cs.step()
+        noise = cs.get_noise_level(max_noise=0.1)
+        assert 0 <= noise <= 0.1
+
+    def test_get_info(self):
+        from training.utils_v42 import CurriculumScheduler
+        cs = CurriculumScheduler()
+        cs.step()
+        info = cs.get_info()
+        assert info['step'] == 1
+
+
+class TestTrainingStabilityMonitor:
+    """Тесты для Training Stability Monitor."""
+
+    def test_stable(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        mon = TrainingStabilityMonitor()
+        result = mon.update(loss=2.0, grad_norm=1.0)
+        assert result['stable'] is True
+
+    def test_nan_detection(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        mon = TrainingStabilityMonitor()
+        result = mon.update(loss=float('nan'))
+        assert result['stable'] is False
+        assert result['events'][0]['type'] == 'nan_inf_loss'
+
+    def test_inf_detection(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        mon = TrainingStabilityMonitor()
+        result = mon.update(loss=float('inf'))
+        assert result['stable'] is False
+
+    def test_loss_spike(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        mon = TrainingStabilityMonitor(spike_threshold=2.0)
+        # Build stable history with tiny variation
+        for i in range(20):
+            mon.update(loss=1.0 + i * 0.001, grad_norm=1.0)
+        # Spike: much larger than recent mean
+        result = mon.update(loss=100.0, grad_norm=1.0)
+        assert any(e['type'] == 'loss_spike' for e in result['events'])
+
+    def test_grad_from_model(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        mon = TrainingStabilityMonitor()
+        result = mon.update(loss=loss.item(), model=model)
+        assert 'grad_norm_mean' in result['stats'] or result['stable']
+
+    def test_health_check(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        mon = TrainingStabilityMonitor()
+        for _ in range(10):
+            mon.update(loss=2.0)
+        health = mon.is_training_healthy()
+        assert health['healthy'] is True
+        assert health['score'] == 1.0
+
+    def test_get_events(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        mon = TrainingStabilityMonitor()
+        mon.update(loss=float('nan'))
+        events = mon.get_all_events()
+        assert len(events) == 1
+
+
+class TestV42Integration:
+    """Интеграционные тесты v42."""
+
+    def test_ema_training(self):
+        from training.utils_v42 import ModelEMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = ModelEMA(model, decay=0.99)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            ema.update(model)
+        # Eval with EMA
+        ema.apply_shadow(model)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+        ema.restore(model)
+
+    def test_sgdr_training(self):
+        from training.utils_v42 import CosineAnnealingWarmRestarts
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sched = CosineAnnealingWarmRestarts(base_lr=1e-3, T_0=5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            sched.apply(opt)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_stability_training(self):
+        from training.utils_v42 import TrainingStabilityMonitor
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        mon = TrainingStabilityMonitor()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            result = mon.update(loss.item(), model=model)
+            opt.step()
+        health = mon.is_training_healthy()
+        assert health['healthy']
