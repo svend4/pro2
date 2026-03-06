@@ -144,6 +144,11 @@ class YiJingConfig:
     progressive_min_len: int = 0            # Progressive resizing min (0 = выкл)
     nce_negatives: int = 0                  # NCE negatives (0 = выкл, use CE)
 
+    # v27: SAM, Dynamic Temperature, Sequence Packing
+    sam_rho: float = 0.0             # SAM perturbation radius (0 = выкл, 0.05 типично)
+    dynamic_temperature: bool = False  # Dynamic temperature scaling
+    use_sequence_packing: bool = False  # Sequence packing for efficiency
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

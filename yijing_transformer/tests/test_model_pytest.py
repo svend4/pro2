@@ -6347,3 +6347,310 @@ class TestV26Integration:
             mgr.save(model, opt, step=step, metric_value=loss.item())
         best = mgr.get_best()
         assert best is not None
+
+
+# ==================== v27 Tests ====================
+
+
+class TestSAM:
+    """Тесты для Sharpness-Aware Minimization."""
+
+    def test_basic_training(self):
+        from training.utils_v27 import SAM
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        sam = SAM(base_opt, rho=0.05)
+        w_before = model.weight.data.clone()
+
+        # First forward + backward
+        sam.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        sam.first_step()
+
+        # Second forward + backward at perturbed point
+        sam.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        sam.second_step()
+
+        assert not torch.equal(w_before, model.weight.data)
+
+    def test_perturbation_restored(self):
+        from training.utils_v27 import SAM
+        model = nn.Linear(10, 5, bias=False)
+        base_opt = torch.optim.SGD(model.parameters(), lr=0.0)  # no update
+        sam = SAM(base_opt, rho=0.1)
+        w_before = model.weight.data.clone()
+
+        sam.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        sam.first_step()
+        # Weights should be perturbed
+        assert not torch.equal(w_before, model.weight.data)
+
+        sam.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        sam.second_step()
+        # Weights restored (lr=0 → no actual update)
+        assert torch.allclose(w_before, model.weight.data, atol=1e-6)
+
+    def test_state_dict(self):
+        from training.utils_v27 import SAM
+        model = nn.Linear(10, 5)
+        sam = SAM(torch.optim.Adam(model.parameters()), rho=0.05)
+        sd = sam.state_dict()
+        assert 'state' in sd
+
+    def test_param_groups(self):
+        from training.utils_v27 import SAM
+        model = nn.Linear(10, 5)
+        sam = SAM(torch.optim.Adam(model.parameters(), lr=0.01))
+        assert len(sam.param_groups) == 1
+
+
+class TestDynamicTemperature:
+    """Тесты для Dynamic Temperature Scaling."""
+
+    def test_apply(self):
+        from training.utils_v27 import DynamicTemperature
+        dt = DynamicTemperature(initial_temp=2.0)
+        logits = torch.randn(2, 4, 100)
+        scaled = dt.apply(logits)
+        assert torch.allclose(scaled, logits / 2.0)
+
+    def test_compute_entropy(self):
+        from training.utils_v27 import DynamicTemperature
+        dt = DynamicTemperature()
+        # Uniform logits → high entropy
+        logits = torch.zeros(1, 1, 100)
+        e = dt.compute_entropy(logits)
+        assert e > 0
+
+    def test_adapt(self):
+        from training.utils_v27 import DynamicTemperature
+        dt = DynamicTemperature(initial_temp=1.0, adapt_rate=0.1)
+        logits = torch.randn(2, 4, 100)
+        result = dt.adapt(logits)
+        assert 'temperature' in result
+        assert 'entropy' in result
+
+    def test_bounds(self):
+        from training.utils_v27 import DynamicTemperature
+        dt = DynamicTemperature(initial_temp=1.0, min_temp=0.5, max_temp=2.0, adapt_rate=10.0)
+        for _ in range(100):
+            dt.adapt(torch.zeros(1, 1, 10))
+        assert dt.temperature >= 0.5
+        assert dt.temperature <= 2.0
+
+    def test_reset(self):
+        from training.utils_v27 import DynamicTemperature
+        dt = DynamicTemperature(initial_temp=1.0)
+        dt.temperature = 3.0
+        dt.reset()
+        assert dt.temperature == 1.0
+
+
+class TestGradientProjection:
+    """Тесты для Gradient Projection."""
+
+    def test_memorize_and_project(self):
+        from training.utils_v27 import GradientProjection
+        model = nn.Linear(10, 5)
+        gp = GradientProjection(model, n_components=3)
+
+        def loader():
+            return torch.randn(4, 10), None
+
+        gp.memorize_task('task1', loader, n_batches=3)
+        assert len(gp.projection_bases) > 0
+
+    def test_project_gradients(self):
+        from training.utils_v27 import GradientProjection
+        model = nn.Linear(10, 5)
+        gp = GradientProjection(model, n_components=2)
+
+        def loader():
+            return torch.randn(4, 10), None
+
+        gp.memorize_task('task1', loader, n_batches=3)
+
+        # Compute new gradients
+        model.zero_grad()
+        loss = F.mse_loss(model(torch.randn(4, 10)), torch.randn(4, 5))
+        loss.backward()
+
+        result = gp.project_gradients()
+        assert result['n_projected'] > 0
+
+    def test_memory_usage(self):
+        from training.utils_v27 import GradientProjection
+        model = nn.Linear(10, 5)
+        gp = GradientProjection(model, n_components=2)
+
+        def loader():
+            return torch.randn(2, 10), None
+
+        gp.memorize_task('t1', loader, n_batches=3)
+        mem = gp.get_memory_usage()
+        assert mem['total_bytes'] > 0
+
+
+class TestMetricsDashboard:
+    """Тесты для Training Metrics Dashboard."""
+
+    def test_log(self):
+        from training.utils_v27 import MetricsDashboard
+        dash = MetricsDashboard()
+        dash.log(loss=2.5, lr=1e-3)
+        assert dash.get_metric('loss') == 2.5
+        assert dash.get_metric('lr') == 1e-3
+
+    def test_mean(self):
+        from training.utils_v27 import MetricsDashboard
+        dash = MetricsDashboard()
+        dash.log(loss=2.0)
+        dash.log(loss=4.0)
+        assert dash.get_mean('loss') == 3.0
+
+    def test_summary(self):
+        from training.utils_v27 import MetricsDashboard
+        dash = MetricsDashboard()
+        for i in range(10):
+            dash.log(loss=10.0 - i)
+        summary = dash.get_summary()
+        assert summary['step'] == 10
+        assert 'loss_current' in summary
+        assert 'loss_mean' in summary
+
+    def test_trend(self):
+        from training.utils_v27 import MetricsDashboard
+        dash = MetricsDashboard()
+        for i in range(20):
+            dash.log(loss=10.0 - i * 0.5)
+        trend = dash.get_trend('loss')
+        assert trend == 'decreasing'
+
+    def test_log_tokens(self):
+        from training.utils_v27 import MetricsDashboard
+        dash = MetricsDashboard()
+        dash.log_tokens(1000)
+        dash.log_tokens(2000)
+        summary = dash.get_summary()
+        assert summary['total_tokens'] == 3000
+
+    def test_reset(self):
+        from training.utils_v27 import MetricsDashboard
+        dash = MetricsDashboard()
+        dash.log(loss=1.0)
+        dash.reset()
+        assert dash._step == 0
+        assert dash.get_metric('loss') is None
+
+
+class TestSequencePacker:
+    """Тесты для Sequence Packing."""
+
+    def test_pack_basic(self):
+        from training.utils_v27 import SequencePacker
+        packer = SequencePacker(max_seq_len=16, pad_token_id=0, sep_token_id=99)
+        seqs = [torch.tensor([1, 2, 3]), torch.tensor([4, 5]), torch.tensor([6, 7, 8, 9])]
+        result = packer.pack(seqs)
+        assert result['n_sequences'] == 3
+        assert result['packed_ids'].shape[1] == 16
+        assert result['efficiency'] > 0
+
+    def test_pack_overflow(self):
+        from training.utils_v27 import SequencePacker
+        packer = SequencePacker(max_seq_len=8)
+        seqs = [torch.tensor([1, 2, 3, 4, 5, 6]), torch.tensor([7, 8, 9, 10, 11, 12])]
+        result = packer.pack(seqs)
+        assert result['n_packed'] >= 2  # Can't fit both in one
+
+    def test_attention_mask(self):
+        from training.utils_v27 import SequencePacker
+        packer = SequencePacker(max_seq_len=16)
+        seqs = [torch.tensor([1, 2, 3])]
+        result = packer.pack(seqs)
+        mask = result['attention_mask']
+        assert mask[0, :3].all()
+        assert not mask[0, 3:].any()
+
+    def test_estimate_savings(self):
+        from training.utils_v27 import SequencePacker
+        packer = SequencePacker(max_seq_len=128)
+        lengths = [10, 15, 20, 25, 30]
+        savings = packer.estimate_savings(lengths)
+        assert savings['savings_pct'] > 0
+        assert savings['packed_tokens'] < savings['naive_tokens']
+
+    def test_empty_sequences(self):
+        from training.utils_v27 import SequencePacker
+        packer = SequencePacker(max_seq_len=16)
+        result = packer.pack([])
+        assert result['n_sequences'] == 0
+
+    def test_single_long_sequence(self):
+        from training.utils_v27 import SequencePacker
+        packer = SequencePacker(max_seq_len=8)
+        seqs = [torch.arange(1, 20)]  # longer than max
+        result = packer.pack(seqs)
+        assert result['n_sequences'] == 1
+        assert result['packed_ids'].shape[1] == 8
+
+
+class TestV27Integration:
+    """Интеграционные тесты v27."""
+
+    def test_sam_training(self):
+        from training.utils_v27 import SAM
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        base_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sam = SAM(base_opt, rho=0.05)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            sam.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            sam.first_step()
+            sam.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            sam.second_step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_dashboard_training(self):
+        from training.utils_v27 import MetricsDashboard
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        dash = MetricsDashboard()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for step in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            dash.log(loss=loss.item(), step=step)
+            dash.log_tokens(16)
+            loss.backward()
+            opt.step()
+        summary = dash.get_summary()
+        assert summary['total_tokens'] == 80
+        assert summary['step'] == 5
+
+    def test_dynamic_temp_with_model(self):
+        from training.utils_v27 import DynamicTemperature
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        dt = DynamicTemperature()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, _, _ = model(x)
+        scaled = dt.apply(logits)
+        result = dt.adapt(logits)
+        assert not torch.isnan(scaled).any()
+        assert result['temperature'] > 0
