@@ -271,6 +271,20 @@ class YiJingConfig:
     attention_sink_cache: bool = False    # Attention sink cache
     speculative_decoding: bool = False    # Speculative decoding
 
+    # v47: GradAccum+LossScaling, ParamNoise, EMA Schedule, MultiObjLoss, CheckpointMgr
+    grad_accum_loss_scaling: bool = False  # Gradient accumulation + loss scaling
+    parameter_noise: float = 0.0          # Parameter noise std (0 = disabled)
+    ema_schedule: bool = False            # EMA with schedule
+    multi_objective_loss: bool = False    # Multi-objective loss balancer
+    checkpoint_manager: bool = False      # Training checkpoint manager
+
+    # v48: BeamSearch, Nucleus Sampling, RepetitionPenalty, TempScheduler, KVCache
+    beam_search: bool = False             # Beam search decoding
+    nucleus_sampling: bool = False        # Top-k/Top-p sampling
+    repetition_penalty: float = 1.0       # Repetition penalty (1.0 = disabled)
+    temperature_scheduler: str = 'constant'  # Temperature schedule mode
+    kv_cache_manager: bool = False        # KV cache manager
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

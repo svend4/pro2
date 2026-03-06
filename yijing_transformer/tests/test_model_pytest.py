@@ -12170,3 +12170,375 @@ class TestSpeculativeDecodingHelper:
         helper = SpeculativeDecodingHelper()
         stats = helper.get_stats()
         assert 'overall_acceptance_rate' in stats
+
+
+# ==================== v47 Tests ====================
+
+
+class TestGradientAccumulatorWithScaling:
+    """Тесты для Gradient Accumulation + Loss Scaling."""
+
+    def test_should_step(self):
+        from training.utils_v47 import GradientAccumulatorWithScaling
+        ga = GradientAccumulatorWithScaling(accumulation_steps=4)
+        assert not ga.should_step()
+        assert not ga.should_step()
+        assert not ga.should_step()
+        assert ga.should_step()
+
+    def test_scale_loss(self):
+        from training.utils_v47 import GradientAccumulatorWithScaling
+        ga = GradientAccumulatorWithScaling(accumulation_steps=4, init_scale=1.0)
+        loss = torch.tensor(4.0)
+        scaled = ga.scale_loss(loss)
+        assert scaled.item() == 1.0  # 4.0 * 1.0 / 4
+
+    def test_step(self):
+        from training.utils_v47 import GradientAccumulatorWithScaling
+        ga = GradientAccumulatorWithScaling(accumulation_steps=1, init_scale=1.0)
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        loss = model(torch.randn(2, 10)).sum()
+        scaled = ga.scale_loss(loss)
+        scaled.backward()
+        result = ga.step(opt, model)
+        assert result['stepped'] is True
+
+    def test_get_info(self):
+        from training.utils_v47 import GradientAccumulatorWithScaling
+        ga = GradientAccumulatorWithScaling()
+        info = ga.get_info()
+        assert 'scale' in info
+
+
+class TestParameterNoiseInjector:
+    """Тесты для Parameter Noise."""
+
+    def test_inject_and_restore(self):
+        from training.utils_v47 import ParameterNoiseInjector
+        model = nn.Linear(10, 5)
+        original = model.weight.data.clone()
+        pni = ParameterNoiseInjector(noise_std=0.1)
+        pni.inject(model)
+        assert not torch.equal(model.weight.data, original)
+        pni.restore(model)
+        assert torch.equal(model.weight.data, original)
+
+    def test_adaptive_noise(self):
+        from training.utils_v47 import ParameterNoiseInjector
+        pni = ParameterNoiseInjector(noise_std=0.01, adaptive=True)
+        model = nn.Linear(10, 5)
+        result = pni.inject(model)
+        assert result['avg_noise_ratio'] > 0
+
+    def test_no_restore_without_inject(self):
+        from training.utils_v47 import ParameterNoiseInjector
+        pni = ParameterNoiseInjector()
+        model = nn.Linear(10, 5)
+        assert pni.restore(model) is False
+
+
+class TestEMASchedule:
+    """Тесты для EMA Schedule."""
+
+    def test_increasing_decay(self):
+        from training.utils_v47 import EMASchedule
+        ema = EMASchedule(target_decay=0.999, warmup_steps=100)
+        d1 = ema.get_decay()
+        for _ in range(50):
+            ema.get_decay()
+        d2 = ema.get_decay()
+        assert d2 > d1
+
+    def test_update(self):
+        from training.utils_v47 import EMASchedule
+        ema = EMASchedule()
+        model = nn.Linear(10, 5)
+        result = ema.update(model)
+        assert 'decay' in result
+
+    def test_apply(self):
+        from training.utils_v47 import EMASchedule
+        ema = EMASchedule(target_decay=0.999, warmup_steps=1)
+        model = nn.Linear(10, 5)
+        ema.update(model)  # step=1, decay=0.999, shadow ≈ original
+        original = model.weight.data.clone()
+        model.weight.data.add_(10.0)  # Change model weights
+        # Shadow still close to original, model is original+10
+        ema.apply(model)
+        # After apply, model should be close to original (EMA shadow)
+        assert not torch.equal(model.weight.data, original + 10.0)
+
+
+class TestMultiObjectiveLossBalancer:
+    """Тесты для Multi-Objective Loss Balancer."""
+
+    def test_combine_equal(self):
+        from training.utils_v47 import MultiObjectiveLossBalancer
+        balancer = MultiObjectiveLossBalancer(n_tasks=2, method='equal')
+        l1 = torch.tensor(1.0)
+        l2 = torch.tensor(3.0)
+        result = balancer.combine([l1, l2])
+        assert abs(result['total_loss'].item() - 2.0) < 1e-5
+
+    def test_combine_uncertainty(self):
+        from training.utils_v47 import MultiObjectiveLossBalancer
+        balancer = MultiObjectiveLossBalancer(n_tasks=2, method='uncertainty')
+        result = balancer.combine([torch.tensor(1.0), torch.tensor(2.0)])
+        assert result['total_loss'].item() > 0
+
+    def test_dict_input(self):
+        from training.utils_v47 import MultiObjectiveLossBalancer
+        balancer = MultiObjectiveLossBalancer(n_tasks=2, method='equal')
+        result = balancer.combine({'ce': torch.tensor(1.0), 'kl': torch.tensor(2.0)})
+        assert 'ce' in result['weights']
+
+    def test_parameters(self):
+        from training.utils_v47 import MultiObjectiveLossBalancer
+        balancer = MultiObjectiveLossBalancer(n_tasks=3)
+        params = balancer.parameters()
+        assert len(params) == 1
+        assert params[0].shape == (3,)
+
+
+class TestCheckpointManager:
+    """Тесты для Checkpoint Manager."""
+
+    def test_save_best(self):
+        from training.utils_v47 import CheckpointManager
+        cm = CheckpointManager(max_to_keep=3, mode='min')
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        r1 = cm.save(model, opt, step=1, metric_value=1.0)
+        assert r1['saved'] and r1['is_best']
+        r2 = cm.save(model, opt, step=2, metric_value=0.5)
+        assert r2['saved'] and r2['is_best']
+
+    def test_max_to_keep(self):
+        from training.utils_v47 import CheckpointManager
+        cm = CheckpointManager(max_to_keep=2, mode='min')
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        cm.save(model, opt, step=1, metric_value=1.0)
+        cm.save(model, opt, step=2, metric_value=0.5)
+        r = cm.save(model, opt, step=3, metric_value=2.0)
+        assert not r['saved']  # Worse than both, not saved
+
+    def test_get_best(self):
+        from training.utils_v47 import CheckpointManager
+        cm = CheckpointManager(max_to_keep=3, mode='min')
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        cm.save(model, opt, step=1, metric_value=1.0)
+        cm.save(model, opt, step=2, metric_value=0.5)
+        best = cm.get_best()
+        assert best[0] == 0.5
+
+
+class TestV47Integration:
+    """Интеграционные тесты v47."""
+
+    def test_param_noise_training(self):
+        from training.utils_v47 import ParameterNoiseInjector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        pni = ParameterNoiseInjector(noise_std=0.001, adaptive=False)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            pni.inject(model)
+            pni.restore(model)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+
+# ==================== v48 Tests ====================
+
+
+class TestBeamSearch:
+    """Тесты для Beam Search."""
+
+    def test_search(self):
+        from training.utils_v48 import BeamSearch
+        class SimpleModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.emb = nn.Embedding(20, 16)
+                self.head = nn.Linear(16, 20)
+            def forward(self, x):
+                return self.head(self.emb(x))
+        model = SimpleModel()
+        bs = BeamSearch(beam_size=2, max_length=5, eos_token_id=2)
+        result = bs.search(model, torch.tensor([[1]]))
+        assert 'best_sequence' in result
+        assert result['best_sequence'].dim() == 1
+
+    def test_empty_result(self):
+        from training.utils_v48 import BeamSearch
+        bs = BeamSearch(beam_size=2, max_length=0)
+        class DummyModel(nn.Module):
+            def forward(self, x):
+                return torch.randn(x.size(0), x.size(1), 10)
+        result = bs.search(DummyModel(), torch.tensor([[1]]))
+        assert 'sequences' in result
+
+
+class TestNucleusSampler:
+    """Тесты для Nucleus Sampling."""
+
+    def test_sample(self):
+        from training.utils_v48 import NucleusSampler
+        ns = NucleusSampler(top_k=10, top_p=0.9)
+        logits = torch.randn(2, 100)
+        result = ns.sample(logits)
+        assert result['token_ids'].shape == (2,)
+
+    def test_top_k_only(self):
+        from training.utils_v48 import NucleusSampler
+        ns = NucleusSampler(top_k=5, top_p=1.0)
+        logits = torch.randn(1, 100)
+        result = ns.sample(logits)
+        assert result['token_ids'].shape == (1,)
+
+    def test_top_p_only(self):
+        from training.utils_v48 import NucleusSampler
+        ns = NucleusSampler(top_k=0, top_p=0.5)
+        logits = torch.randn(1, 100)
+        result = ns.sample(logits)
+        assert result['token_ids'].shape == (1,)
+
+    def test_1d_input(self):
+        from training.utils_v48 import NucleusSampler
+        ns = NucleusSampler()
+        logits = torch.randn(50)
+        result = ns.sample(logits)
+        assert result['token_ids'].shape == (1,)
+
+
+class TestRepetitionPenalty:
+    """Тесты для Repetition Penalty."""
+
+    def test_apply(self):
+        from training.utils_v48 import RepetitionPenalty
+        rp = RepetitionPenalty(penalty=1.5)
+        logits = torch.ones(1, 10)
+        generated = torch.tensor([[0, 1, 2, 0]])
+        penalized = rp.apply(logits, generated)
+        # Token 0, 1, 2 should be penalized
+        assert penalized[0, 0] < logits[0, 0]
+        assert penalized[0, 5] == logits[0, 5]  # Unaffected
+
+    def test_no_penalty(self):
+        from training.utils_v48 import RepetitionPenalty
+        rp = RepetitionPenalty(penalty=1.0)
+        logits = torch.randn(1, 10)
+        generated = torch.tensor([[0, 1]])
+        result = rp.apply(logits, generated)
+        assert torch.equal(result, logits)
+
+    def test_window(self):
+        from training.utils_v48 import RepetitionPenalty
+        rp = RepetitionPenalty(penalty=1.5, window_size=2)
+        logits = torch.ones(1, 10)
+        generated = torch.tensor([[0, 1, 2, 3]])
+        penalized = rp.apply(logits, generated)
+        assert penalized[0, 0] == 1.0  # Outside window
+        assert penalized[0, 2] < 1.0   # In window
+
+    def test_frequency_penalty(self):
+        from training.utils_v48 import RepetitionPenalty
+        rp = RepetitionPenalty()
+        logits = torch.ones(1, 10)
+        generated = torch.tensor([[0, 0, 0, 1]])
+        result = rp.apply_frequency_penalty(logits, generated, freq_penalty=0.5)
+        assert result[0, 0] < result[0, 1]  # Token 0 appears 3x, penalized more
+
+
+class TestTemperatureScheduler:
+    """Тесты для Temperature Scheduler."""
+
+    def test_constant(self):
+        from training.utils_v48 import TemperatureScheduler
+        ts = TemperatureScheduler(base_temperature=0.7, mode='constant')
+        assert ts.get_temperature() == 0.7
+
+    def test_linear_decay(self):
+        from training.utils_v48 import TemperatureScheduler
+        ts = TemperatureScheduler(base_temperature=1.0, mode='linear_decay',
+                                  min_temperature=0.1)
+        t1 = ts.get_temperature(max_steps=10)
+        for _ in range(8):
+            ts.get_temperature(max_steps=10)
+        t2 = ts.get_temperature(max_steps=10)
+        assert t2 < t1
+
+    def test_apply(self):
+        from training.utils_v48 import TemperatureScheduler
+        ts = TemperatureScheduler(base_temperature=2.0, mode='constant')
+        logits = torch.randn(2, 10)
+        result = ts.apply(logits)
+        assert result['temperature'] == 2.0
+        assert torch.allclose(result['logits'], logits / 2.0)
+
+    def test_entropy_adaptive(self):
+        from training.utils_v48 import TemperatureScheduler
+        ts = TemperatureScheduler(mode='entropy_adaptive')
+        logits = torch.randn(2, 10)
+        t = ts.get_temperature(logits)
+        assert t > 0
+
+
+class TestKVCacheManager:
+    """Тесты для KV Cache Manager."""
+
+    def test_update_and_get(self):
+        from training.utils_v48 import KVCacheManager
+        kv = KVCacheManager(n_layers=4, max_length=100)
+        k = torch.randn(1, 2, 5, 16)
+        v = torch.randn(1, 2, 5, 16)
+        kv.update(0, k, v)
+        result = kv.get(0)
+        assert result is not None
+        assert result[0].shape == (1, 2, 5, 16)
+
+    def test_append(self):
+        from training.utils_v48 import KVCacheManager
+        kv = KVCacheManager(max_length=100)
+        kv.update(0, torch.randn(1, 2, 5, 16), torch.randn(1, 2, 5, 16))
+        kv.update(0, torch.randn(1, 2, 3, 16), torch.randn(1, 2, 3, 16))
+        k, v = kv.get(0)
+        assert k.shape[2] == 8
+
+    def test_max_length_trim(self):
+        from training.utils_v48 import KVCacheManager
+        kv = KVCacheManager(max_length=10)
+        kv.update(0, torch.randn(1, 2, 8, 16), torch.randn(1, 2, 8, 16))
+        kv.update(0, torch.randn(1, 2, 5, 16), torch.randn(1, 2, 5, 16))
+        k, v = kv.get(0)
+        assert k.shape[2] == 10
+
+    def test_clear(self):
+        from training.utils_v48 import KVCacheManager
+        kv = KVCacheManager()
+        kv.update(0, torch.randn(1, 2, 5, 16), torch.randn(1, 2, 5, 16))
+        kv.clear()
+        assert kv.get(0) is None
+
+    def test_memory(self):
+        from training.utils_v48 import KVCacheManager
+        kv = KVCacheManager()
+        kv.update(0, torch.randn(1, 2, 5, 16), torch.randn(1, 2, 5, 16))
+        assert kv.get_memory_bytes() > 0
+
+    def test_get_info(self):
+        from training.utils_v48 import KVCacheManager
+        kv = KVCacheManager()
+        kv.update(0, torch.randn(1, 2, 5, 16), torch.randn(1, 2, 5, 16))
+        info = kv.get_info()
+        assert info['n_layers_cached'] == 1
+        assert info['total_length'] == 5
