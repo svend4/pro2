@@ -168,6 +168,11 @@ class YiJingConfig:
     freeze_strategy: str = 'none'         # none, top_down, bottom_up, all_at_once
     loss_spike_threshold: float = 3.0     # Loss spike detection threshold (std devs)
 
+    # v31: Spectral Reg, Gradient Surgery, Token Freq Weighting
+    spectral_lambda: float = 0.0          # Spectral regularization (0 = выкл)
+    use_gradient_surgery: bool = False     # Gradient surgery for multi-task
+    token_freq_strategy: str = 'none'     # none, inverse, sqrt_inverse, log_inverse, smoothed
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

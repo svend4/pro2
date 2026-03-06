@@ -7575,3 +7575,324 @@ class TestV30Integration:
         assert result is not None
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v31 Tests ====================
+
+
+class TestMutualInformationEstimator:
+    """Тесты для Mutual Information Estimator."""
+
+    def test_estimate(self):
+        from training.utils_v31 import MutualInformationEstimator
+        mie = MutualInformationEstimator(d_model=16, hidden_dim=32)
+        x = torch.randn(8, 16)
+        y = torch.randn(8, 16)
+        result = mie.estimate(x, y)
+        assert 'mi_estimate' in result
+        assert 'joint_score' in result
+
+    def test_identical_high_mi(self):
+        from training.utils_v31 import MutualInformationEstimator
+        mie = MutualInformationEstimator(d_model=16)
+        x = torch.randn(16, 16)
+        mi = mie.estimate_simple(x, x)
+        assert mi > 0  # Identical → high MI
+
+    def test_estimate_simple(self):
+        from training.utils_v31 import MutualInformationEstimator
+        mie = MutualInformationEstimator(d_model=8)
+        x = torch.randn(32, 8)
+        y = torch.randn(32, 8)
+        mi = mie.estimate_simple(x, y)
+        assert mi >= 0
+
+    def test_small_batch(self):
+        from training.utils_v31 import MutualInformationEstimator
+        mie = MutualInformationEstimator(d_model=8)
+        x = torch.randn(1, 8)
+        y = torch.randn(1, 8)
+        result = mie.estimate(x, y)
+        assert result['mi_estimate'] == 0.0
+
+
+class TestGradientSurgery:
+    """Тесты для Gradient Surgery."""
+
+    def test_resolve_no_conflict(self):
+        from training.utils_v31 import GradientSurgery
+        gs = GradientSurgery()
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([0.5, 0.5])
+        combined = gs.resolve([g1, g2])
+        assert combined.shape == g1.shape
+
+    def test_resolve_conflicting(self):
+        from training.utils_v31 import GradientSurgery
+        gs = GradientSurgery()
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([-1.0, 0.0])  # Opposite direction
+        combined = gs.resolve([g1, g2])
+        assert combined.shape == g1.shape
+
+    def test_single_grad(self):
+        from training.utils_v31 import GradientSurgery
+        gs = GradientSurgery()
+        g = torch.randn(10)
+        combined = gs.resolve([g])
+        assert torch.allclose(combined, g)
+
+    def test_check_conflicts(self):
+        from training.utils_v31 import GradientSurgery
+        gs = GradientSurgery()
+        g1 = torch.tensor([1.0, 0.0])
+        g2 = torch.tensor([-1.0, 0.0])
+        g3 = torch.tensor([1.0, 1.0])
+        result = gs.check_conflicts([g1, g2, g3])
+        assert result['n_pairs'] == 3
+        assert result['n_conflicts'] >= 1
+
+    def test_sum_reduction(self):
+        from training.utils_v31 import GradientSurgery
+        gs = GradientSurgery(reduction='sum')
+        g1 = torch.tensor([1.0, 1.0])
+        g2 = torch.tensor([1.0, 1.0])
+        combined = gs.resolve([g1, g2])
+        assert combined.shape == g1.shape
+
+
+class TestSpectralRegularizer:
+    """Тесты для Spectral Regularization."""
+
+    def test_compute_penalty(self):
+        from training.utils_v31 import SpectralRegularizer
+        model = nn.Linear(10, 5)
+        sr = SpectralRegularizer(lambda_spectral=0.01)
+        penalty = sr.compute_penalty(model)
+        assert penalty.item() > 0
+
+    def test_penalty_scales(self):
+        from training.utils_v31 import SpectralRegularizer
+        model = nn.Linear(10, 5)
+        sr1 = SpectralRegularizer(lambda_spectral=0.01)
+        sr2 = SpectralRegularizer(lambda_spectral=0.1)
+        p1 = sr1.compute_penalty(model)
+        p2 = sr2.compute_penalty(model)
+        assert p2.item() > p1.item()
+
+    def test_spectral_norms(self):
+        from training.utils_v31 import SpectralRegularizer
+        model = nn.Linear(10, 5)
+        sr = SpectralRegularizer()
+        norms = sr.get_spectral_norms(model)
+        assert 'weight' in norms
+        assert norms['weight'] > 0
+
+    def test_no_2d_weights(self):
+        from training.utils_v31 import SpectralRegularizer
+        # Model with only 1D params
+        model = nn.BatchNorm1d(10)
+        sr = SpectralRegularizer(lambda_spectral=0.01)
+        penalty = sr.compute_penalty(model)
+        assert penalty.item() == 0.0
+
+
+class TestTrainingPhaseManager:
+    """Тесты для Training Phase Manager."""
+
+    def test_default_phases(self):
+        from training.utils_v31 import TrainingPhaseManager
+        tpm = TrainingPhaseManager()
+        assert tpm.total_steps == 1000
+
+    def test_phase_transitions(self):
+        from training.utils_v31 import TrainingPhaseManager
+        tpm = TrainingPhaseManager(phases=[
+            {'name': 'warmup', 'steps': 10, 'lr_scale': 0.1},
+            {'name': 'main', 'steps': 80, 'lr_scale': 1.0},
+            {'name': 'cooldown', 'steps': 10, 'lr_scale': 0.01},
+        ])
+        assert tpm.get_current_phase()['name'] == 'warmup'
+        for _ in range(10):
+            tpm.step()
+        assert tpm.get_current_phase()['name'] == 'main'
+        for _ in range(80):
+            tpm.step()
+        assert tpm.get_current_phase()['name'] == 'cooldown'
+
+    def test_lr_scale(self):
+        from training.utils_v31 import TrainingPhaseManager
+        tpm = TrainingPhaseManager(phases=[
+            {'name': 'warmup', 'steps': 10, 'lr_scale': 0.1},
+            {'name': 'main', 'steps': 90, 'lr_scale': 1.0},
+        ])
+        assert tpm.get_lr_scale() == 0.1
+        for _ in range(10):
+            tpm.step()
+        assert tpm.get_lr_scale() == 1.0
+
+    def test_apply_lr(self):
+        from training.utils_v31 import TrainingPhaseManager
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=0.01)
+        tpm = TrainingPhaseManager(phases=[
+            {'name': 'warmup', 'steps': 10, 'lr_scale': 0.5},
+        ])
+        tpm.apply_lr(opt, base_lr=0.01)
+        assert opt.param_groups[0]['lr'] == 0.005
+
+    def test_is_phase(self):
+        from training.utils_v31 import TrainingPhaseManager
+        tpm = TrainingPhaseManager()
+        assert tpm.is_phase('warmup')
+
+    def test_phase_boundaries(self):
+        from training.utils_v31 import TrainingPhaseManager
+        tpm = TrainingPhaseManager()
+        boundaries = tpm.get_phase_boundaries()
+        assert len(boundaries) == 3
+        assert boundaries[0]['start'] == 0
+
+
+class TestTokenFrequencyWeighting:
+    """Тесты для Token Frequency Weighting."""
+
+    def test_update_counts(self):
+        from training.utils_v31 import TokenFrequencyWeighting
+        tfw = TokenFrequencyWeighting(vocab_size=50)
+        tokens = torch.tensor([1, 2, 3, 1, 1])
+        tfw.update_counts(tokens)
+        assert tfw._counts[1] == 3
+        assert tfw._counts[2] == 1
+
+    def test_update_counts_batch(self):
+        from training.utils_v31 import TokenFrequencyWeighting
+        tfw = TokenFrequencyWeighting(vocab_size=50)
+        tokens = torch.tensor([[1, 2], [3, 1]])
+        tfw.update_counts_batch(tokens)
+        assert tfw._counts[1] == 2
+
+    def test_compute_weights(self):
+        from training.utils_v31 import TokenFrequencyWeighting
+        tfw = TokenFrequencyWeighting(vocab_size=10, strategy='sqrt_inverse')
+        tokens = torch.randint(0, 10, (100,))
+        tfw.update_counts(tokens)
+        tfw.compute_weights()
+        w = tfw.get_weights()
+        assert w.shape == (10,)
+        assert (w >= tfw.min_weight).all()
+        assert (w <= tfw.max_weight).all()
+
+    def test_weighted_ce(self):
+        from training.utils_v31 import TokenFrequencyWeighting
+        tfw = TokenFrequencyWeighting(vocab_size=50)
+        tokens = torch.randint(0, 50, (200,))
+        tfw.update_counts(tokens)
+        tfw.compute_weights()
+        logits = torch.randn(4, 8, 50)
+        targets = torch.randint(0, 50, (4, 8))
+        loss = tfw.weighted_cross_entropy(logits, targets)
+        assert loss.item() > 0
+
+    def test_frequency_stats(self):
+        from training.utils_v31 import TokenFrequencyWeighting
+        tfw = TokenFrequencyWeighting(vocab_size=100)
+        tokens = torch.randint(0, 50, (200,))
+        tfw.update_counts(tokens)
+        stats = tfw.get_frequency_stats()
+        assert stats['n_seen'] > 0
+        assert stats['n_unseen'] > 0
+        assert stats['coverage'] > 0
+
+    def test_reset(self):
+        from training.utils_v31 import TokenFrequencyWeighting
+        tfw = TokenFrequencyWeighting(vocab_size=50)
+        tfw.update_counts(torch.tensor([1, 2, 3]))
+        tfw.reset()
+        assert tfw._total == 0
+
+
+class TestV31Integration:
+    """Интеграционные тесты v31."""
+
+    def test_spectral_reg_training(self):
+        from training.utils_v31 import SpectralRegularizer
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sr = SpectralRegularizer(lambda_spectral=0.001)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            penalty = sr.compute_penalty(model)
+            total = loss + penalty
+            total.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_phase_manager_training(self):
+        from training.utils_v31 import TrainingPhaseManager
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        tpm = TrainingPhaseManager(phases=[
+            {'name': 'warmup', 'steps': 3, 'lr_scale': 0.1},
+            {'name': 'main', 'steps': 7, 'lr_scale': 1.0},
+        ])
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            tpm.apply_lr(opt, base_lr=1e-3)
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            tpm.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_token_freq_training(self):
+        from training.utils_v31 import TokenFrequencyWeighting
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        tfw = TokenFrequencyWeighting(vocab_size=cfg.vocab_size, strategy='sqrt_inverse')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        tfw.update_counts_batch(y)
+        tfw.compute_weights()
+        for _ in range(5):
+            opt.zero_grad()
+            logits, _, _ = model(x)
+            loss = tfw.weighted_cross_entropy(logits, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_gradient_surgery_training(self):
+        from training.utils_v31 import GradientSurgery
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gs = GradientSurgery()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y1 = torch.randint(0, cfg.vocab_size, (2, 8))
+        y2 = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            opt.zero_grad()
+            _, loss1, _ = model(x, y1)
+            loss1.backward(retain_graph=True)
+            grads1 = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+            opt.zero_grad()
+            _, loss2, _ = model(x, y2)
+            loss2.backward()
+            grads2 = [p.grad.clone() for p in model.parameters() if p.grad is not None]
+            # Apply surgery to first param only (for speed)
+            if grads1 and grads2:
+                resolved = gs.resolve([grads1[0], grads2[0]])
+                assert not torch.isnan(resolved).any()
+            opt.step()
