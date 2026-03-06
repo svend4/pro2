@@ -185,6 +185,12 @@ class YiJingConfig:
     polyak_tau: float = 0.0               # Polyak averaging tau (0 = выкл, 0.005 типично)
     hard_example_fraction: float = 0.0    # Hard example mining fraction (0 = выкл)
 
+    # v34: LLRD, Token Dropout, Convergence Detection, Activation Checkpointing
+    llrd_decay_rate: float = 1.0          # LLRD decay rate (1.0 = выкл, 0.9 типично)
+    token_drop_prob: float = 0.0          # Token dropout probability (0 = выкл)
+    convergence_patience: int = 0         # Convergence detector patience (0 = выкл)
+    activation_checkpoint_ratio: float = 0.0  # Activation checkpointing ratio (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

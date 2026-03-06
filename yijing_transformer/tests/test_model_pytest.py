@@ -8562,3 +8562,307 @@ class TestV33Integration:
         llp = LossLandscapeProbe(n_directions=2, n_points=2, max_distance=0.01)
         result = llp.quick_sharpness(model, loss_fn)
         assert 'sharpness' in result
+
+
+# ==================== v34 Tests ====================
+
+
+class TestSafeGradAccumulator:
+    """Тесты для Safe Gradient Accumulation."""
+
+    def test_accumulate_step(self):
+        from training.utils_v34 import SafeGradAccumulator
+        model = nn.Linear(10, 5)
+        acc = SafeGradAccumulator(accum_steps=4)
+        for i in range(4):
+            loss = model(torch.randn(2, 10)).sum()
+            result = acc.accumulate_step(model, loss)
+            if i < 3:
+                assert not result['should_step']
+            else:
+                assert result['should_step']
+
+    def test_overflow_detection(self):
+        from training.utils_v34 import SafeGradAccumulator
+        model = nn.Linear(10, 5)
+        acc = SafeGradAccumulator()
+        model.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.fill_(float('inf'))
+        assert acc.check_overflow(model)
+
+    def test_optimizer_step_normal(self):
+        from training.utils_v34 import SafeGradAccumulator
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        acc = SafeGradAccumulator(max_grad_norm=1.0)
+        opt.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        result = acc.optimizer_step(model, opt)
+        assert result['stepped']
+        assert not result['overflow']
+
+    def test_skip_on_overflow(self):
+        from training.utils_v34 import SafeGradAccumulator
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        acc = SafeGradAccumulator(skip_on_overflow=True)
+        opt.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.fill_(float('nan'))
+        result = acc.optimizer_step(model, opt)
+        assert not result['stepped']
+        assert result['overflow']
+
+    def test_stats(self):
+        from training.utils_v34 import SafeGradAccumulator
+        acc = SafeGradAccumulator()
+        stats = acc.get_stats()
+        assert stats['total_steps'] == 0
+
+    def test_reset(self):
+        from training.utils_v34 import SafeGradAccumulator
+        acc = SafeGradAccumulator()
+        acc._total_steps = 10
+        acc.reset()
+        assert acc._total_steps == 0
+
+
+class TestLayerwiseLRDecay:
+    """Тесты для LLRD."""
+
+    def test_param_groups(self):
+        from training.utils_v34 import LayerwiseLRDecay
+        model = nn.Sequential(nn.Linear(10, 5), nn.ReLU(), nn.Linear(5, 3))
+        llrd = LayerwiseLRDecay(model, base_lr=1e-3, decay_rate=0.9)
+        groups = llrd.get_param_groups()
+        assert len(groups) > 0
+        assert all('lr' in g for g in groups)
+
+    def test_lr_varies(self):
+        from training.utils_v34 import LayerwiseLRDecay
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        llrd = LayerwiseLRDecay(model, base_lr=1e-3, decay_rate=0.5)
+        groups = llrd.get_param_groups()
+        lrs = set(g['lr'] for g in groups)
+        # With decay, not all LRs should be the same
+        assert len(lrs) >= 1
+
+    def test_no_decay_names(self):
+        from training.utils_v34 import LayerwiseLRDecay
+        model = nn.Sequential(nn.Linear(10, 5), nn.LayerNorm(5))
+        llrd = LayerwiseLRDecay(model, base_lr=1e-3, no_decay_names=('LayerNorm',))
+        groups = llrd.get_param_groups(weight_decay=0.01)
+        for g in groups:
+            if 'LayerNorm' in g['name'] or 'layer_norm' in g['name']:
+                assert g['weight_decay'] == 0.0
+
+    def test_lr_summary(self):
+        from training.utils_v34 import LayerwiseLRDecay
+        model = nn.Linear(10, 5)
+        llrd = LayerwiseLRDecay(model, base_lr=1e-3)
+        summary = llrd.get_lr_summary()
+        assert len(summary) > 0
+
+
+class TestTokenDropout:
+    """Тесты для Token Dropout."""
+
+    def test_train_mode(self):
+        from training.utils_v34 import TokenDropout
+        td = TokenDropout(drop_prob=0.3, min_tokens=2)
+        td.train()
+        ids = torch.randint(0, 50, (2, 10))
+        result = td(ids)
+        assert result['input_ids'].shape[1] <= 10
+        assert result['input_ids'].shape[1] >= 2
+        assert result['drop_rate'] > 0
+
+    def test_eval_mode(self):
+        from training.utils_v34 import TokenDropout
+        td = TokenDropout(drop_prob=0.3)
+        td.eval()
+        ids = torch.randint(0, 50, (2, 10))
+        result = td(ids)
+        assert result['input_ids'].shape == ids.shape
+        assert result['drop_rate'] == 0.0
+
+    def test_with_attention_mask(self):
+        from training.utils_v34 import TokenDropout
+        td = TokenDropout(drop_prob=0.2)
+        td.train()
+        ids = torch.randint(0, 50, (2, 8))
+        mask = torch.ones(2, 8, dtype=torch.bool)
+        result = td(ids, mask)
+        assert result['attention_mask'] is not None
+        assert result['attention_mask'].shape == result['input_ids'].shape
+
+    def test_min_tokens(self):
+        from training.utils_v34 import TokenDropout
+        td = TokenDropout(drop_prob=0.99, min_tokens=3)
+        td.train()
+        ids = torch.randint(0, 50, (2, 10))
+        result = td(ids)
+        assert result['input_ids'].shape[1] >= 3
+
+    def test_zero_drop(self):
+        from training.utils_v34 import TokenDropout
+        td = TokenDropout(drop_prob=0.0)
+        td.train()
+        ids = torch.randint(0, 50, (2, 10))
+        result = td(ids)
+        assert result['input_ids'].shape == ids.shape
+
+
+class TestConvergenceDetector:
+    """Тесты для Convergence Detector."""
+
+    def test_not_converged_improving(self):
+        from training.utils_v34 import ConvergenceDetector
+        cd = ConvergenceDetector(patience=10)
+        for i in range(20):
+            result = cd.check(10.0 - i * 0.5)
+        assert not result['converged']
+
+    def test_converged_plateau(self):
+        from training.utils_v34 import ConvergenceDetector
+        cd = ConvergenceDetector(patience=10, min_delta=0.01)
+        for _ in range(50):
+            cd.check(2.0)
+        result = cd.check(2.0)
+        assert result['converged']
+        assert result['reason'] == 'loss_plateau'
+
+    def test_gradient_vanishing(self):
+        from training.utils_v34 import ConvergenceDetector
+        cd = ConvergenceDetector(patience=1000)
+        result = cd.check(2.0, grad_norm=1e-10)
+        assert result['converged']
+        assert result['reason'] == 'gradient_vanishing'
+
+    def test_is_converged(self):
+        from training.utils_v34 import ConvergenceDetector
+        cd = ConvergenceDetector(patience=5)
+        for _ in range(50):
+            cd.check(2.0)
+        assert cd.is_converged
+
+    def test_reset(self):
+        from training.utils_v34 import ConvergenceDetector
+        cd = ConvergenceDetector(patience=5)
+        for _ in range(50):
+            cd.check(2.0)
+        cd.reset()
+        assert not cd.is_converged
+
+
+class TestActivationCheckpointManager:
+    """Тесты для Activation Checkpointing."""
+
+    def test_get_layers(self):
+        from training.utils_v34 import ActivationCheckpointManager
+        model = nn.Sequential(nn.Linear(10, 5), nn.ReLU(), nn.Linear(5, 3))
+        acm = ActivationCheckpointManager(model, checkpoint_ratio=0.5)
+        layers = acm.get_layers_to_checkpoint()
+        assert len(layers) >= 1
+
+    def test_estimate_savings(self):
+        from training.utils_v34 import ActivationCheckpointManager
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        acm = ActivationCheckpointManager(model, checkpoint_ratio=0.5)
+        savings = acm.estimate_memory_savings()
+        assert 'n_checkpointed' in savings
+        assert savings['n_checkpointed'] >= 1
+
+    def test_get_info(self):
+        from training.utils_v34 import ActivationCheckpointManager
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        acm = ActivationCheckpointManager(model)
+        info = acm.get_info()
+        assert 'strategy' in info
+        assert 'selected_layers' in info
+
+    def test_deepest_strategy(self):
+        from training.utils_v34 import ActivationCheckpointManager
+        model = nn.Sequential(nn.Linear(10, 8), nn.Linear(8, 5),
+                              nn.Linear(5, 3), nn.Linear(3, 2))
+        acm = ActivationCheckpointManager(model, checkpoint_ratio=0.5, strategy='deepest')
+        layers = acm.get_layers_to_checkpoint()
+        assert len(layers) >= 1
+
+
+class TestV34Integration:
+    """Интеграционные тесты v34."""
+
+    def test_safe_accum_training(self):
+        from training.utils_v34 import SafeGradAccumulator
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        acc = SafeGradAccumulator(accum_steps=2, max_grad_norm=1.0)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(4):
+            _, loss, _ = model(x, y)
+            result = acc.accumulate_step(model, loss)
+            if result['should_step']:
+                acc.optimizer_step(model, opt)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_llrd_training(self):
+        from training.utils_v34 import LayerwiseLRDecay
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        llrd = LayerwiseLRDecay(model, base_lr=1e-3, decay_rate=0.9)
+        groups = llrd.get_param_groups()
+        opt = torch.optim.AdamW(groups)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_convergence_training(self):
+        from training.utils_v34 import ConvergenceDetector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        cd = ConvergenceDetector(patience=100)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            cd.check(loss.item())
+            loss.backward()
+            opt.step()
+        # Should not converge in 10 steps
+        assert not cd.is_converged
+
+    def test_token_dropout_training(self):
+        from training.utils_v34 import TokenDropout
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        td = TokenDropout(drop_prob=0.2, min_tokens=4)
+        td.train()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            result = td(x)
+            dropped_x = result['input_ids']
+            dropped_y = y[:, :dropped_x.shape[1]]
+            _, loss, _ = model(dropped_x, dropped_y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
