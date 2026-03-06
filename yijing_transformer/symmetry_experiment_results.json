@@ -1,0 +1,233 @@
+{
+  "config": {
+    "d_model": 128,
+    "n_layers": 4,
+    "n_heads": 4,
+    "block_size": 64,
+    "vocab_size": 64,
+    "steps": 500,
+    "seed": 42,
+    "patterns": [
+      "binary_reflection",
+      "modular_addition",
+      "periodic_2k",
+      "xor_pattern",
+      "palindrome",
+      "rotation",
+      "random"
+    ]
+  },
+  "vanilla": {
+    "best_val_loss": 4.151423088709513,
+    "per_pattern_loss": {
+      "binary_reflection": 4.15682469367981,
+      "modular_addition": 4.164531612396241,
+      "periodic_2k": 4.081259093284607,
+      "xor_pattern": 4.16427830696106,
+      "palindrome": 4.153705224990845,
+      "rotation": 4.153783845901489,
+      "random": 4.163574981689453
+    }
+  },
+  "pure_geometry": {
+    "best_val_loss": 4.157382345199585,
+    "per_pattern_loss": {
+      "binary_reflection": 4.160589389801025,
+      "modular_addition": 4.162015104293824,
+      "periodic_2k": 4.13005373954773,
+      "xor_pattern": 4.161511707305908,
+      "palindrome": 4.159105939865112,
+      "rotation": 4.158202142715454,
+      "random": 4.161627788543701
+    }
+  },
+  "hybrid": {
+    "best_val_loss": 4.149387709299723,
+    "per_pattern_loss": {
+      "binary_reflection": 4.1590697288513185,
+      "modular_addition": 4.163547964096069,
+      "periodic_2k": 4.089767990112304,
+      "xor_pattern": 4.164001455307007,
+      "palindrome": 4.1551992797851565,
+      "rotation": 4.154785585403443,
+      "random": 4.1629001235961915
+    },
+    "gate_per_pattern": {
+      "binary_reflection": {
+        "geo_fraction": 0.16666666666666669,
+        "details": {
+          "layer_0": {
+            "attention": 0.4856632600227992,
+            "quantization": 0.49221358001232146,
+            "ffn": 0.524432530005773
+          },
+          "layer_1": {
+            "attention": 0.3288226028283437,
+            "quantization": 0.496501428882281,
+            "ffn": 0.3540328900019328
+          },
+          "layer_2": {
+            "attention": 0.5855306506156921,
+            "quantization": 0.4958102941513062,
+            "ffn": 0.3500566075245539
+          },
+          "layer_3": {
+            "attention": 0.48371160328388213,
+            "quantization": 0.4938569943110148,
+            "ffn": 0.41516140500704446
+          }
+        }
+      },
+      "modular_addition": {
+        "geo_fraction": 0.16666666666666669,
+        "details": {
+          "layer_0": {
+            "attention": 0.4862624744574229,
+            "quantization": 0.49220075209935504,
+            "ffn": 0.5264968832333883
+          },
+          "layer_1": {
+            "attention": 0.3262715051571528,
+            "quantization": 0.4965036074320475,
+            "ffn": 0.35423827469348906
+          },
+          "layer_2": {
+            "attention": 0.5862015505631765,
+            "quantization": 0.4958083172639211,
+            "ffn": 0.347562782963117
+          },
+          "layer_3": {
+            "attention": 0.4834331204493841,
+            "quantization": 0.493853638569514,
+            "ffn": 0.413154141108195
+          }
+        }
+      },
+      "periodic_2k": {
+        "geo_fraction": 0.16666666666666669,
+        "details": {
+          "layer_0": {
+            "attention": 0.4870644211769104,
+            "quantization": 0.492276069521904,
+            "ffn": 0.5259161512056987
+          },
+          "layer_1": {
+            "attention": 0.3633389969666799,
+            "quantization": 0.49645496606826783,
+            "ffn": 0.34452781776587166
+          },
+          "layer_2": {
+            "attention": 0.5708755135536194,
+            "quantization": 0.49584887723128,
+            "ffn": 0.3708895146846771
+          },
+          "layer_3": {
+            "attention": 0.48687438865502675,
+            "quantization": 0.49392832616964977,
+            "ffn": 0.43190007905165356
+          }
+        }
+      },
+      "xor_pattern": {
+        "geo_fraction": 0.16666666666666669,
+        "details": {
+          "layer_0": {
+            "attention": 0.4865063806374868,
+            "quantization": 0.49220079084237417,
+            "ffn": 0.5266450146834055
+          },
+          "layer_1": {
+            "attention": 0.3296133816242218,
+            "quantization": 0.496500696738561,
+            "ffn": 0.35118341644605
+          },
+          "layer_2": {
+            "attention": 0.5852896114190419,
+            "quantization": 0.4958095779021581,
+            "ffn": 0.34831201533476513
+          },
+          "layer_3": {
+            "attention": 0.48356220722198484,
+            "quantization": 0.4938556591669718,
+            "ffn": 0.4143051495154699
+          }
+        }
+      },
+      "palindrome": {
+        "geo_fraction": 0.16666666666666669,
+        "details": {
+          "layer_0": {
+            "attention": 0.4874128709236781,
+            "quantization": 0.49222171207269033,
+            "ffn": 0.5274887323379517
+          },
+          "layer_1": {
+            "attention": 0.3314474036296209,
+            "quantization": 0.49649933775266014,
+            "ffn": 0.34893586734930676
+          },
+          "layer_2": {
+            "attention": 0.5848253687222799,
+            "quantization": 0.4958113064368566,
+            "ffn": 0.35023700396219887
+          },
+          "layer_3": {
+            "attention": 0.4835382411877314,
+            "quantization": 0.4938588986794154,
+            "ffn": 0.41759975949923195
+          }
+        }
+      },
+      "rotation": {
+        "geo_fraction": 0.16666666666666669,
+        "details": {
+          "layer_0": {
+            "attention": 0.4857783138751984,
+            "quantization": 0.4922190457582474,
+            "ffn": 0.5244919121265411
+          },
+          "layer_1": {
+            "attention": 0.34116813937822976,
+            "quantization": 0.4964954286813736,
+            "ffn": 0.3489958713452021
+          },
+          "layer_2": {
+            "attention": 0.5830390234788259,
+            "quantization": 0.49581440587838493,
+            "ffn": 0.35239841441313424
+          },
+          "layer_3": {
+            "attention": 0.48421088655789696,
+            "quantization": 0.4938644528388977,
+            "ffn": 0.41673414707183837
+          }
+        }
+      },
+      "random": {
+        "geo_fraction": 0.16666666666666669,
+        "details": {
+          "layer_0": {
+            "attention": 0.48656682471434276,
+            "quantization": 0.4922060509522756,
+            "ffn": 0.5264402190844218
+          },
+          "layer_1": {
+            "attention": 0.3321990082661311,
+            "quantization": 0.4964987218379974,
+            "ffn": 0.3540460338195165
+          },
+          "layer_2": {
+            "attention": 0.5846713165442149,
+            "quantization": 0.4958126664161682,
+            "ffn": 0.3505974898735682
+          },
+          "layer_3": {
+            "attention": 0.48384331663449603,
+            "quantization": 0.49386171797911327,
+            "ffn": 0.4144749989112218
+          }
+        }
+      }
+    }
+  }
+}
