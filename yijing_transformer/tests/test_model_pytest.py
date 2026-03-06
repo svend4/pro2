@@ -4192,3 +4192,348 @@ class TestV19Integration:
         ema_model.eval()
         logits, _, _ = ema_model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v20 Tests ====================
+
+
+class TestDoRA:
+    """Тесты для DoRA."""
+
+    def test_forward_shape(self):
+        from training.utils_v20 import DoRALinear
+        base = nn.Linear(64, 32)
+        dora = DoRALinear(base, rank=4, alpha=8.0)
+        x = torch.randn(2, 8, 64)
+        out = dora(x)
+        assert out.shape == (2, 8, 32)
+
+    def test_trainable_params(self):
+        from training.utils_v20 import DoRALinear
+        base = nn.Linear(64, 32)
+        dora = DoRALinear(base, rank=4)
+        n = dora.num_trainable_params()
+        # lora_A: 4*64, lora_B: 32*4, magnitude: 32
+        assert n == 4 * 64 + 32 * 4 + 32
+
+    def test_frozen_base(self):
+        from training.utils_v20 import DoRALinear
+        base = nn.Linear(64, 32)
+        dora = DoRALinear(base, rank=4)
+        assert not dora.weight.requires_grad
+        assert dora.lora_A.requires_grad
+        assert dora.lora_B.requires_grad
+        assert dora.magnitude.requires_grad
+
+    def test_backward(self):
+        from training.utils_v20 import DoRALinear
+        base = nn.Linear(64, 32)
+        dora = DoRALinear(base, rank=4)
+        x = torch.randn(2, 8, 64)
+        out = dora(x)
+        out.sum().backward()
+        assert dora.lora_A.grad is not None
+        assert dora.magnitude.grad is not None
+
+    def test_apply_dora(self):
+        from training.utils_v20 import apply_dora
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        modules = apply_dora(model, rank=4, targets=['q_proj', 'v_proj'])
+        assert len(modules) > 0
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        logits, _, _ = model(x)
+        assert logits.shape == (1, 8, cfg.vocab_size)
+
+    def test_apply_dora_all(self):
+        from training.utils_v20 import apply_dora
+        model = nn.Sequential(nn.Linear(10, 20), nn.ReLU(), nn.Linear(20, 5))
+        modules = apply_dora(model, rank=2)
+        assert len(modules) == 2  # two Linear layers
+
+
+class TestSparseAttention:
+    """Тесты для Sparse Attention."""
+
+    def test_mask_shape(self):
+        from training.utils_v20 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, window_size=3, n_random=2, n_global=1)
+        mask = sam.get_mask()
+        assert mask.shape == (16, 16)
+        assert mask.dtype == torch.bool
+
+    def test_window_connectivity(self):
+        from training.utils_v20 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, window_size=2, n_random=0, n_global=0)
+        mask = sam.get_mask()
+        # Token 5 should see tokens 3,4,5,6,7
+        for j in range(3, 8):
+            assert mask[5, j]
+        # Should not see distant tokens (without random/global)
+        assert not mask[5, 0]
+
+    def test_global_tokens(self):
+        from training.utils_v20 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=16, window_size=1, n_random=0, n_global=2)
+        mask = sam.get_mask()
+        # First 2 tokens see all
+        assert mask[0].all()
+        assert mask[1].all()
+        # All tokens see first 2
+        assert mask[:, 0].all()
+        assert mask[:, 1].all()
+
+    def test_additive_mask(self):
+        from training.utils_v20 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=8, window_size=2, n_random=1, n_global=1)
+        bool_mask = sam.get_mask()
+        add_mask = sam.get_additive_mask(bool_mask)
+        assert add_mask.shape == (8, 8)
+        # Attended positions should be 0
+        assert (add_mask[bool_mask] == 0).all()
+        # Blocked positions should be -inf
+        assert (add_mask[~bool_mask] == float('-inf')).all()
+
+    def test_sparsity_ratio(self):
+        from training.utils_v20 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=32, window_size=2, n_random=1, n_global=1)
+        ratio = sam.sparsity_ratio()
+        assert 0.0 < ratio < 1.0  # some sparsity
+
+    def test_small_seq(self):
+        from training.utils_v20 import SparseAttentionMask
+        sam = SparseAttentionMask(seq_len=4, window_size=3, n_random=0, n_global=1)
+        mask = sam.get_mask()
+        # With window=3 on seq_len=4, almost everything should be visible
+        assert mask.float().mean() > 0.8
+
+
+class TestGradientVaccine:
+    """Тесты для Gradient Vaccine."""
+
+    def test_aligned_gradients(self):
+        from training.utils_v20 import GradientVaccine
+        gv = GradientVaccine(threshold=0.0)
+        g1 = torch.randn(100)
+        g2 = g1 + 0.1 * torch.randn(100)  # similar
+        result = gv.align_gradients([g1, g2])
+        assert result.shape == (100,)
+
+    def test_conflicting_gradients(self):
+        from training.utils_v20 import GradientVaccine
+        gv = GradientVaccine(threshold=0.5)
+        g1 = torch.randn(50)
+        g2 = -g1  # opposite
+        result = gv.align_gradients([g1, g2])
+        assert result.shape == (50,)
+
+    def test_stats(self):
+        from training.utils_v20 import GradientVaccine
+        gv = GradientVaccine()
+        for _ in range(5):
+            grads = [torch.randn(20) for _ in range(3)]
+            gv.align_gradients(grads)
+        stats = gv.get_agreement_stats()
+        assert stats['n_steps'] == 5
+        assert -1.0 <= stats['mean_cosine'] <= 1.0
+
+    def test_reset(self):
+        from training.utils_v20 import GradientVaccine
+        gv = GradientVaccine()
+        gv.align_gradients([torch.randn(10), torch.randn(10)])
+        gv.reset()
+        assert len(gv.history) == 0
+
+    def test_single_gradient(self):
+        from training.utils_v20 import GradientVaccine
+        gv = GradientVaccine()
+        g = torch.randn(30)
+        result = gv.align_gradients([g])
+        assert torch.allclose(result, g)
+
+
+class TestCyclicBatchScheduler:
+    """Тесты для Cyclic Batch Size Scheduler."""
+
+    def test_initial_batch_size(self):
+        from training.utils_v20 import CyclicBatchScheduler
+        sched = CyclicBatchScheduler(initial_batch_size=8, max_batch_size=64,
+                                      total_steps=100)
+        assert sched.get_batch_size() == 8
+
+    def test_increases(self):
+        from training.utils_v20 import CyclicBatchScheduler
+        sched = CyclicBatchScheduler(initial_batch_size=8, max_batch_size=64,
+                                      total_steps=100)
+        sizes = []
+        for _ in range(100):
+            sched.step()
+            sizes.append(sched.get_batch_size())
+        # Should generally increase
+        assert sizes[-1] >= sizes[0]
+        assert sizes[-1] == 64
+
+    def test_warmup(self):
+        from training.utils_v20 import CyclicBatchScheduler
+        sched = CyclicBatchScheduler(initial_batch_size=8, max_batch_size=64,
+                                      total_steps=100, warmup_steps=10)
+        for _ in range(10):
+            sched.step()
+            assert sched.get_batch_size() == 8
+
+    def test_grad_accum(self):
+        from training.utils_v20 import CyclicBatchScheduler
+        sched = CyclicBatchScheduler(initial_batch_size=8, max_batch_size=64,
+                                      total_steps=100)
+        # At start
+        assert sched.get_grad_accum_steps() == 1
+        # At end
+        for _ in range(100):
+            sched.step()
+        assert sched.get_grad_accum_steps() >= 4
+
+    def test_state_dict(self):
+        from training.utils_v20 import CyclicBatchScheduler
+        sched = CyclicBatchScheduler(initial_batch_size=8, max_batch_size=64,
+                                      total_steps=100)
+        for _ in range(30):
+            sched.step()
+        sd = sched.state_dict()
+        assert sd['step'] == 30
+        sched2 = CyclicBatchScheduler(initial_batch_size=8, max_batch_size=64,
+                                       total_steps=100)
+        sched2.load_state_dict(sd)
+        assert sched2._step == 30
+
+
+class TestLossLandscapeProbe:
+    """Тесты для Loss Landscape Probe."""
+
+    def test_measure_sharpness(self):
+        from training.utils_v20 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        x = torch.randn(8, 10)
+        y = torch.randn(8, 5)
+
+        def loss_fn():
+            return F.mse_loss(model(x), y)
+
+        probe = LossLandscapeProbe(model, loss_fn)
+        result = probe.measure_sharpness(epsilon=0.01, n_samples=3)
+        assert 'sharpness' in result
+        assert 'base_loss' in result
+        assert len(result['perturbed_losses']) == 3
+        assert result['sharpness'] >= 0
+
+    def test_weights_restored(self):
+        from training.utils_v20 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        original = {k: v.clone() for k, v in model.state_dict().items()}
+
+        def loss_fn():
+            return model(torch.randn(4, 10)).sum()
+
+        probe = LossLandscapeProbe(model, loss_fn)
+        probe.measure_sharpness(epsilon=0.1, n_samples=5)
+
+        for k, v in model.state_dict().items():
+            assert torch.equal(v, original[k])
+
+    def test_directional_sharpness(self):
+        from training.utils_v20 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        x = torch.randn(8, 10)
+        y = torch.randn(8, 5)
+
+        def loss_fn():
+            return F.mse_loss(model(x), y)
+
+        probe = LossLandscapeProbe(model, loss_fn)
+        result = probe.directional_sharpness(n_points=7, epsilon_range=0.02)
+        assert len(result['epsilons']) == 7
+        assert len(result['losses']) == 7
+        assert 'curvature' in result
+
+    def test_curvature_estimate(self):
+        from training.utils_v20 import LossLandscapeProbe
+        probe = LossLandscapeProbe(None, None)
+        # Parabola: f(x) = x^2, curvature = 2
+        eps = [-0.1, 0, 0.1]
+        losses = [0.01, 0.0, 0.01]
+        curv = probe._estimate_curvature(eps, losses)
+        assert abs(curv - 2.0) < 1e-6
+
+    def test_with_model(self):
+        from training.utils_v20 import LossLandscapeProbe
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        x = torch.randint(0, cfg.vocab_size, (1, 8))
+        y = torch.randint(0, cfg.vocab_size, (1, 8))
+
+        def loss_fn():
+            _, loss, _ = model(x, y)
+            return loss
+
+        probe = LossLandscapeProbe(model, loss_fn)
+        result = probe.measure_sharpness(epsilon=0.005, n_samples=2)
+        assert result['sharpness'] >= 0
+        assert result['base_loss'] > 0
+
+
+class TestV20Integration:
+    """Интеграционные тесты v20."""
+
+    def test_dora_training(self):
+        from training.utils_v20 import apply_dora
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        # Freeze base
+        for p in model.parameters():
+            p.requires_grad = False
+        modules = apply_dora(model, rank=4, targets=['q_proj', 'v_proj'])
+        # Only DoRA params should be trainable
+        trainable = [p for p in model.parameters() if p.requires_grad]
+        assert len(trainable) > 0
+        opt = torch.optim.Adam(trainable, lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        _, loss, _ = model(x, y)
+        loss.backward()
+        opt.step()
+        assert not torch.isnan(loss)
+
+    def test_sparse_attn_with_scores(self):
+        from training.utils_v20 import SparseAttentionMask
+        T = 16
+        sam = SparseAttentionMask(seq_len=T, window_size=3, n_random=2, n_global=1)
+        bool_mask = sam.get_mask()
+        add_mask = sam.get_additive_mask(bool_mask)
+        # Simulate attention
+        scores = torch.randn(1, 4, T, T)
+        masked_scores = scores + add_mask.unsqueeze(0).unsqueeze(0)
+        attn = F.softmax(masked_scores, dim=-1)
+        assert not torch.isnan(attn).any()
+        # Blocked positions should have ~0 attention
+        blocked = attn[0, 0][~bool_mask]
+        assert blocked.max() < 1e-5
+
+    def test_cyclic_batch_with_training(self):
+        from training.utils_v20 import CyclicBatchScheduler
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sched = CyclicBatchScheduler(initial_batch_size=2, max_batch_size=8,
+                                      total_steps=20)
+        for step in range(10):
+            bs = sched.get_batch_size()
+            accum = sched.get_grad_accum_steps(base_batch_size=2)
+            opt.zero_grad()
+            for _ in range(accum):
+                x = torch.randint(0, cfg.vocab_size, (2, 8))
+                y = torch.randint(0, cfg.vocab_size, (2, 8))
+                _, loss, _ = model(x, y)
+                (loss / accum).backward()
+            opt.step()
+            sched.step()
+        assert not torch.isnan(loss)

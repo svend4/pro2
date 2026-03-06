@@ -106,6 +106,12 @@ class YiJingConfig:
     chunk_prefill_size: int = 0      # Chunked prefill (0 = выкл)
     ema_decay_warmup: int = 0        # EMA decay warmup шагов (0 = выкл)
 
+    # v20: DoRA, Sparse Attention, Cyclic Batch
+    use_dora: bool = False           # DoRA вместо LoRA
+    dora_rank: int = 8               # DoRA rank
+    sparse_attn_window: int = 0      # Sparse attention window (0 = выкл)
+    cyclic_max_batch: int = 0        # Cyclic batch max size (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
