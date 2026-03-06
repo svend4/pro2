@@ -7266,3 +7266,312 @@ class TestV29Integration:
             wds.step()
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v30 Tests ====================
+
+
+class TestGradientCentralization:
+    """Тесты для Gradient Centralization."""
+
+    def test_centralize(self):
+        from training.utils_v30 import GradientCentralization
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        result = gc.centralize(model)
+        assert result['n_centralized'] >= 1
+        # After centralization, mean along input dims should be ~0
+        dims = tuple(range(1, model.weight.grad.ndim))
+        mean = model.weight.grad.mean(dim=dims)
+        assert torch.allclose(mean, torch.zeros_like(mean), atol=1e-6)
+
+    def test_skip_1d(self):
+        from training.utils_v30 import GradientCentralization
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        result = gc.centralize(model)
+        # bias is 1D → skipped
+        assert result['n_skipped'] >= 1
+
+    def test_centralize_params(self):
+        from training.utils_v30 import GradientCentralization
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        n = gc.centralize_params(model.parameters())
+        assert n >= 1
+
+
+class TestAdaptiveGradientClipping:
+    """Тесты для AGC."""
+
+    def test_clip(self):
+        from training.utils_v30 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        # Make gradient very large
+        model.weight.grad.data.mul_(1000)
+        agc = AdaptiveGradientClipping(clipping_factor=0.01)
+        result = agc.clip(model)
+        assert result['n_clipped'] >= 1
+        assert result['n_total'] >= 1
+
+    def test_no_clip_small_grad(self):
+        from training.utils_v30 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.mul_(0.0001)
+        agc = AdaptiveGradientClipping(clipping_factor=100.0)
+        result = agc.clip(model)
+        assert result['n_clipped'] == 0
+
+    def test_clip_params(self):
+        from training.utils_v30 import AdaptiveGradientClipping
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.mul_(1000)
+        agc = AdaptiveGradientClipping(clipping_factor=0.01)
+        n = agc.clip_params(model.named_parameters())
+        assert n >= 1
+
+
+class TestLossSpikeDetector:
+    """Тесты для Loss Spike Detector."""
+
+    def test_no_spike_normal(self):
+        from training.utils_v30 import LossSpikeDetector
+        det = LossSpikeDetector(window_size=50, spike_threshold=3.0)
+        for i in range(50):
+            result = det.check(2.0 + torch.randn(1).item() * 0.01)
+        assert det.total_spikes < 5  # Very few if any
+
+    def test_detect_spike(self):
+        from training.utils_v30 import LossSpikeDetector
+        det = LossSpikeDetector(window_size=50, spike_threshold=2.0)
+        for _ in range(50):
+            det.check(2.0)
+        result = det.check(100.0)  # Huge spike
+        assert result['is_spike']
+        assert result['z_score'] > 2.0
+
+    def test_alarm(self):
+        from training.utils_v30 import LossSpikeDetector
+        det = LossSpikeDetector(window_size=50, spike_threshold=2.0, patience=3)
+        for _ in range(50):
+            det.check(2.0)
+        for _ in range(3):
+            result = det.check(100.0)
+        assert result['is_alarm']
+        assert det.alarm_count >= 1
+
+    def test_reset(self):
+        from training.utils_v30 import LossSpikeDetector
+        det = LossSpikeDetector()
+        det.check(1.0)
+        det.reset()
+        assert det.total_spikes == 0
+
+    def test_insufficient_history(self):
+        from training.utils_v30 import LossSpikeDetector
+        det = LossSpikeDetector()
+        result = det.check(5.0)
+        assert not result['is_spike']
+
+
+class TestFreezeScheduler:
+    """Тесты для Parameter Freezing Scheduler."""
+
+    def test_freeze_all(self):
+        from training.utils_v30 import FreezeScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        fs = FreezeScheduler(model, total_steps=100)
+        fs.freeze_all()
+        params = fs.get_trainable_params()
+        assert params['trainable'] == 0
+
+    def test_unfreeze_all(self):
+        from training.utils_v30 import FreezeScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        fs = FreezeScheduler(model, total_steps=100)
+        fs.freeze_all()
+        fs.unfreeze_all()
+        params = fs.get_trainable_params()
+        assert params['trainable'] == params['total']
+
+    def test_progressive_unfreeze(self):
+        from training.utils_v30 import FreezeScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        fs = FreezeScheduler(model, total_steps=100, strategy='top_down')
+        fs.freeze_all()
+        info = fs.step(50)
+        assert info['n_unfrozen'] >= 1
+
+    def test_trainable_params(self):
+        from training.utils_v30 import FreezeScheduler
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        fs = FreezeScheduler(model)
+        params = fs.get_trainable_params()
+        assert params['total'] > 0
+        assert params['trainable_pct'] > 0
+
+
+class TestStateSnapshotter:
+    """Тесты для Training State Snapshotter."""
+
+    def test_save_and_restore(self):
+        from training.utils_v30 import StateSnapshotter
+        model = nn.Linear(10, 5)
+        snap = StateSnapshotter(max_snapshots=3)
+        w_before = model.weight.data.clone()
+        snap.save(model, step=0)
+        model.weight.data.fill_(99.0)
+        result = snap.restore(model)
+        assert torch.equal(model.weight.data, w_before)
+        assert result['step'] == 0
+
+    def test_max_snapshots(self):
+        from training.utils_v30 import StateSnapshotter
+        model = nn.Linear(10, 5)
+        snap = StateSnapshotter(max_snapshots=2)
+        snap.save(model, step=0)
+        snap.save(model, step=1)
+        snap.save(model, step=2)
+        assert snap.n_snapshots == 2
+
+    def test_restore_best(self):
+        from training.utils_v30 import StateSnapshotter
+        model = nn.Linear(10, 5)
+        snap = StateSnapshotter(max_snapshots=5)
+        snap.save(model, step=0, metadata={'loss': 3.0})
+        snap.save(model, step=1, metadata={'loss': 1.0})
+        snap.save(model, step=2, metadata={'loss': 2.0})
+        result = snap.restore_best(model, metric_key='loss', mode='min')
+        assert result['step'] == 1
+
+    def test_restore_with_optimizer(self):
+        from training.utils_v30 import StateSnapshotter
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=0.01)
+        snap = StateSnapshotter()
+        # Do a step
+        opt.zero_grad()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+        snap.save(model, opt, step=1)
+        # Change LR
+        for g in opt.param_groups:
+            g['lr'] = 0.999
+        snap.restore(model, opt)
+        assert opt.param_groups[0]['lr'] == 0.01
+
+    def test_snapshot_info(self):
+        from training.utils_v30 import StateSnapshotter
+        model = nn.Linear(10, 5)
+        snap = StateSnapshotter()
+        snap.save(model, step=0, metadata={'loss': 2.0})
+        snap.save(model, step=1, metadata={'loss': 1.5})
+        info = snap.get_snapshot_info()
+        assert len(info) == 2
+        assert info[0]['step'] == 0
+
+    def test_clear(self):
+        from training.utils_v30 import StateSnapshotter
+        model = nn.Linear(10, 5)
+        snap = StateSnapshotter()
+        snap.save(model, step=0)
+        snap.clear()
+        assert snap.n_snapshots == 0
+
+    def test_restore_empty(self):
+        from training.utils_v30 import StateSnapshotter
+        model = nn.Linear(10, 5)
+        snap = StateSnapshotter()
+        assert snap.restore(model) is None
+
+
+class TestV30Integration:
+    """Интеграционные тесты v30."""
+
+    def test_grad_centralization_training(self):
+        from training.utils_v30 import GradientCentralization
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gc = GradientCentralization()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gc.centralize(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_agc_training(self):
+        from training.utils_v30 import AdaptiveGradientClipping
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        agc = AdaptiveGradientClipping(clipping_factor=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            agc.clip(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_spike_detector_training(self):
+        from training.utils_v30 import LossSpikeDetector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        det = LossSpikeDetector()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            det.check(loss.item())
+            loss.backward()
+            opt.step()
+
+    def test_snapshotter_training(self):
+        from training.utils_v30 import StateSnapshotter
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        snap = StateSnapshotter(max_snapshots=3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for step in range(6):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            if step % 2 == 0:
+                snap.save(model, opt, step=step, metadata={'loss': loss.item()})
+        result = snap.restore_best(model, opt, metric_key='loss', mode='min')
+        assert result is not None
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()

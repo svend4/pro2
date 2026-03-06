@@ -162,6 +162,12 @@ class YiJingConfig:
     gradient_noise_eta: float = 0.0    # Gradient noise amplitude (0 = выкл)
     wd_schedule: str = 'constant'      # constant, linear, cosine, proportional
 
+    # v30: Gradient Centralization, AGC, Freeze Schedule
+    use_grad_centralization: bool = False  # Gradient Centralization
+    agc_clipping: float = 0.0             # AGC clipping factor (0 = выкл, 0.01 типично)
+    freeze_strategy: str = 'none'         # none, top_down, bottom_up, all_at_once
+    loss_spike_threshold: float = 3.0     # Loss spike detection threshold (std devs)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
