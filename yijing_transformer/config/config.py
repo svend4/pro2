@@ -257,6 +257,20 @@ class YiJingConfig:
     swa: bool = False                     # Stochastic weight averaging
     wsd_schedule: bool = False            # Warmup-Stable-Decay schedule
 
+    # v45: Gradient Centralization, AdaFactor LR, Gradient Penalty, SAM, Lion
+    gradient_centralization: bool = False  # Gradient centralization
+    adafactor_lr_scaling: bool = False    # AdaFactor-like LR scaling
+    gradient_penalty: float = 0.0         # Gradient penalty lambda (0 = disabled)
+    sam_rho: float = 0.0                  # SAM rho (0 = disabled)
+    lion_optimizer: bool = False          # Lion optimizer
+
+    # v46: Token Loss Weighting, Seq Packing, Dynamic Padding, Attn Sink, Spec Decoding
+    token_loss_weighting: str = 'uniform' # Token loss weighting mode
+    sequence_packing: bool = False        # Sequence packing
+    dynamic_padding: bool = False         # Dynamic padding
+    attention_sink_cache: bool = False    # Attention sink cache
+    speculative_decoding: bool = False    # Speculative decoding
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

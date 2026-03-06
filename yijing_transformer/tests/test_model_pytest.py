@@ -11821,3 +11821,352 @@ class TestV44Integration:
             wsd.apply(opt)
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v45 Tests ====================
+
+
+class TestGradientCentralization:
+    """Тесты для Gradient Centralization."""
+
+    def test_centralize(self):
+        from training.utils_v45 import GradientCentralization
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        result = gc.centralize(model)
+        assert result['n_centralized'] == 1  # weight (2D)
+        assert result['n_skipped'] == 1  # bias (1D)
+
+    def test_centralized_mean_near_zero(self):
+        from training.utils_v45 import GradientCentralization
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gc = GradientCentralization()
+        gc.centralize(model)
+        # Mean over non-first dims should be ~0
+        mean = model.weight.grad.mean(dim=1)
+        assert mean.abs().max().item() < 1e-6
+
+
+class TestAdaFactorLRScaling:
+    """Тесты для AdaFactor LR Scaling."""
+
+    def test_apply(self):
+        from training.utils_v45 import AdaFactorLRScaling
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=1e-3)
+        scaler = AdaFactorLRScaling(base_lr=1e-3)
+        lrs = scaler.apply(opt)
+        assert len(lrs) == 1
+        assert lrs[0] > 0
+
+    def test_get_info(self):
+        from training.utils_v45 import AdaFactorLRScaling
+        scaler = AdaFactorLRScaling()
+        info = scaler.get_info()
+        assert 'base_lr' in info
+
+
+class TestGradientPenalty:
+    """Тесты для Gradient Penalty."""
+
+    def test_compute(self):
+        from training.utils_v45 import GradientPenalty
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gp = GradientPenalty(lambda_gp=0.01)
+        result = gp.compute(model)
+        assert result['penalty'] > 0
+        assert result['grad_norm'] > 0
+
+    def test_max_norm_threshold(self):
+        from training.utils_v45 import GradientPenalty
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        gp = GradientPenalty(lambda_gp=0.01, max_norm=1e6)
+        result = gp.compute(model)
+        assert result['penalty'] == 0.0
+
+    def test_stats(self):
+        from training.utils_v45 import GradientPenalty
+        gp = GradientPenalty()
+        model = nn.Linear(10, 5)
+        for _ in range(3):
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            gp.compute(model)
+            model.zero_grad()
+        stats = gp.get_stats()
+        assert stats['mean_norm'] > 0
+
+
+class TestSAM:
+    """Тесты для SAM."""
+
+    def test_two_step(self):
+        from training.utils_v45 import SAM
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sam = SAM(base_opt, rho=0.05)
+        x = torch.randn(2, 10)
+        y = torch.randint(0, 5, (2,))
+        # Step 1: forward + backward + first_step
+        sam.zero_grad()
+        loss = F.cross_entropy(model(x), y)
+        loss.backward()
+        sam.first_step()
+        # Step 2: forward + backward + second_step
+        loss2 = F.cross_entropy(model(x), y)
+        loss2.backward()
+        sam.second_step()
+
+    def test_param_groups(self):
+        from training.utils_v45 import SAM
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sam = SAM(base_opt)
+        assert len(sam.param_groups) == 1
+
+
+class TestLionOptimizer:
+    """Тесты для Lion."""
+
+    def test_step(self):
+        from training.utils_v45 import Lion
+        model = nn.Linear(10, 5)
+        opt = Lion(model.parameters(), lr=1e-4)
+        w_before = model.weight.data.clone()
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()
+        assert not torch.equal(model.weight.data, w_before)
+
+    def test_weight_decay(self):
+        from training.utils_v45 import Lion
+        model = nn.Linear(10, 5)
+        opt = Lion(model.parameters(), lr=1e-4, weight_decay=0.1)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        opt.step()  # Should not crash
+
+    def test_training(self):
+        from training.utils_v45 import Lion
+        model = nn.Linear(10, 2)
+        opt = Lion(model.parameters(), lr=1e-3)
+        for _ in range(20):
+            opt.zero_grad()
+            x = torch.randn(8, 10)
+            y = torch.randint(0, 2, (8,))
+            loss = F.cross_entropy(model(x), y)
+            loss.backward()
+            opt.step()
+
+
+class TestV45Integration:
+    """Интеграционные тесты v45."""
+
+    def test_sam_training(self):
+        from training.utils_v45 import SAM
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        base_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sam = SAM(base_opt, rho=0.05)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            sam.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            sam.first_step()
+            _, loss2, _ = model(x, y)
+            loss2.backward()
+            sam.second_step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_lion_training(self):
+        from training.utils_v45 import Lion
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = Lion(model.parameters(), lr=1e-4)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+
+# ==================== v46 Tests ====================
+
+
+class TestTokenLossWeighter:
+    """Тесты для Token Loss Weighting."""
+
+    def test_uniform(self):
+        from training.utils_v46 import TokenLossWeighter
+        tlw = TokenLossWeighter(mode='uniform')
+        targets = torch.randint(0, 100, (2, 8))
+        weights = tlw.compute_weights(targets)
+        assert weights.shape == (2, 8)
+        assert (weights == 1.0).all()
+
+    def test_position(self):
+        from training.utils_v46 import TokenLossWeighter
+        tlw = TokenLossWeighter(mode='position', position_decay=1.0)
+        targets = torch.randint(0, 100, (2, 8))
+        weights = tlw.compute_weights(targets)
+        # Later positions should have higher weight
+        assert weights[0, -1] > weights[0, 0]
+
+    def test_frequency(self):
+        from training.utils_v46 import TokenLossWeighter
+        tlw = TokenLossWeighter(mode='frequency')
+        targets = torch.tensor([[0, 0, 0, 1], [0, 0, 2, 3]])
+        weights = tlw.compute_weights(targets, vocab_size=10)
+        assert weights.shape == (2, 4)
+
+    def test_weighted_loss(self):
+        from training.utils_v46 import TokenLossWeighter
+        tlw = TokenLossWeighter(mode='uniform')
+        logits = torch.randn(2, 8, 100)
+        targets = torch.randint(0, 100, (2, 8))
+        loss = tlw.weighted_loss(logits, targets)
+        assert loss.item() > 0
+
+
+class TestSequencePacker:
+    """Тесты для Sequence Packing."""
+
+    def test_pack(self):
+        from training.utils_v46 import SequencePacker
+        packer = SequencePacker(max_length=16)
+        seqs = [torch.randint(0, 100, (5,)),
+                torch.randint(0, 100, (4,)),
+                torch.randint(0, 100, (6,))]
+        result = packer.pack(seqs)
+        assert result['packed_ids'].shape[1] == 16
+        assert result['n_packed'] >= 1
+
+    def test_block_attention_mask(self):
+        from training.utils_v46 import SequencePacker
+        packer = SequencePacker(max_length=10)
+        seqs = [torch.randint(0, 100, (3,)),
+                torch.randint(0, 100, (4,))]
+        result = packer.pack(seqs)
+        mask = packer.create_block_attention_mask(result['sequence_ids'])
+        assert mask.shape == (result['packed_ids'].shape[0], 10, 10)
+
+    def test_long_sequence_truncated(self):
+        from training.utils_v46 import SequencePacker
+        packer = SequencePacker(max_length=8)
+        seqs = [torch.randint(0, 100, (20,))]
+        result = packer.pack(seqs)
+        assert result['packed_ids'].shape[1] == 8
+
+
+class TestDynamicPadder:
+    """Тесты для Dynamic Padding."""
+
+    def test_pad_batch(self):
+        from training.utils_v46 import DynamicPadder
+        padder = DynamicPadder(pad_to_multiple=8)
+        seqs = [torch.randint(0, 100, (5,)),
+                torch.randint(0, 100, (3,)),
+                torch.randint(0, 100, (7,))]
+        result = padder.pad_batch(seqs)
+        assert result['input_ids'].shape == (3, 8)
+        assert result['attention_mask'].shape == (3, 8)
+
+    def test_efficiency(self):
+        from training.utils_v46 import DynamicPadder
+        padder = DynamicPadder(pad_to_multiple=1)
+        seqs = [torch.randint(0, 100, (10,)),
+                torch.randint(0, 100, (10,))]
+        padder.pad_batch(seqs)
+        assert padder.get_efficiency() == 1.0
+
+    def test_padding_values(self):
+        from training.utils_v46 import DynamicPadder
+        padder = DynamicPadder(pad_token_id=99, pad_to_multiple=1)
+        seqs = [torch.tensor([1, 2, 3]), torch.tensor([4, 5])]
+        result = padder.pad_batch(seqs)
+        assert result['input_ids'][1, 2].item() == 99
+
+
+class TestAttentionSinkCache:
+    """Тесты для Attention Sink Cache."""
+
+    def test_update(self):
+        from training.utils_v46 import AttentionSinkCache
+        cache = AttentionSinkCache(n_sink_tokens=2, window_size=4)
+        k = torch.randn(1, 2, 8, 16)
+        v = torch.randn(1, 2, 8, 16)
+        result = cache.update(0, k, v)
+        assert result['key'].shape[2] == 6  # 2 sink + 4 window
+
+    def test_grow_cache(self):
+        from training.utils_v46 import AttentionSinkCache
+        cache = AttentionSinkCache(n_sink_tokens=2, window_size=4)
+        cache.update(0, torch.randn(1, 2, 3, 16), torch.randn(1, 2, 3, 16))
+        result = cache.update(0, torch.randn(1, 2, 3, 16), torch.randn(1, 2, 3, 16))
+        assert result['key'].shape[2] == 6  # 2 + 4
+
+    def test_clear(self):
+        from training.utils_v46 import AttentionSinkCache
+        cache = AttentionSinkCache()
+        cache.update(0, torch.randn(1, 2, 8, 16), torch.randn(1, 2, 8, 16))
+        cache.clear()
+        assert cache.get(0) is None
+
+    def test_get_info(self):
+        from training.utils_v46 import AttentionSinkCache
+        cache = AttentionSinkCache(n_sink_tokens=4, window_size=256)
+        info = cache.get_info()
+        assert info['n_sink_tokens'] == 4
+
+
+class TestSpeculativeDecodingHelper:
+    """Тесты для Speculative Decoding."""
+
+    def test_draft_tokens(self):
+        from training.utils_v46 import SpeculativeDecodingHelper
+        draft = nn.Linear(10, 20)
+        helper = SpeculativeDecodingHelper(n_speculative=3)
+        input_ids = torch.randint(0, 10, (1, 5))
+        # Need model that takes token ids
+        class SimpleDraft(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.emb = nn.Embedding(20, 10)
+                self.head = nn.Linear(10, 20)
+            def forward(self, x):
+                return self.head(self.emb(x))
+        model = SimpleDraft()
+        result = helper.draft_tokens(model, input_ids)
+        assert result['tokens'].shape == (1, 3)
+        assert result['logits'].shape == (1, 3, 20)
+
+    def test_verify_tokens(self):
+        from training.utils_v46 import SpeculativeDecodingHelper
+        helper = SpeculativeDecodingHelper(n_speculative=4)
+        target_logits = torch.randn(1, 4, 20)
+        draft_logits = torch.randn(1, 4, 20)
+        draft_tokens = torch.randint(0, 20, (1, 4))
+        result = helper.verify_tokens(target_logits, draft_logits, draft_tokens)
+        assert 'n_accepted' in result
+        assert result['acceptance_rate'] >= 0
+
+    def test_stats(self):
+        from training.utils_v46 import SpeculativeDecodingHelper
+        helper = SpeculativeDecodingHelper()
+        stats = helper.get_stats()
+        assert 'overall_acceptance_rate' in stats
