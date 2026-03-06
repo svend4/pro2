@@ -58,9 +58,9 @@ class MultiHeadGeometricAttention(nn.Module):
         self.dropout = nn.Dropout(cfg.dropout)
 
         # Per-head кодбук: каждая голова → свой набор вершин гиперкуба
-        # Проекция Q/K → codebook_dim для каждой головы
-        self.q_geo = nn.Linear(self.head_dim, codebook_dim * self.n_heads, bias=False)
-        self.k_geo = nn.Linear(self.head_dim, codebook_dim * self.n_heads, bias=False)
+        # Проекция head_dim → codebook_dim (shared across heads)
+        self.q_geo = nn.Linear(self.head_dim, codebook_dim, bias=False)
+        self.k_geo = nn.Linear(self.head_dim, codebook_dim, bias=False)
 
         # Обучаемые кодбуки: начинаем с триграмм, можно отклоняться
         n_codes = 2 ** codebook_dim
@@ -98,8 +98,10 @@ class MultiHeadGeometricAttention(nn.Module):
 
         # RoPE
         if self.rotary is not None:
-            cos, sin = self.rotary(T, x.device)
-            q, k = apply_rotary_emb(q, k, cos, sin)
+            cos, sin = self.rotary(T)
+            cos, sin = cos.to(x.device), sin.to(x.device)
+            q = apply_rotary_emb(q, cos, sin)
+            k = apply_rotary_emb(k, cos, sin)
 
         # Стандартные dot-product scores
         scores = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, T, T)
@@ -109,9 +111,9 @@ class MultiHeadGeometricAttention(nn.Module):
         q_flat = q.transpose(1, 2).reshape(B * T, H, self.head_dim)
         k_flat = k.transpose(1, 2).reshape(B * T, H, self.head_dim)
 
-        # Проецируем каждую голову независимо
+        # Проецируем каждую голову независимо: (B*T*H, head_dim) → (B*T*H, k)
         q_geo_all = self.q_geo(q_flat.reshape(B * T * H, self.head_dim))
-        q_geo_all = q_geo_all.reshape(B * T, H, self.codebook_dim)  # (B*T, H, k)
+        q_geo_all = q_geo_all.reshape(B * T, H, self.codebook_dim)
         k_geo_all = self.k_geo(k_flat.reshape(B * T * H, self.head_dim))
         k_geo_all = k_geo_all.reshape(B * T, H, self.codebook_dim)
 
