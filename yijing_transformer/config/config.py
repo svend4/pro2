@@ -95,6 +95,11 @@ class YiJingConfig:
     prefix_len: int = 0              # Prefix tuning длина (0 = выкл)
     mtp_n_future: int = 0            # Multi-Token Prediction горизонт (0 = выкл)
 
+    # v18: WSD scheduler, NEFTune, LAMB
+    wsd_decay_steps: int = 0         # WSD decay фаза (0 = выкл)
+    neftune_alpha: float = 0.0       # NEFTune noise scale (0 = выкл, 5-15 типично)
+    bpe_dropout: float = 0.0         # BPE-Dropout rate (0 = выкл, 0.1 типично)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

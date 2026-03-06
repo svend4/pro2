@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import sys
 import os
@@ -3475,3 +3476,381 @@ class TestV17Integration:
         sims = lens.layer_similarity(ids)
         assert len(preds) == cfg.n_layers + 1
         assert len(sims) == cfg.n_layers
+
+
+# ==================== v18 Tests ====================
+
+
+class TestWSDScheduler:
+    """Тесты для WSD LR Scheduler."""
+
+    def test_warmup_phase(self):
+        from training.utils_v18 import WSDScheduler
+        model = nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = WSDScheduler(opt, total_steps=100, warmup_steps=10, decay_steps=20)
+        lrs = []
+        for _ in range(10):
+            sched.step()
+            lrs.append(opt.param_groups[0]['lr'])
+        # LR should increase during warmup
+        for i in range(1, len(lrs)):
+            assert lrs[i] >= lrs[i - 1]
+        assert abs(lrs[-1] - 0.1) < 1e-6  # reach base lr at end of warmup
+
+    def test_stable_phase(self):
+        from training.utils_v18 import WSDScheduler
+        model = nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = WSDScheduler(opt, total_steps=100, warmup_steps=10, decay_steps=20)
+        for _ in range(10):
+            sched.step()
+        # Steps 11-80 should be stable
+        for _ in range(70):
+            sched.step()
+            assert abs(opt.param_groups[0]['lr'] - 0.1) < 1e-6
+
+    def test_decay_phase(self):
+        from training.utils_v18 import WSDScheduler
+        model = nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = WSDScheduler(opt, total_steps=100, warmup_steps=10, decay_steps=20,
+                             min_lr_ratio=0.1)
+        for _ in range(80):
+            sched.step()
+        lr_start = opt.param_groups[0]['lr']
+        for _ in range(20):
+            sched.step()
+        lr_end = opt.param_groups[0]['lr']
+        assert lr_end < lr_start  # LR decreased
+        assert abs(lr_end - 0.01) < 1e-5  # 0.1 * 0.1
+
+    def test_get_lr(self):
+        from training.utils_v18 import WSDScheduler
+        model = nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = WSDScheduler(opt, total_steps=100, warmup_steps=10, decay_steps=20)
+        sched.step()
+        lrs = sched.get_lr()
+        assert len(lrs) == 1
+        assert lrs[0] > 0
+
+    def test_state_dict(self):
+        from training.utils_v18 import WSDScheduler
+        model = nn.Linear(10, 10)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = WSDScheduler(opt, total_steps=100, warmup_steps=10, decay_steps=20)
+        for _ in range(25):
+            sched.step()
+        sd = sched.state_dict()
+        assert sd['step'] == 25
+        sched2 = WSDScheduler(opt, total_steps=100, warmup_steps=10, decay_steps=20)
+        sched2.load_state_dict(sd)
+        assert sched2._step == 25
+
+
+class TestAttentionMapCapture:
+    """Тесты для Attention Map Capture."""
+
+    def test_capture_basic(self):
+        from training.utils_v18 import AttentionMapCapture
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.eval()
+        capture = AttentionMapCapture(model)
+        capture.start()
+        assert capture._running
+        model(torch.randint(0, cfg.vocab_size, (1, 8)))
+        capture.stop()
+        assert not capture._running
+
+    def test_hooks_registered(self):
+        from training.utils_v18 import AttentionMapCapture
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        capture = AttentionMapCapture(model)
+        capture.start()
+        assert len(capture.hooks) > 0
+        capture.stop()
+        assert len(capture.hooks) == 0
+
+    def test_entropy_computation(self):
+        from training.utils_v18 import AttentionMapCapture
+        capture = AttentionMapCapture(nn.Linear(10, 10))
+        # Manually add a uniform attention map
+        T = 8
+        uniform_attn = torch.ones(1, 4, T, T) / T
+        capture.attention_maps['test_layer'] = uniform_attn
+        entropies = capture.get_entropy()
+        assert 'test_layer' in entropies
+        assert entropies['test_layer'] > 0
+
+    def test_sparsity_computation(self):
+        from training.utils_v18 import AttentionMapCapture
+        capture = AttentionMapCapture(nn.Linear(10, 10))
+        # Nearly-sparse attention
+        attn = torch.zeros(1, 4, 8, 8)
+        attn[:, :, :, 0] = 1.0  # all attend to position 0
+        capture.attention_maps['test'] = attn
+        sparsities = capture.get_sparsity(threshold=0.01)
+        assert sparsities['test'] > 0.5  # most weights are 0
+
+    def test_reset(self):
+        from training.utils_v18 import AttentionMapCapture
+        capture = AttentionMapCapture(nn.Linear(10, 10))
+        capture.attention_maps['foo'] = torch.ones(1, 1, 4, 4)
+        capture.reset()
+        assert len(capture.attention_maps) == 0
+
+
+class TestBPEDropout:
+    """Тесты для BPE Dropout."""
+
+    def test_encode_no_dropout(self):
+        from training.utils_v18 import BPEDropout
+        vocab = {c: i for i, c in enumerate("abcdefgh")}
+        vocab['ab'] = len(vocab)
+        vocab['cd'] = len(vocab)
+        merges = [('a', 'b'), ('c', 'd')]
+        bpe = BPEDropout(merges, vocab, dropout=0.0)
+        ids = bpe.encode("abcd")
+        # With no dropout, should apply all merges
+        assert ids == [vocab['ab'], vocab['cd']]
+
+    def test_encode_full_dropout(self):
+        from training.utils_v18 import BPEDropout
+        vocab = {c: i for i, c in enumerate("abcdefgh")}
+        vocab['ab'] = len(vocab)
+        merges = [('a', 'b')]
+        bpe = BPEDropout(merges, vocab, dropout=1.0)
+        ids = bpe.encode("ab")
+        # Full dropout = no merges → individual characters
+        assert ids == [vocab['a'], vocab['b']]
+
+    def test_encode_stochastic(self):
+        import random
+        from training.utils_v18 import BPEDropout
+        vocab = {c: i for i, c in enumerate("abcdefgh")}
+        vocab['ab'] = len(vocab)
+        merges = [('a', 'b')]
+        bpe = BPEDropout(merges, vocab, dropout=0.5)
+        # Run multiple times — should get different results
+        random.seed(42)
+        results = set()
+        for _ in range(20):
+            ids = tuple(bpe.encode("ab"))
+            results.add(ids)
+        assert len(results) >= 2  # at least 2 different segmentations
+
+    def test_decode(self):
+        from training.utils_v18 import BPEDropout
+        vocab = {'a': 0, 'b': 1, 'c': 2, 'ab': 3}
+        merges = [('a', 'b')]
+        bpe = BPEDropout(merges, vocab, dropout=0.0)
+        ids = bpe.encode_deterministic("abc")
+        text = bpe.decode(ids)
+        assert text == "abc"
+
+    def test_encode_deterministic(self):
+        from training.utils_v18 import BPEDropout
+        vocab = {c: i for i, c in enumerate("abcdefgh")}
+        vocab['ab'] = len(vocab)
+        merges = [('a', 'b')]
+        bpe = BPEDropout(merges, vocab, dropout=0.5)
+        ids1 = bpe.encode_deterministic("ab")
+        ids2 = bpe.encode_deterministic("ab")
+        assert ids1 == ids2  # always same without dropout
+
+
+class TestLAMB:
+    """Тесты для LAMB optimizer."""
+
+    def test_basic_step(self):
+        from training.utils_v18 import LAMB
+        model = nn.Linear(10, 5)
+        opt = LAMB(model.parameters(), lr=0.01)
+        x = torch.randn(4, 10)
+        y = torch.randn(4, 5)
+        loss = F.mse_loss(model(x), y)
+        loss.backward()
+        opt.step()
+        # Should not crash
+
+    def test_convergence(self):
+        from training.utils_v18 import LAMB
+        torch.manual_seed(42)
+        model = nn.Linear(10, 1)
+        opt = LAMB(model.parameters(), lr=0.01, weight_decay=0.0)
+        x = torch.randn(32, 10)
+        y = x[:, 0:1] * 2  # simple linear target
+        initial_loss = F.mse_loss(model(x), y).item()
+        for _ in range(50):
+            opt.zero_grad()
+            loss = F.mse_loss(model(x), y)
+            loss.backward()
+            opt.step()
+        final_loss = F.mse_loss(model(x), y).item()
+        assert final_loss < initial_loss
+
+    def test_weight_decay(self):
+        from training.utils_v18 import LAMB
+        model = nn.Linear(10, 5, bias=False)
+        # Initialize with large weights
+        nn.init.constant_(model.weight, 5.0)
+        opt = LAMB(model.parameters(), lr=0.01, weight_decay=0.1)
+        x = torch.randn(4, 10)
+        y = torch.zeros(4, 5)
+        for _ in range(10):
+            opt.zero_grad()
+            loss = F.mse_loss(model(x), y)
+            loss.backward()
+            opt.step()
+        # Weights should have decreased due to decay
+        assert model.weight.data.abs().mean().item() < 5.0
+
+    def test_state_dict(self):
+        from training.utils_v18 import LAMB
+        model = nn.Linear(10, 5)
+        opt = LAMB(model.parameters(), lr=0.01)
+        x = torch.randn(4, 10)
+        loss = F.mse_loss(model(x), torch.zeros(4, 5))
+        loss.backward()
+        opt.step()
+        sd = opt.state_dict()
+        assert len(sd['state']) > 0
+
+    def test_multiple_param_groups(self):
+        from training.utils_v18 import LAMB
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 2))
+        opt = LAMB([
+            {'params': model[0].parameters(), 'lr': 0.01},
+            {'params': model[1].parameters(), 'lr': 0.001},
+        ])
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        loss.backward()
+        opt.step()
+        # Both groups should have been updated
+        assert opt.param_groups[0]['lr'] == 0.01
+        assert opt.param_groups[1]['lr'] == 0.001
+
+
+class TestNEFTune:
+    """Тесты для NEFTune."""
+
+    def test_noise_in_training(self):
+        from training.utils_v18 import NEFTune
+        emb = nn.Embedding(100, 64)
+        neft = NEFTune(emb, noise_alpha=5.0)
+        neft.train()
+        ids = torch.randint(0, 100, (2, 8))
+        out1 = neft(ids)
+        out2 = neft(ids)
+        # Different noise each time
+        assert not torch.equal(out1, out2)
+
+    def test_no_noise_in_eval(self):
+        from training.utils_v18 import NEFTune
+        emb = nn.Embedding(100, 64)
+        neft = NEFTune(emb, noise_alpha=5.0)
+        neft.eval()
+        ids = torch.randint(0, 100, (2, 8))
+        out1 = neft(ids)
+        out2 = neft(ids)
+        assert torch.equal(out1, out2)
+
+    def test_output_shape(self):
+        from training.utils_v18 import NEFTune
+        emb = nn.Embedding(100, 64)
+        neft = NEFTune(emb, noise_alpha=5.0)
+        ids = torch.randint(0, 100, (2, 8))
+        out = neft(ids)
+        assert out.shape == (2, 8, 64)
+
+    def test_zero_alpha(self):
+        from training.utils_v18 import NEFTune
+        emb = nn.Embedding(100, 64)
+        neft = NEFTune(emb, noise_alpha=0.0)
+        neft.train()
+        ids = torch.randint(0, 100, (2, 8))
+        out1 = neft(ids)
+        out2 = neft(ids)
+        assert torch.equal(out1, out2)
+
+    def test_apply_to_model(self):
+        from training.utils_v18 import NEFTune
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        original_emb = model.tok_emb
+        NEFTune.apply_to_model(model, noise_alpha=5.0)
+        assert isinstance(model.tok_emb, NEFTune)
+        NEFTune.remove_from_model(model, original_emb)
+        assert model.tok_emb is original_emb
+
+    def test_backward(self):
+        from training.utils_v18 import NEFTune
+        emb = nn.Embedding(100, 64)
+        neft = NEFTune(emb, noise_alpha=5.0)
+        neft.train()
+        ids = torch.randint(0, 100, (2, 8))
+        out = neft(ids)
+        out.sum().backward()
+        assert emb.weight.grad is not None
+
+
+class TestV18Integration:
+    """Интеграционные тесты v18."""
+
+    def test_wsd_with_lamb(self):
+        from training.utils_v18 import WSDScheduler, LAMB
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = LAMB(model.parameters(), lr=0.01)
+        sched = WSDScheduler(opt, total_steps=50, warmup_steps=5, decay_steps=10)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for step in range(20):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            sched.step()
+        assert opt.param_groups[0]['lr'] > 0
+
+    def test_neftune_with_model_training(self):
+        from training.utils_v18 import NEFTune
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.train()
+        original_emb = model.tok_emb
+        NEFTune.apply_to_model(model, noise_alpha=5.0)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        logits, loss, _ = model(x, y)
+        loss.backward()
+        assert not torch.isnan(loss)
+        NEFTune.remove_from_model(model, original_emb)
+
+    def test_full_v18_pipeline(self):
+        from training.utils_v18 import WSDScheduler, LAMB, NEFTune, AttentionMapCapture
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        model.train()
+        original_emb = model.tok_emb
+        NEFTune.apply_to_model(model, noise_alpha=5.0)
+        opt = LAMB(model.parameters(), lr=0.01)
+        sched = WSDScheduler(opt, total_steps=30, warmup_steps=5, decay_steps=5)
+
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        initial_loss = None
+        for step in range(15):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            if initial_loss is None:
+                initial_loss = loss.item()
+            loss.backward()
+            opt.step()
+            sched.step()
+        assert not torch.isnan(loss)
+        NEFTune.remove_from_model(model, original_emb)
