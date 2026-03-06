@@ -1,0 +1,95 @@
+{
+  "vanilla": {
+    "params": 858368,
+    "geo_params": 0,
+    "final_train_loss": 5.557638158798218,
+    "best_val_loss": 5.555240001678467,
+    "avg_ms_per_step": 37.96469688415527,
+    "train_loss_curve": [
+      5.5711465835571286,
+      5.557638158798218
+    ],
+    "val_loss_curve": [
+      5.5668610668182374,
+      5.555240001678467
+    ],
+    "generation": {
+      "unique_tokens": 21,
+      "total_tokens": 32,
+      "repetition_rate": 0.34375,
+      "entropy": 4.202819531114783
+    }
+  },
+  "pure_geometry": {
+    "params": 1602344,
+    "geo_params": 1602344,
+    "final_train_loss": 5.5594563484191895,
+    "best_val_loss": 5.554656171798706,
+    "avg_ms_per_step": 136.73763036727905,
+    "train_loss_curve": [
+      5.569315128326416,
+      5.5594563484191895
+    ],
+    "val_loss_curve": [
+      5.566464948654175,
+      5.554656171798706
+    ],
+    "generation": {
+      "unique_tokens": 21,
+      "total_tokens": 32,
+      "repetition_rate": 0.34375,
+      "entropy": 4.179229296672174
+    }
+  },
+  "hybrid": {
+    "params": 2394436,
+    "geo_params": 1567812,
+    "final_train_loss": 5.555926809310913,
+    "best_val_loss": 5.554015121459961,
+    "avg_ms_per_step": 171.6028070449829,
+    "train_loss_curve": [
+      5.570210618972778,
+      5.555926809310913
+    ],
+    "val_loss_curve": [
+      5.562264566421509,
+      5.554015121459961
+    ],
+    "generation": {
+      "unique_tokens": 25,
+      "total_tokens": 32,
+      "repetition_rate": 0.21875,
+      "entropy": 4.5625
+    },
+    "gate_analysis": {
+      "layer_0": {
+        "initial_preference": "standard",
+        "final_preference": "standard",
+        "changed_preference": false,
+        "avg_gate": 0.4994366317987442,
+        "trend": 0.00023481249809265137
+      },
+      "layer_1": {
+        "initial_preference": "geometry",
+        "final_preference": "geometry",
+        "changed_preference": false,
+        "avg_gate": 0.5040156245231628,
+        "trend": 0.001201033592224121
+      },
+      "layer_2": {
+        "initial_preference": "geometry",
+        "final_preference": "standard",
+        "changed_preference": true,
+        "avg_gate": 0.4802808314561844,
+        "trend": -0.02539759874343872
+      },
+      "layer_3": {
+        "initial_preference": "geometry",
+        "final_preference": "standard",
+        "changed_preference": true,
+        "avg_gate": 0.47876928746700287,
+        "trend": -0.02944082021713257
+      }
+    }
+  }
+}
