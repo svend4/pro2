@@ -8255,3 +8255,310 @@ class TestV32Integration:
             pnm.record(model)
         total = pnm.get_total_norm(model)
         assert total > 0
+
+
+# ==================== v33 Tests ====================
+
+
+class TestGradientPenalty:
+    """Тесты для Gradient Penalty."""
+
+    def test_r2_penalty(self):
+        from training.utils_v33 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=1.0, mode='r2')
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        penalty = gp.compute_r2(loss, model)
+        assert penalty.item() > 0
+
+    def test_r1_penalty(self):
+        from training.utils_v33 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=1.0)
+        x = torch.randn(4, 10, requires_grad=True)
+        loss = model(x).sum()
+        penalty = gp.compute_r1(loss, [x])
+        assert penalty.item() > 0
+
+    def test_gp_penalty(self):
+        from training.utils_v33 import GradientPenalty
+        model = nn.Linear(10, 5)
+        gp = GradientPenalty(lambda_gp=1.0)
+        x = torch.randn(4, 10, requires_grad=True)
+        loss = model(x).sum()
+        penalty = gp.compute_gp(loss, [x], target_norm=1.0)
+        assert penalty.item() >= 0
+
+    def test_lambda_scales(self):
+        from training.utils_v33 import GradientPenalty
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+        loss = model(x).sum()
+        p1 = GradientPenalty(lambda_gp=1.0).compute_r2(loss, model)
+        p10 = GradientPenalty(lambda_gp=10.0).compute_r2(loss, model)
+        assert p10.item() > p1.item()
+
+
+class TestPolyakAveraging:
+    """Тесты для Polyak Averaging."""
+
+    def test_soft_update(self):
+        from training.utils_v33 import PolyakAveraging
+        model = nn.Linear(10, 5)
+        pa = PolyakAveraging(model, tau=0.5)
+        # Change source
+        model.weight.data.fill_(10.0)
+        pa.update_from(model)
+        # Target should move toward source
+        assert pa.target.weight.data.mean().item() > 0
+
+    def test_hard_update(self):
+        from training.utils_v33 import PolyakAveraging
+        model = nn.Linear(10, 5)
+        pa = PolyakAveraging(model, tau=0.01)
+        model.weight.data.fill_(42.0)
+        pa.hard_update(model)
+        assert torch.allclose(pa.target.weight.data, model.weight.data)
+
+    def test_get_distance(self):
+        from training.utils_v33 import PolyakAveraging
+        model = nn.Linear(10, 5)
+        pa = PolyakAveraging(model, tau=0.01)
+        dist0 = pa.get_distance(model)
+        assert dist0 < 1e-6  # Same at start
+        model.weight.data.fill_(100.0)
+        dist1 = pa.get_distance(model)
+        assert dist1 > 0
+
+    def test_target_frozen(self):
+        from training.utils_v33 import PolyakAveraging
+        model = nn.Linear(10, 5)
+        pa = PolyakAveraging(model)
+        for p in pa.target.parameters():
+            assert not p.requires_grad
+
+
+class TestLossLandscapeProbe:
+    """Тесты для Loss Landscape Probe."""
+
+    def test_probe(self):
+        from training.utils_v33 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+        y = torch.randn(4, 5)
+
+        def loss_fn():
+            return F.mse_loss(model(x), y)
+
+        llp = LossLandscapeProbe(n_directions=2, n_points=3, max_distance=0.05)
+        result = llp.probe(model, loss_fn)
+        assert 'center_loss' in result
+        assert 'sharpness' in result
+        assert len(result['profiles']) == 2
+
+    def test_restores_params(self):
+        from training.utils_v33 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        w_before = model.weight.data.clone()
+        x = torch.randn(4, 10)
+
+        def loss_fn():
+            return model(x).sum()
+
+        llp = LossLandscapeProbe(n_directions=2, n_points=2)
+        llp.probe(model, loss_fn)
+        assert torch.equal(w_before, model.weight.data)
+
+    def test_quick_sharpness(self):
+        from training.utils_v33 import LossLandscapeProbe
+        model = nn.Linear(10, 5)
+        x = torch.randn(4, 10)
+
+        def loss_fn():
+            return model(x).sum()
+
+        llp = LossLandscapeProbe()
+        result = llp.quick_sharpness(model, loss_fn, epsilon=0.01)
+        assert 'sharpness' in result
+        assert 'center_loss' in result
+
+
+class TestAdaptiveBatchSampler:
+    """Тесты для Adaptive Batch Sampler."""
+
+    def test_sample_batch(self):
+        from training.utils_v33 import AdaptiveBatchSampler
+        sampler = AdaptiveBatchSampler(dataset_size=100, hard_fraction=0.5)
+        batch = sampler.sample_batch(16)
+        assert len(batch) == 16
+        assert all(0 <= idx < 100 for idx in batch)
+
+    def test_update_losses(self):
+        from training.utils_v33 import AdaptiveBatchSampler
+        sampler = AdaptiveBatchSampler(dataset_size=100)
+        sampler.update_losses([0, 1, 2], [5.0, 1.0, 3.0])
+        assert sampler._seen[0]
+        assert sampler._losses[0] > 0
+
+    def test_hard_mining_prioritizes(self):
+        from training.utils_v33 import AdaptiveBatchSampler
+        sampler = AdaptiveBatchSampler(dataset_size=100, hard_fraction=1.0)
+        # Set high loss for indices 0-4
+        sampler.update_losses(list(range(5)), [100.0] * 5)
+        sampler.update_losses(list(range(5, 100)), [0.1] * 95)
+        batch = sampler.sample_batch(5)
+        # Should mostly get indices 0-4
+        assert any(idx < 5 for idx in batch)
+
+    def test_difficulty_distribution(self):
+        from training.utils_v33 import AdaptiveBatchSampler
+        sampler = AdaptiveBatchSampler(dataset_size=50)
+        sampler.update_losses(list(range(50)), list(range(50)))
+        dist = sampler.get_difficulty_distribution()
+        assert dist['n_seen'] == 50
+        assert dist['mean_loss'] > 0
+
+    def test_reset(self):
+        from training.utils_v33 import AdaptiveBatchSampler
+        sampler = AdaptiveBatchSampler(dataset_size=50)
+        sampler.update_losses([0, 1], [1.0, 2.0])
+        sampler.reset()
+        assert not sampler._seen.any()
+
+
+class TestOptimizerStateMonitor:
+    """Тесты для Optimizer State Monitor."""
+
+    def test_record(self):
+        from training.utils_v33 import OptimizerStateMonitor
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=0.01)
+        # Do one step so state exists
+        opt.zero_grad()
+        model(torch.randn(2, 10)).sum().backward()
+        opt.step()
+        mon = OptimizerStateMonitor(opt)
+        snapshot = mon.record(model)
+        assert len(snapshot) > 0
+
+    def test_record_with_model_names(self):
+        from training.utils_v33 import OptimizerStateMonitor
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        opt.zero_grad()
+        model(torch.randn(2, 10)).sum().backward()
+        opt.step()
+        mon = OptimizerStateMonitor(opt)
+        snapshot = mon.record(model)
+        assert any('weight' in k or 'bias' in k for k in snapshot.keys())
+
+    def test_effective_lr_distribution(self):
+        from training.utils_v33 import OptimizerStateMonitor
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=0.01)
+        opt.zero_grad()
+        model(torch.randn(4, 10)).sum().backward()
+        opt.step()
+        mon = OptimizerStateMonitor(opt)
+        mon.record(model)
+        dist = mon.get_effective_lr_distribution()
+        assert dist['mean'] > 0
+
+    def test_summary(self):
+        from training.utils_v33 import OptimizerStateMonitor
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        for _ in range(3):
+            opt.zero_grad()
+            model(torch.randn(2, 10)).sum().backward()
+            opt.step()
+        mon = OptimizerStateMonitor(opt)
+        mon.record(model)
+        summary = mon.get_summary()
+        assert len(summary) > 0
+
+    def test_reset(self):
+        from training.utils_v33 import OptimizerStateMonitor
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters())
+        opt.zero_grad()
+        model(torch.randn(2, 10)).sum().backward()
+        opt.step()
+        mon = OptimizerStateMonitor(opt)
+        mon.record(model)
+        mon.reset()
+        assert mon._step == 0
+
+
+class TestV33Integration:
+    """Интеграционные тесты v33."""
+
+    def test_gradient_penalty_training(self):
+        from training.utils_v33 import GradientPenalty
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gp = GradientPenalty(lambda_gp=0.01, mode='r2')
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(3):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            penalty = gp.compute_r2(loss, model)
+            total = loss + penalty
+            total.backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_polyak_training(self):
+        from training.utils_v33 import PolyakAveraging
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        pa = PolyakAveraging(model, tau=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            pa.update_from(model)
+        dist = pa.get_distance(model)
+        assert dist > 0
+        logits, _, _ = pa.target(x)
+        assert not torch.isnan(logits).any()
+
+    def test_optimizer_monitor_training(self):
+        from training.utils_v33 import OptimizerStateMonitor
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        mon = OptimizerStateMonitor(opt)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            mon.record(model)
+        dist = mon.get_effective_lr_distribution()
+        assert dist['mean'] > 0
+
+    def test_landscape_probe_training(self):
+        from training.utils_v33 import LossLandscapeProbe
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+
+        def loss_fn():
+            _, loss, _ = model(x, y)
+            return loss
+
+        llp = LossLandscapeProbe(n_directions=2, n_points=2, max_distance=0.01)
+        result = llp.quick_sharpness(model, loss_fn)
+        assert 'sharpness' in result

@@ -179,6 +179,12 @@ class YiJingConfig:
     multi_scale_chunks: str = ''          # Chunk sizes for multi-scale loss (e.g. "4,8")
     data_mixing_strategy: str = 'constant'  # constant, linear_shift, loss_based, temperature
 
+    # v33: Gradient Penalty, Polyak, Hard Example Mining
+    gradient_penalty_lambda: float = 0.0  # Gradient penalty (0 = выкл)
+    gradient_penalty_mode: str = 'r2'     # r1, r2, gp
+    polyak_tau: float = 0.0               # Polyak averaging tau (0 = выкл, 0.005 типично)
+    hard_example_fraction: float = 0.0    # Hard example mining fraction (0 = выкл)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
