@@ -10434,3 +10434,284 @@ class TestV39Integration:
             wds.step()
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v40 Tests ====================
+
+
+class TestSpectralNormWrapper:
+    """Тесты для Spectral Normalization."""
+
+    def test_compute(self):
+        from training.utils_v40 import SpectralNormWrapper
+        snw = SpectralNormWrapper()
+        w = torch.randn(5, 10)
+        result = snw.compute_spectral_norm(w)
+        assert result['sigma'] > 0
+        assert result['normalized_weight'].shape == w.shape
+
+    def test_normalized_sigma(self):
+        from training.utils_v40 import SpectralNormWrapper
+        snw = SpectralNormWrapper(n_power_iterations=5)
+        w = torch.randn(10, 10) * 5
+        result = snw.compute_spectral_norm(w)
+        # After normalization, sigma should be ~1
+        result2 = snw.compute_spectral_norm(result['normalized_weight'])
+        assert abs(result2['sigma'] - 1.0) < 0.5
+
+    def test_apply_to_model(self):
+        from training.utils_v40 import SpectralNormWrapper
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        snw = SpectralNormWrapper()
+        result = snw.apply_to_model(model)
+        assert result['n_normalized'] == 2
+
+    def test_get_norms(self):
+        from training.utils_v40 import SpectralNormWrapper
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        snw = SpectralNormWrapper()
+        norms = snw.get_spectral_norms(model)
+        assert len(norms) == 2
+
+    def test_1d_weight(self):
+        from training.utils_v40 import SpectralNormWrapper
+        snw = SpectralNormWrapper()
+        w = torch.randn(10)
+        result = snw.compute_spectral_norm(w)
+        assert result['sigma'] > 0
+
+
+class TestGradientHistogramTracker:
+    """Тесты для Gradient Histogram."""
+
+    def test_track(self):
+        from training.utils_v40 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        ght = GradientHistogramTracker(track_every=1)
+        result = ght.track(model)
+        assert result is not None
+        assert 'histogram' in result
+        assert 'stats' in result
+
+    def test_skip(self):
+        from training.utils_v40 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        ght = GradientHistogramTracker(track_every=5)
+        result = ght.track(model)
+        assert result is None  # Step 1, not 5
+
+    def test_per_layer(self):
+        from training.utils_v40 import GradientHistogramTracker
+        model = nn.Sequential(nn.Linear(10, 5), nn.Linear(5, 3))
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        ght = GradientHistogramTracker(track_every=1)
+        result = ght.track(model)
+        assert len(result['per_layer']) == 4  # 2 weights + 2 biases
+
+    def test_trend(self):
+        from training.utils_v40 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        ght = GradientHistogramTracker(track_every=1)
+        for _ in range(5):
+            model.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            ght.track(model)
+        trend = ght.get_trend()
+        assert len(trend['means']) == 5
+
+    def test_detect_issues(self):
+        from training.utils_v40 import GradientHistogramTracker
+        ght = GradientHistogramTracker()
+        issues = ght.detect_issues()
+        assert isinstance(issues, list)
+
+
+class TestLRProbe:
+    """Тесты для LR Probing."""
+
+    def test_probe(self):
+        from training.utils_v40 import LRProbe
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        x = torch.randn(4, 10)
+        y = torch.randn(4, 5)
+
+        def loss_fn():
+            return ((model(x) - y) ** 2).mean()
+
+        probe = LRProbe(probe_factors=[0.5, 1.0, 2.0])
+        result = probe.probe(model, opt, loss_fn)
+        assert 'best_factor' in result
+        assert 'recommended_lr' in result
+        assert len(result['results']) == 3
+
+    def test_model_restored(self):
+        from training.utils_v40 import LRProbe
+        model = nn.Linear(10, 5)
+        original = model.weight.data.clone()
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+
+        def loss_fn():
+            return model(torch.randn(4, 10)).sum() ** 2
+
+        probe = LRProbe(probe_factors=[1.0, 5.0])
+        probe.probe(model, opt, loss_fn)
+        assert torch.equal(model.weight.data, original)
+
+
+class TestMixedPrecisionManager:
+    """Тесты для Mixed Precision Manager."""
+
+    def test_scale_loss(self):
+        from training.utils_v40 import MixedPrecisionManager
+        mpm = MixedPrecisionManager(initial_scale=1024)
+        loss = torch.tensor(2.0)
+        scaled = mpm.scale_loss(loss)
+        assert scaled.item() == 2048.0
+
+    def test_unscale_grads(self):
+        from training.utils_v40 import MixedPrecisionManager
+        mpm = MixedPrecisionManager(initial_scale=4.0)
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.mul_(4.0)  # Simulate scaling
+        mpm.unscale_grads(model)
+        # Grads should be back to normal scale
+
+    def test_overflow_decrease(self):
+        from training.utils_v40 import MixedPrecisionManager
+        mpm = MixedPrecisionManager(initial_scale=1024)
+        result = mpm.update(overflow_detected=True)
+        assert result['scale'] == 512
+        assert result['action'] == 'decrease'
+
+    def test_growth(self):
+        from training.utils_v40 import MixedPrecisionManager
+        mpm = MixedPrecisionManager(initial_scale=1024, growth_interval=5)
+        for _ in range(5):
+            result = mpm.update(overflow_detected=False)
+        assert result['scale'] == 2048
+
+    def test_disabled(self):
+        from training.utils_v40 import MixedPrecisionManager
+        mpm = MixedPrecisionManager(enabled=False)
+        loss = torch.tensor(2.0)
+        assert mpm.scale_loss(loss).item() == 2.0
+
+    def test_get_info(self):
+        from training.utils_v40 import MixedPrecisionManager
+        mpm = MixedPrecisionManager()
+        info = mpm.get_info()
+        assert 'current_scale' in info
+
+
+class TestTrainingProgressEstimator:
+    """Тесты для Training Progress Estimator."""
+
+    def test_update(self):
+        from training.utils_v40 import TrainingProgressEstimator
+        tpe = TrainingProgressEstimator(total_steps=100)
+        result = tpe.update(loss_value=5.0)
+        assert result['progress'] > 0
+        assert result['current_step'] == 1
+
+    def test_progress(self):
+        from training.utils_v40 import TrainingProgressEstimator
+        tpe = TrainingProgressEstimator(total_steps=10)
+        for i in range(5):
+            tpe.update(loss_value=5.0 - i * 0.5)
+        result = tpe.update()
+        assert result['progress_pct'] == 60.0
+
+    def test_eta(self):
+        from training.utils_v40 import TrainingProgressEstimator
+        tpe = TrainingProgressEstimator(total_steps=100)
+        for _ in range(10):
+            tpe.update(loss_value=2.0)
+        result = tpe.update()
+        assert result['eta_seconds'] >= 0
+
+    def test_format_time(self):
+        from training.utils_v40 import TrainingProgressEstimator
+        tpe = TrainingProgressEstimator()
+        assert 's' in tpe._format_time(30)
+        assert 'm' in tpe._format_time(90)
+        assert 'h' in tpe._format_time(3700)
+
+    def test_will_reach_target(self):
+        from training.utils_v40 import TrainingProgressEstimator
+        tpe = TrainingProgressEstimator(total_steps=1000, target_loss=1.0)
+        for i in range(30):
+            tpe.update(loss_value=5.0 - i * 0.1)
+        result = tpe.will_reach_target()
+        assert 'reachable' in result
+
+    def test_get_summary(self):
+        from training.utils_v40 import TrainingProgressEstimator
+        tpe = TrainingProgressEstimator()
+        tpe.update(loss_value=3.0)
+        summary = tpe.get_summary()
+        assert summary['current_loss'] == 3.0
+
+
+class TestV40Integration:
+    """Интеграционные тесты v40."""
+
+    def test_spectral_norm_training(self):
+        from training.utils_v40 import SpectralNormWrapper
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        snw = SpectralNormWrapper()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+        snw.apply_to_model(model)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_gradient_histogram_training(self):
+        from training.utils_v40 import GradientHistogramTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ght = GradientHistogramTracker(track_every=2)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        tracked = 0
+        for _ in range(6):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            result = ght.track(model)
+            if result is not None:
+                tracked += 1
+            opt.step()
+        assert tracked == 3
+
+    def test_progress_training(self):
+        from training.utils_v40 import TrainingProgressEstimator
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        tpe = TrainingProgressEstimator(total_steps=10)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            result = tpe.update(loss.item())
+        assert result['progress_pct'] == 100.0

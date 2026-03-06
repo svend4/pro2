@@ -223,6 +223,12 @@ class YiJingConfig:
     scheduled_dropout: bool = False       # Dynamic dropout rate
     weight_decay_schedule: str = 'none'   # WD schedule: 'none', 'linear', 'cosine'
 
+    # v40: Spectral Norm, Gradient Histogram, Mixed Precision, Progress Estimator
+    spectral_norm: bool = False           # Spectral normalization
+    gradient_histogram: bool = False      # Gradient histogram tracking
+    mixed_precision: bool = False         # Mixed precision manager
+    progress_estimator: bool = False      # Training progress estimator
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
