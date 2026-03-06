@@ -750,6 +750,27 @@ class PalaceAttention(nn.Module):
         inter = (base_mask < 1.0).float()
         return intra + torch.sigmoid(self.inter_palace_weight) * inter
 
+    def forward(self, x, mask=None):
+        """x: (B, T, D) → block-sparse attention по дворцам → (B, T, D)"""
+        B, T, D = x.shape
+        scale = self.head_dim ** -0.5
+        palace_mask = self.get_mask(T)  # (T, T)
+
+        # Reshape для multi-head
+        q = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale  # (B, H, T, T)
+        attn = attn * palace_mask.unsqueeze(0).unsqueeze(0)  # применяем маску дворцов
+
+        if mask is not None:
+            attn = attn.masked_fill(mask.unsqueeze(1) == 0, float('-inf'))
+
+        attn = F.softmax(attn, dim=-1)
+        out = torch.matmul(attn, v)
+        return out.transpose(1, 2).reshape(B, T, D)
+
 
 class DualEmbedding(nn.Module):
     """Dual embedding: 6D гиперкубное + 3D кубическое (Ступень 4.4).
@@ -1280,6 +1301,248 @@ class WeavingLoomArchitecture(nn.Module):
         out3 = torch.matmul(attn3, v3)
 
         return self.out_proj(out3)
+
+
+class FourLevelPositionalEncoding(nn.Module):
+    """4-уровневое позиционное кодирование Андреева (Ступень 3.1).
+
+    Уровень 1: линия (яо) — позиция внутри гексаграммы (0-5)
+    Уровень 2: триграмма — верхняя/нижняя (0-1)
+    Уровень 3: гексаграмма — номер (0-63)
+    Уровень 4: последовательность — позиция гексаграммы в тексте
+
+    Каждый уровень добавляет свой embedding, как в иерархическом PE.
+    """
+    def __init__(self, d_model: int, max_seq_len: int = 512):
+        super().__init__()
+        self.line_emb = nn.Embedding(6, d_model)       # 6 линий
+        self.trigram_emb = nn.Embedding(2, d_model)     # верх/низ
+        self.hexagram_emb = nn.Embedding(64, d_model)   # 64 гексаграммы
+        self.seq_emb = nn.Embedding(max_seq_len, d_model)  # позиция в тексте
+        self.scale = nn.Parameter(torch.tensor(0.25))
+
+    def forward(self, seq_len: int, device=None):
+        """Возвращает (seq_len, d_model) позиционное кодирование."""
+        if device is None:
+            device = self.line_emb.weight.device
+
+        pos = torch.arange(seq_len, device=device)
+
+        # Иерархическая декомпозиция позиции
+        line_idx = pos % 6          # линия внутри гексаграммы
+        trigram_idx = (pos % 6) // 3  # верхняя(1) / нижняя(0) триграмма
+        hex_idx = (pos // 6) % 64   # номер гексаграммы
+        seq_idx = pos               # абсолютная позиция
+
+        pe = (self.line_emb(line_idx)
+              + self.trigram_emb(trigram_idx)
+              + self.hexagram_emb(hex_idx)
+              + self.seq_emb(seq_idx))
+
+        return self.scale * pe
+
+
+class BidirectionalTriangularAttention(nn.Module):
+    """Двунаправленный треугольный attention (Ступень 3.3).
+
+    Андреев: треугольная матрица attention работает в обоих направлениях.
+    Нижний треугольник = прямой порядок (каузальный),
+    Верхний треугольник = обратный порядок (ретроспективный).
+
+    Обучаемый параметр direction_bias определяет баланс.
+    """
+    def __init__(self, d_model: int, max_seq_len: int = 512):
+        super().__init__()
+        self.d_model = d_model
+        self.direction_bias = nn.Parameter(torch.tensor(0.0))
+
+        # Предвычисляем треугольные маски
+        tri_lower = torch.tril(torch.ones(max_seq_len, max_seq_len))
+        tri_upper = torch.triu(torch.ones(max_seq_len, max_seq_len))
+        self.register_buffer('tri_lower', tri_lower)
+        self.register_buffer('tri_upper', tri_upper)
+
+    def get_mask(self, seq_len: int) -> torch.Tensor:
+        """Возвращает (seq_len, seq_len) двунаправленную маску."""
+        alpha = torch.sigmoid(self.direction_bias)
+        lower = self.tri_lower[:seq_len, :seq_len]
+        upper = self.tri_upper[:seq_len, :seq_len]
+        return alpha * lower + (1 - alpha) * upper
+
+
+class TriangularCurriculumScheduler:
+    """Curriculum learning по треугольным числам (Ступень 3.4).
+
+    Андреев: обучение идёт по уровням треугольной матрицы.
+    Уровень k: обучение на первых T(k) = k(k+1)/2 токенах.
+    По мере обучения открываются следующие уровни.
+    """
+    def __init__(self, max_level: int = 11):
+        self.max_level = max_level
+        # T(k) = k(k+1)/2
+        self.levels = [k * (k + 1) // 2 for k in range(1, max_level + 1)]
+        # levels = [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
+
+    def get_seq_len(self, epoch: int, total_epochs: int) -> int:
+        """Определяет текущую длину последовательности по эпохе."""
+        progress = min(epoch / max(total_epochs, 1), 1.0)
+        level = int(progress * self.max_level)
+        level = max(0, min(level, len(self.levels) - 1))
+        return self.levels[level]
+
+
+class CubeDiagonalAttention(nn.Module):
+    """Attention по 4 типам диагоналей куба (Ступень 4.2).
+
+    Касаткин: куб имеет 4 типа диагоналей:
+    1. Рёбра (12 шт) — d=1, соседи по 1 координатe
+    2. Диагонали граней (12 шт) — d=√2, соседи по 2 координатам
+    3. Пространственные диагонали (4 шт) — d=√3, антиподы-соседи
+    4. Самопетли (8 шт) — d=0, self-attention
+
+    Каждый тип диагонали получает свой вес.
+    """
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.proj_to_3d = nn.Linear(d_model, 3, bias=False)
+        # 4 веса для 4 типов расстояний
+        self.diag_weights = nn.Parameter(torch.tensor([1.0, 0.5, 0.25, 2.0]))
+
+    def get_bias(self, x):
+        """x: (B, T, D) → (B, T, T) bias на основе типа диагонали."""
+        z = self.proj_to_3d(x)  # (B, T, 3)
+        # Дискретизация: sign
+        z_disc = torch.sign(z)  # (B, T, 3) ∈ {-1, 0, +1}
+
+        # Расстояние Хэмминга между дискретизированными координатами
+        # d_H = число различающихся координат
+        z1 = z_disc.unsqueeze(2)  # (B, T, 1, 3)
+        z2 = z_disc.unsqueeze(1)  # (B, 1, T, 3)
+        hamming = (z1 != z2).float().sum(dim=-1)  # (B, T, T) ∈ {0,1,2,3}
+
+        # Bias по типу диагонали
+        bias = torch.zeros_like(hamming)
+        for d in range(4):
+            mask = (hamming == d).float()
+            bias += self.diag_weights[d] * mask
+
+        return bias
+
+
+class HeisenbergAttention(nn.Module):
+    """Attention из принципа Гейзенберга (Ступень 6.1).
+
+    Беляев: ΔQ · ΔK ≥ ℏ/2 — чем точнее query, тем размытее key.
+    Реализация: temperature attention с адаптивным масштабированием.
+
+    Если |Q| велико (точный вопрос), K размывается (большая temperature).
+    Если |Q| мало (общий вопрос), K фокусируется (малая temperature).
+    """
+    def __init__(self, d_model: int, min_temp: float = 0.1, max_temp: float = 5.0):
+        super().__init__()
+        self.d_model = d_model
+        self.min_temp = min_temp
+        self.max_temp = max_temp
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        # ℏ/2 аналог
+        self.hbar_half = nn.Parameter(torch.tensor(1.0))
+
+    def forward(self, x, mask=None):
+        """x: (B, T, D) → (B, T, D) с Гейзенберг-scaled attention."""
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        # «Неопределённость» Query = нормы строк Q
+        q_uncertainty = q.norm(dim=-1, keepdim=True)  # (B, T, 1)
+
+        # Принцип: temperature ∝ |Q| (чем точнее Q, тем размытее K)
+        temperature = self.hbar_half / (q_uncertainty + 1e-8)  # (B, T, 1)
+        temperature = temperature.clamp(self.min_temp, self.max_temp)
+
+        # Scaled attention с адаптивной temperature
+        attn = torch.matmul(q, k.transpose(-2, -1))  # (B, T, T)
+        attn = attn * temperature  # broadcast (B, T, 1)
+
+        if mask is not None:
+            attn = attn.masked_fill(mask == 0, float('-inf'))
+
+        attn = F.softmax(attn, dim=-1)
+        return torch.matmul(attn, v)
+
+
+class FlowerOfLifeGAT(nn.Module):
+    """Цветок Жизни как GAT-граф (Ступень 6.6).
+
+    7 пересекающихся кругов Цветка Жизни задают граф:
+    - 7 узлов (центры кругов)
+    - Рёбра: два узла связаны, если круги пересекаются
+    - Граф: центральный узел связан со всеми 6, периферийные — с 3 соседями
+
+    GAT (Graph Attention Network) на этом графе.
+    """
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.d_model = d_model
+        self.n_nodes = 7
+
+        # Матрица смежности Цветка Жизни (7×7)
+        adj = torch.zeros(7, 7)
+        # Центральный (0) связан со всеми
+        for i in range(1, 7):
+            adj[0, i] = 1
+            adj[i, 0] = 1
+        # Периферийные связаны с соседями (кольцо)
+        for i in range(1, 7):
+            j = (i % 6) + 1  # следующий в кольце
+            adj[i, j] = 1
+            adj[j, i] = 1
+        self.register_buffer('adjacency', adj)
+
+        # GAT проекции
+        self.W = nn.Linear(d_model, d_model, bias=False)
+        self.a = nn.Linear(2 * d_model, 1, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x):
+        """x: (B, T, D) → (B, T, D). T токенов распределяются по 7 узлам."""
+        B, T, D = x.shape
+
+        # Разбиваем токены по 7 узлам (round-robin)
+        node_tokens = []
+        for i in range(self.n_nodes):
+            indices = torch.arange(i, T, self.n_nodes, device=x.device)
+            if len(indices) > 0:
+                node_tokens.append(x[:, indices].mean(dim=1))  # (B, D)
+            else:
+                node_tokens.append(torch.zeros(B, D, device=x.device))
+        nodes = torch.stack(node_tokens, dim=1)  # (B, 7, D)
+
+        # GAT attention
+        h = self.W(nodes)  # (B, 7, D)
+        # Попарные конкатенации для attention coefficients
+        h_i = h.unsqueeze(2).expand(-1, -1, 7, -1)  # (B, 7, 7, D)
+        h_j = h.unsqueeze(1).expand(-1, 7, -1, -1)  # (B, 7, 7, D)
+        e = self.a(torch.cat([h_i, h_j], dim=-1)).squeeze(-1)  # (B, 7, 7)
+
+        # Маскируем не-соседей
+        e = e.masked_fill(self.adjacency == 0, float('-inf'))
+        alpha = F.softmax(e, dim=-1)  # (B, 7, 7)
+
+        # Агрегация
+        out_nodes = torch.matmul(alpha, h)  # (B, 7, D)
+        out_nodes = self.out_proj(out_nodes)
+
+        # Broadcast обратно к токенам
+        result = x.clone()
+        for i in range(self.n_nodes):
+            indices = torch.arange(i, T, self.n_nodes, device=x.device)
+            if len(indices) > 0:
+                result[:, indices] = result[:, indices] + out_nodes[:, i:i+1]
+
+        return result
 
 
 # ==================== ROTARY POSITION EMBEDDINGS ====================
