@@ -13,6 +13,7 @@
 - Октограмма  = 4 биграммы (4×4×4×4) или 2 тетраграммы (16×16)
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -897,3 +898,281 @@ class GroupedQuantizer(nn.Module):
         return (f"d_model={self.d_model}, groups={self.n_groups}, "
                 f"group_size={self.group_size}, bits={self.n_bits}, "
                 f"symmetric={self.symmetric}")
+
+
+# ==================== ГЕЙТОВЫЙ МЕХАНИЗМ ВЫБОРА ПУТИ ====================
+
+class GatedPathSelector(nn.Module):
+    """
+    Гейтовый механизм выбора между геометрическим и стандартным путём.
+
+    Принцип ненавязывания: модель сама решает, использовать ли геометрию,
+    через обучаемый гейт. Значение гейта прозрачно логируется.
+
+    gate = sigmoid(W·x + b)
+    output = gate * geometric_path + (1 - gate) * standard_path
+
+    Инициализация gate_bias=0 → начальный gate ≈ 0.5 (равные шансы).
+    """
+    def __init__(self, d_model: int, init_bias: float = 0.0):
+        super().__init__()
+        self.gate_proj = nn.Linear(d_model, 1, bias=True)
+        # Инициализация: малые веса + настраиваемый bias
+        nn.init.zeros_(self.gate_proj.weight)
+        nn.init.constant_(self.gate_proj.bias, init_bias)
+        # Статистика для логирования
+        self._last_gate_mean = 0.5
+        self._last_gate_std = 0.0
+
+    def forward(self, x_standard, x_geometric):
+        """
+        Args:
+            x_standard: выход стандартного пути (B, T, D)
+            x_geometric: выход геометрического пути (B, T, D)
+        Returns:
+            blended output (B, T, D)
+        """
+        # Гейт вычисляется на основе среднего двух путей
+        combined = (x_standard + x_geometric) * 0.5
+        gate = torch.sigmoid(self.gate_proj(combined))  # (B, T, 1)
+
+        # Логирование
+        with torch.no_grad():
+            self._last_gate_mean = gate.mean().item()
+            self._last_gate_std = gate.std().item()
+
+        return gate * x_geometric + (1 - gate) * x_standard
+
+    def get_gate_stats(self):
+        """Возвращает статистику гейта для логирования."""
+        return {
+            'gate_mean': self._last_gate_mean,
+            'gate_std': self._last_gate_std,
+            'prefers_geometry': self._last_gate_mean > 0.5,
+        }
+
+
+# ==================== ЧИСТЫЙ ГЕОМЕТРИЧЕСКИЙ ATTENTION ====================
+
+class GeometricAttention(nn.Module):
+    """
+    Attention, полностью основанный на геометрии триграмм.
+
+    Вместо стандартного QKV-attention используется:
+    1. Проекция в пространство триграмм (3D)
+    2. Расстояния между триграммными проекциями как attention scores
+    3. 8 голов = 8 триграммных направлений
+
+    Это «чистый» геометрический attention без стандартного dot-product.
+    """
+    def __init__(self, cfg):
+        super().__init__()
+        self.n_heads = cfg.n_heads
+        self.head_dim = cfg.d_model // cfg.n_heads
+        self.d_model = cfg.d_model
+        self.use_rope = cfg.use_rope
+
+        # Проекции: вход → триграммное пространство (3D per head)
+        self.q_proj = nn.Linear(cfg.d_model, cfg.n_heads * 3, bias=False)
+        self.k_proj = nn.Linear(cfg.d_model, cfg.n_heads * 3, bias=False)
+        # Value проекция — стандартная (для выразительности)
+        self.v_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=cfg.bias)
+        self.out_proj = nn.Linear(cfg.d_model, cfg.d_model, bias=cfg.bias)
+        self.dropout = nn.Dropout(cfg.dropout)
+
+        # 8 триграмм как направления
+        trigrams = get_trigrams()  # (8, 3)
+        trigrams_norm = F.normalize(trigrams, p=2, dim=1)
+        self.register_buffer('head_dirs', trigrams_norm[:cfg.n_heads])
+
+        # Масштаб для стабильности
+        self.scale = nn.Parameter(torch.tensor(1.0 / math.sqrt(3.0)))
+
+        # RoPE для позиционной информации (применяется к 3D проекциям)
+        if self.use_rope:
+            self.rotary = RotaryEmbedding(
+                dim=4,  # ближайшее чётное к 3, pad to 4
+                max_seq_len=cfg.block_size,
+                base=cfg.rope_base,
+            )
+
+    def forward(self, x):
+        B, T, C = x.shape
+
+        # Q, K в триграммном 3D пространстве
+        q3 = self.q_proj(x).reshape(B, T, self.n_heads, 3).transpose(1, 2)  # (B, H, T, 3)
+        k3 = self.k_proj(x).reshape(B, T, self.n_heads, 3).transpose(1, 2)
+
+        # V — полноразмерный (для выразительности)
+        v = self.v_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+
+        # Проецируем Q, K на триграммные направления и вычисляем scores
+        # score = (q · dir_h) * (k · dir_h) — билинейная форма через триграмму
+        q_on_dir = torch.einsum('bhtd,hd->bht', q3, self.head_dirs)  # (B, H, T)
+        k_on_dir = torch.einsum('bhtd,hd->bht', k3, self.head_dirs)  # (B, H, T)
+
+        # Также добавляем стандартный dot-product в 3D
+        dot_scores = (q3 @ k3.transpose(-2, -1)) * self.scale  # (B, H, T, T)
+
+        # Геометрический bias: внешнее произведение проекций на триграммы
+        geo_bias = q_on_dir.unsqueeze(-1) * k_on_dir.unsqueeze(-2)  # (B, H, T, T)
+
+        scores = dot_scores + geo_bias
+
+        # Causal mask
+        causal = torch.tril(torch.ones(T, T, device=x.device)).unsqueeze(0).unsqueeze(0)
+        scores = scores.masked_fill(causal == 0, float('-inf'))
+
+        attn = F.softmax(scores, dim=-1)
+        attn = self.dropout(attn)
+        out = (attn @ v).transpose(1, 2).reshape(B, T, C)
+        return self.out_proj(out)
+
+
+class GeometricFFN(nn.Module):
+    """
+    FFN, основанный на геометрической маршрутизации через триграммы.
+
+    Вместо стандартного MLP: проецируем в пространство триграмм,
+    определяем ближайшие триграммы, активируем соответствующие подсети.
+    Это «чистый геометрический FFN» — всегда использует TrigramMoE.
+    """
+    def __init__(self, cfg):
+        super().__init__()
+        self.moe = TrigramMoE(
+            d_model=cfg.d_model,
+            n_experts=min(cfg.n_heads, 8),
+            top_k=2,
+            ffn_hidden=cfg.ffn_hidden,
+            dropout=cfg.dropout,
+        )
+
+    def forward(self, x):
+        return self.moe(x)  # returns (output, aux_loss)
+
+
+# ==================== ЛОГИРОВАНИЕ ГЕЙТОВ ====================
+
+class GateLogger:
+    """
+    Собирает и агрегирует статистику гейтов для прозрачности.
+
+    Позволяет отслеживать:
+    - Какие слои предпочитают геометрию vs стандартный путь
+    - Динамику предпочтений во время обучения
+    - Распределение гейтов по слоям
+
+    Принцип прозрачности: все решения модели видимы и интерпретируемы.
+    """
+    def __init__(self):
+        self.history = []  # list of {step, layer_gates}
+
+    def log_step(self, step: int, layers):
+        """Логирует состояние гейтов всех слоёв."""
+        entry = {'step': step, 'gates': {}}
+        for i, layer in enumerate(layers):
+            if hasattr(layer, 'path_gate') and layer.path_gate is not None:
+                stats = layer.path_gate.get_gate_stats()
+                entry['gates'][f'layer_{i}'] = stats
+        self.history.append(entry)
+        return entry
+
+    def summary(self):
+        """Сводка по последнему шагу."""
+        if not self.history:
+            return {}
+        last = self.history[-1]
+        geo_layers = 0
+        std_layers = 0
+        for gate_info in last['gates'].values():
+            if gate_info['prefers_geometry']:
+                geo_layers += 1
+            else:
+                std_layers += 1
+        return {
+            'step': last['step'],
+            'layers_prefer_geometry': geo_layers,
+            'layers_prefer_standard': std_layers,
+            'gates': last['gates'],
+        }
+
+    def get_trajectory(self):
+        """Траектория средних гейтов для каждого слоя."""
+        trajectories = {}
+        for entry in self.history:
+            for layer_name, stats in entry['gates'].items():
+                if layer_name not in trajectories:
+                    trajectories[layer_name] = {'steps': [], 'means': []}
+                trajectories[layer_name]['steps'].append(entry['step'])
+                trajectories[layer_name]['means'].append(stats['gate_mean'])
+        return trajectories
+
+
+# ==================== CURRICULUM SCHEDULER ====================
+
+class GeometryCurriculumScheduler:
+    """
+    Планировщик curriculum learning для геометрических компонентов.
+
+    Стратегии:
+    - 'linear': линейно увеличивает hex_strength от 0 до target
+    - 'warmup_hold': warmup → hold на полной силе
+    - 'cosine': косинусный рост от 0 до target
+    - 'step': ступенчатое увеличение каждые N шагов
+    - 'geometric_first': начинает с чистой геометрии, плавно добавляет стандартный путь
+
+    Принцип постепенности: не заставляет модель сразу использовать геометрию,
+    а создаёт условия для естественного обучения.
+    """
+    def __init__(self, strategy: str = 'linear', total_steps: int = 10000,
+                 warmup_fraction: float = 0.3, target_strength: float = 0.1,
+                 n_step_stages: int = 4):
+        self.strategy = strategy
+        self.total_steps = total_steps
+        self.warmup_fraction = warmup_fraction
+        self.warmup_steps = int(total_steps * warmup_fraction)
+        self.target_strength = target_strength
+        self.n_step_stages = n_step_stages
+
+    def get_strength(self, step: int) -> float:
+        """Возвращает текущую силу геометрического компонента."""
+        progress = min(step / max(self.total_steps, 1), 1.0)
+
+        if self.strategy == 'linear':
+            return self.target_strength * progress
+
+        elif self.strategy == 'warmup_hold':
+            if step < self.warmup_steps:
+                return self.target_strength * step / self.warmup_steps
+            return self.target_strength
+
+        elif self.strategy == 'cosine':
+            return self.target_strength * 0.5 * (1 - math.cos(math.pi * progress))
+
+        elif self.strategy == 'step':
+            stage = min(int(progress * self.n_step_stages), self.n_step_stages)
+            return self.target_strength * stage / self.n_step_stages
+
+        elif self.strategy == 'geometric_first':
+            # Начинает с 1.0 (полная геометрия), снижается до target
+            # Идея: сначала дать геометрии шанс, потом позволить выбор
+            if step < self.warmup_steps:
+                return 1.0
+            decay_progress = (step - self.warmup_steps) / max(self.total_steps - self.warmup_steps, 1)
+            return self.target_strength + (1.0 - self.target_strength) * (1 - decay_progress)
+
+        else:
+            return self.target_strength
+
+    def get_gate_bias(self, step: int) -> float:
+        """
+        Возвращает bias для гейта (сдвигает предпочтение к геометрии).
+
+        Положительный bias → гейт ближе к 1 → предпочтение геометрии.
+        Используется в стратегии 'geometric_first'.
+        """
+        if self.strategy == 'geometric_first':
+            progress = min(step / max(self.total_steps, 1), 1.0)
+            # Начинаем с bias=2 (сильное предпочтение геометрии), снижаем до 0
+            return 2.0 * (1 - progress)
+        return 0.0
