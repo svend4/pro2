@@ -7896,3 +7896,362 @@ class TestV31Integration:
                 resolved = gs.resolve([grads1[0], grads2[0]])
                 assert not torch.isnan(resolved).any()
             opt.step()
+
+
+# ==================== v32 Tests ====================
+
+
+class TestGradientHistogramTracker:
+    """Тесты для Gradient Histogram Tracker."""
+
+    def test_record(self):
+        from training.utils_v32 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        ght = GradientHistogramTracker()
+        snapshot = ght.record(model)
+        assert 'weight' in snapshot
+        assert 'mean' in snapshot['weight']
+        assert 'l2_norm' in snapshot['weight']
+
+    def test_summary(self):
+        from training.utils_v32 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        ght = GradientHistogramTracker()
+        for _ in range(5):
+            model.zero_grad()
+            loss = model(torch.randn(4, 10)).sum()
+            loss.backward()
+            ght.record(model)
+        summary = ght.get_summary('weight')
+        assert summary is not None
+        assert 'l2_norm_avg' in summary
+
+    def test_layer_ranking(self):
+        from training.utils_v32 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        ght = GradientHistogramTracker()
+        ght.record(model)
+        ranking = ght.get_layer_ranking()
+        assert len(ranking) >= 1
+
+    def test_detect_vanishing(self):
+        from training.utils_v32 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.fill_(0.0)
+        model.bias.grad.data.fill_(0.0)
+        ght = GradientHistogramTracker()
+        ght.record(model)
+        vanishing = ght.detect_vanishing()
+        assert len(vanishing) >= 1
+
+    def test_detect_exploding(self):
+        from training.utils_v32 import GradientHistogramTracker
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        loss = model(torch.randn(4, 10)).sum()
+        loss.backward()
+        model.weight.grad.data.fill_(1000.0)
+        ght = GradientHistogramTracker()
+        ght.record(model)
+        exploding = ght.detect_exploding(threshold=50.0)
+        assert len(exploding) >= 1
+
+    def test_reset(self):
+        from training.utils_v32 import GradientHistogramTracker
+        ght = GradientHistogramTracker()
+        model = nn.Linear(10, 5)
+        model.zero_grad()
+        model(torch.randn(2, 10)).sum().backward()
+        ght.record(model)
+        ght.reset()
+        assert len(ght._stats) == 0
+
+
+class TestCosineAnnealingWarmRestarts:
+    """Тесты для SGDR."""
+
+    def test_basic_schedule(self):
+        from training.utils_v32 import CosineAnnealingWarmRestarts
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = CosineAnnealingWarmRestarts(opt, T_0=10, T_mult=1, eta_min=0.001)
+        lrs = []
+        for _ in range(20):
+            lr = sched.step()
+            lrs.append(lr)
+        # Should restart at step 10
+        assert lrs[0] > lrs[4]  # Decreasing in first half
+
+    def test_warm_restart(self):
+        from training.utils_v32 import CosineAnnealingWarmRestarts
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = CosineAnnealingWarmRestarts(opt, T_0=5, T_mult=1)
+        for _ in range(5):
+            sched.step()
+        # After restart, LR should be back up
+        lr_after_restart = sched.step()
+        assert sched.cycle >= 1
+
+    def test_T_mult(self):
+        from training.utils_v32 import CosineAnnealingWarmRestarts
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = CosineAnnealingWarmRestarts(opt, T_0=5, T_mult=2)
+        for _ in range(5):
+            sched.step()
+        info = sched.get_info()
+        assert info['current_T'] == 10  # T_0 * T_mult
+
+    def test_get_info(self):
+        from training.utils_v32 import CosineAnnealingWarmRestarts
+        model = nn.Linear(10, 5)
+        opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        sched = CosineAnnealingWarmRestarts(opt, T_0=10)
+        sched.step()
+        info = sched.get_info()
+        assert 'step' in info
+        assert 'lr' in info
+        assert 'cycle' in info
+
+
+class TestMultiScaleLoss:
+    """Тесты для Multi-Scale Loss."""
+
+    def test_forward(self):
+        from training.utils_v32 import MultiScaleLoss
+        msl = MultiScaleLoss(vocab_size=50, chunk_sizes=(4,))
+        logits = torch.randn(2, 8, 50)
+        targets = torch.randint(0, 50, (2, 8))
+        result = msl(logits, targets)
+        assert result['total_loss'].item() > 0
+        assert result['token_loss'].item() > 0
+        assert 4 in result['chunk_losses']
+
+    def test_multiple_chunks(self):
+        from training.utils_v32 import MultiScaleLoss
+        msl = MultiScaleLoss(vocab_size=50, chunk_sizes=(2, 4))
+        logits = torch.randn(2, 8, 50)
+        targets = torch.randint(0, 50, (2, 8))
+        result = msl(logits, targets)
+        assert 2 in result['chunk_losses']
+        assert 4 in result['chunk_losses']
+
+    def test_short_sequence(self):
+        from training.utils_v32 import MultiScaleLoss
+        msl = MultiScaleLoss(vocab_size=50, chunk_sizes=(8, 16))
+        logits = torch.randn(2, 4, 50)
+        targets = torch.randint(0, 50, (2, 4))
+        result = msl(logits, targets)
+        assert result['total_loss'].item() > 0
+
+    def test_custom_weights(self):
+        from training.utils_v32 import MultiScaleLoss
+        msl = MultiScaleLoss(vocab_size=50, chunk_sizes=(4,), weights=[0.8, 0.2])
+        logits = torch.randn(2, 8, 50)
+        targets = torch.randint(0, 50, (2, 8))
+        result = msl(logits, targets)
+        assert result['total_loss'].item() > 0
+
+
+class TestParamNormMonitor:
+    """Тесты для Parameter Norm Monitor."""
+
+    def test_record(self):
+        from training.utils_v32 import ParamNormMonitor
+        model = nn.Linear(10, 5)
+        pnm = ParamNormMonitor()
+        norms = pnm.record(model)
+        assert 'weight' in norms
+        assert norms['weight'] > 0
+
+    def test_total_norm(self):
+        from training.utils_v32 import ParamNormMonitor
+        model = nn.Linear(10, 5)
+        pnm = ParamNormMonitor()
+        total = pnm.get_total_norm(model)
+        assert total > 0
+
+    def test_trends(self):
+        from training.utils_v32 import ParamNormMonitor
+        model = nn.Linear(10, 5)
+        pnm = ParamNormMonitor()
+        for _ in range(10):
+            pnm.record(model)
+        trends = pnm.get_trends()
+        assert 'weight' in trends
+
+    def test_detect_anomalies(self):
+        from training.utils_v32 import ParamNormMonitor
+        model = nn.Linear(10, 5)
+        pnm = ParamNormMonitor()
+        pnm.record(model)
+        model.weight.data.mul_(100)
+        pnm.record(model)
+        anomalies = pnm.detect_anomalies(threshold=5.0)
+        assert len(anomalies) >= 1
+
+    def test_summary(self):
+        from training.utils_v32 import ParamNormMonitor
+        model = nn.Linear(10, 5)
+        pnm = ParamNormMonitor()
+        pnm.record(model)
+        summary = pnm.get_summary()
+        assert 'weight' in summary
+
+    def test_reset(self):
+        from training.utils_v32 import ParamNormMonitor
+        pnm = ParamNormMonitor()
+        model = nn.Linear(10, 5)
+        pnm.record(model)
+        pnm.reset()
+        assert pnm._step == 0
+
+
+class TestDataMixingScheduler:
+    """Тесты для Data Mixing Scheduler."""
+
+    def test_constant(self):
+        from training.utils_v32 import DataMixingScheduler
+        dms = DataMixingScheduler(n_sources=3, strategy='constant')
+        w = dms.get_weights()
+        assert len(w) == 3
+        assert abs(sum(w) - 1.0) < 1e-6
+
+    def test_linear_shift(self):
+        from training.utils_v32 import DataMixingScheduler
+        dms = DataMixingScheduler(
+            n_sources=2, strategy='linear_shift',
+            initial_weights=[0.8, 0.2], final_weights=[0.2, 0.8],
+            total_steps=10
+        )
+        for _ in range(10):
+            dms.step()
+        w = dms.get_weights()
+        assert abs(w[0] - 0.2) < 0.05
+        assert abs(w[1] - 0.8) < 0.05
+
+    def test_loss_based(self):
+        from training.utils_v32 import DataMixingScheduler
+        dms = DataMixingScheduler(n_sources=2, strategy='loss_based')
+        dms.report_loss(0, 1.0)
+        dms.report_loss(1, 3.0)
+        dms.step()
+        w = dms.get_weights()
+        assert w[1] > w[0]  # Higher loss → more weight
+
+    def test_sample_source(self):
+        from training.utils_v32 import DataMixingScheduler
+        dms = DataMixingScheduler(n_sources=3)
+        sources = [dms.sample_source() for _ in range(100)]
+        assert all(0 <= s < 3 for s in sources)
+
+    def test_temperature(self):
+        from training.utils_v32 import DataMixingScheduler
+        dms = DataMixingScheduler(n_sources=2, strategy='temperature', temperature=0.5)
+        dms.report_loss(0, 1.0)
+        dms.report_loss(1, 5.0)
+        dms.step()
+        w = dms.get_weights()
+        assert abs(sum(w) - 1.0) < 1e-6
+
+    def test_get_info(self):
+        from training.utils_v32 import DataMixingScheduler
+        dms = DataMixingScheduler(n_sources=2)
+        dms.step()
+        info = dms.get_info()
+        assert 'weights' in info
+        assert 'step' in info
+
+    def test_reset(self):
+        from training.utils_v32 import DataMixingScheduler
+        dms = DataMixingScheduler(n_sources=2, strategy='linear_shift',
+                                  initial_weights=[0.5, 0.5], final_weights=[0.1, 0.9],
+                                  total_steps=10)
+        for _ in range(10):
+            dms.step()
+        dms.reset()
+        w = dms.get_weights()
+        assert abs(w[0] - 0.5) < 1e-6
+
+
+class TestV32Integration:
+    """Интеграционные тесты v32."""
+
+    def test_grad_histogram_training(self):
+        from training.utils_v32 import GradientHistogramTracker
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        ght = GradientHistogramTracker()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            ght.record(model)
+            opt.step()
+        vanishing = ght.detect_vanishing()
+        # Should not have vanishing grads in a healthy model
+        assert isinstance(vanishing, list)
+
+    def test_sgdr_training(self):
+        from training.utils_v32 import CosineAnnealingWarmRestarts
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        sched = CosineAnnealingWarmRestarts(opt, T_0=5, T_mult=2, eta_min=1e-5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            sched.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_multi_scale_training(self):
+        from training.utils_v32 import MultiScaleLoss
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        msl = MultiScaleLoss(vocab_size=cfg.vocab_size, chunk_sizes=(4,))
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            logits, _, _ = model(x)
+            result = msl(logits, y)
+            result['total_loss'].backward()
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_param_norm_training(self):
+        from training.utils_v32 import ParamNormMonitor
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        pnm = ParamNormMonitor()
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            pnm.record(model)
+        total = pnm.get_total_norm(model)
+        assert total > 0

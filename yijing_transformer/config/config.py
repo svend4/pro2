@@ -173,6 +173,12 @@ class YiJingConfig:
     use_gradient_surgery: bool = False     # Gradient surgery for multi-task
     token_freq_strategy: str = 'none'     # none, inverse, sqrt_inverse, log_inverse, smoothed
 
+    # v32: Cosine Warm Restarts, Multi-Scale Loss, Data Mixing
+    cosine_T0: int = 0                    # SGDR period (0 = выкл)
+    cosine_T_mult: int = 2               # SGDR period multiplier
+    multi_scale_chunks: str = ''          # Chunk sizes for multi-scale loss (e.g. "4,8")
+    data_mixing_strategy: str = 'constant'  # constant, linear_shift, loss_based, temperature
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
