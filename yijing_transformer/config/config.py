@@ -250,6 +250,13 @@ class YiJingConfig:
     contrastive_loss: bool = False        # Contrastive loss
     rdrop_alpha: float = 0.0              # R-Drop alpha (0 = disabled)
 
+    # v44: Gradient Noise, Lookahead, Layer-wise LR, SWA, WSD Schedule
+    gradient_noise: bool = False          # Gradient noise injection
+    lookahead_k: int = 0                  # Lookahead k (0 = disabled)
+    layerwise_lr_decay: float = 1.0       # Layer-wise LR decay (1.0 = disabled)
+    swa: bool = False                     # Stochastic weight averaging
+    wsd_schedule: bool = False            # Warmup-Stable-Decay schedule
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать

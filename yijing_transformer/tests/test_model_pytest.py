@@ -11561,3 +11561,263 @@ class TestV43Integration:
             opt.step()
         logits, _, _ = model(x)
         assert not torch.isnan(logits).any()
+
+
+# ==================== v44 Tests ====================
+
+
+class TestGradientNoiseInjector:
+    """Тесты для Gradient Noise."""
+
+    def test_inject(self):
+        from training.utils_v44 import GradientNoiseInjector
+        model = nn.Linear(10, 5)
+        loss = model(torch.randn(2, 10)).sum()
+        loss.backward()
+        grad_before = model.weight.grad.clone()
+        gni = GradientNoiseInjector(eta=1.0)
+        result = gni.inject(model)
+        assert result['n_params'] == 2
+        assert not torch.equal(model.weight.grad, grad_before)
+
+    def test_decaying_noise(self):
+        from training.utils_v44 import GradientNoiseInjector
+        gni = GradientNoiseInjector(eta=1.0, gamma=0.55)
+        std1 = gni.get_noise_std()
+        gni._step = 100
+        std2 = gni.get_noise_std()
+        assert std2 < std1
+
+    def test_get_info(self):
+        from training.utils_v44 import GradientNoiseInjector
+        gni = GradientNoiseInjector()
+        info = gni.get_info()
+        assert 'eta' in info
+
+
+class TestLookahead:
+    """Тесты для Lookahead Optimizer."""
+
+    def test_sync(self):
+        from training.utils_v44 import Lookahead
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        la = Lookahead(base_opt, k=2, alpha=0.5)
+        for i in range(4):
+            la.zero_grad()
+            loss = model(torch.randn(2, 10)).sum()
+            loss.backward()
+            result = la.step()
+            if i == 1 or i == 3:
+                assert result['synced'] is True
+            else:
+                assert result['synced'] is False
+
+    def test_param_groups(self):
+        from training.utils_v44 import Lookahead
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        la = Lookahead(base_opt, k=5)
+        assert len(la.param_groups) == 1
+
+    def test_state_dict(self):
+        from training.utils_v44 import Lookahead
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        la = Lookahead(base_opt, k=5)
+        sd = la.state_dict()
+        assert 'step' in sd
+
+    def test_get_info(self):
+        from training.utils_v44 import Lookahead
+        model = nn.Linear(10, 5)
+        base_opt = torch.optim.SGD(model.parameters(), lr=0.1)
+        la = Lookahead(base_opt, k=5)
+        info = la.get_info()
+        assert info['next_sync_in'] == 5
+
+
+class TestLayerwiseLRDecay:
+    """Тесты для Layer-wise LR Decay."""
+
+    def test_lr_schedule(self):
+        from training.utils_v44 import LayerwiseLRDecay
+        llrd = LayerwiseLRDecay(base_lr=1e-3, decay=0.8)
+        schedule = llrd.get_lr_schedule(n_layers=4)
+        assert len(schedule) == 4
+        # First layer should have lowest LR
+        assert schedule[0]['lr'] < schedule[3]['lr']
+
+    def test_get_param_groups(self):
+        from training.utils_v44 import LayerwiseLRDecay
+        model = nn.ModuleDict({
+            'layers': nn.ModuleList([nn.Linear(10, 10) for _ in range(3)]),
+            'head': nn.Linear(10, 5),
+        })
+        llrd = LayerwiseLRDecay(base_lr=1e-3, decay=0.8)
+        groups = llrd.get_param_groups(model, n_layers=3)
+        assert len(groups) >= 2  # layers + other
+
+    def test_decay_values(self):
+        from training.utils_v44 import LayerwiseLRDecay
+        llrd = LayerwiseLRDecay(base_lr=1e-3, decay=0.5)
+        schedule = llrd.get_lr_schedule(n_layers=3)
+        assert abs(schedule[2]['lr'] - 1e-3) < 1e-8
+        assert abs(schedule[1]['lr'] - 0.5e-3) < 1e-8
+        assert abs(schedule[0]['lr'] - 0.25e-3) < 1e-8
+
+
+class TestStochasticWeightAveraging:
+    """Тесты для SWA."""
+
+    def test_update_before_start(self):
+        from training.utils_v44 import StochasticWeightAveraging
+        swa = StochasticWeightAveraging(swa_start=10)
+        model = nn.Linear(10, 5)
+        result = swa.update(model)
+        assert result['averaged'] is False
+
+    def test_update_after_start(self):
+        from training.utils_v44 import StochasticWeightAveraging
+        swa = StochasticWeightAveraging(swa_start=2, swa_freq=1)
+        model = nn.Linear(10, 5)
+        swa.update(model)
+        result = swa.update(model)
+        assert result['averaged'] is True
+        assert result['n_averaged'] == 1
+
+    def test_apply_average(self):
+        from training.utils_v44 import StochasticWeightAveraging
+        swa = StochasticWeightAveraging(swa_start=1, swa_freq=1)
+        model = nn.Linear(10, 5)
+        swa.update(model)
+        model.weight.data.add_(1.0)
+        swa.update(model)
+        original = model.weight.data.clone()
+        swa.apply_average(model)
+        # Average should be between original and original-1
+        assert not torch.equal(model.weight.data, original)
+
+    def test_no_average_returns_false(self):
+        from training.utils_v44 import StochasticWeightAveraging
+        swa = StochasticWeightAveraging(swa_start=100)
+        model = nn.Linear(10, 5)
+        assert swa.apply_average(model) is False
+
+    def test_get_info(self):
+        from training.utils_v44 import StochasticWeightAveraging
+        swa = StochasticWeightAveraging(swa_start=100)
+        info = swa.get_info()
+        assert info['swa_active'] is False
+
+
+class TestWarmupStableDecaySchedule:
+    """Тесты для WSD Schedule."""
+
+    def test_phases(self):
+        from training.utils_v44 import WarmupStableDecaySchedule
+        wsd = WarmupStableDecaySchedule(
+            base_lr=1e-3, total_steps=100,
+            warmup_fraction=0.1, decay_fraction=0.3
+        )
+        # Warmup phase
+        for _ in range(10):
+            wsd.step()
+        assert wsd.get_phase() == 'warmup'
+
+        # Stable phase
+        for _ in range(50):
+            wsd.step()
+        assert wsd.get_phase() == 'stable'
+
+        # Decay phase
+        for _ in range(40):
+            wsd.step()
+        assert wsd.get_phase() == 'decay'
+
+    def test_warmup_increasing(self):
+        from training.utils_v44 import WarmupStableDecaySchedule
+        wsd = WarmupStableDecaySchedule(
+            base_lr=1e-3, total_steps=100, warmup_fraction=0.1
+        )
+        lrs = [wsd.step() for _ in range(10)]
+        assert lrs[-1] > lrs[0]
+
+    def test_apply(self):
+        from training.utils_v44 import WarmupStableDecaySchedule
+        model = nn.Linear(10, 5)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        wsd = WarmupStableDecaySchedule(base_lr=1e-3, total_steps=100)
+        lr = wsd.apply(opt)
+        assert opt.param_groups[0]['lr'] == lr
+
+    def test_linear_decay(self):
+        from training.utils_v44 import WarmupStableDecaySchedule
+        wsd = WarmupStableDecaySchedule(
+            base_lr=1e-3, total_steps=100,
+            warmup_fraction=0.0, decay_fraction=1.0,
+            decay_type='linear'
+        )
+        lrs = [wsd.step() for _ in range(100)]
+        assert lrs[-1] < lrs[0]
+
+    def test_get_info(self):
+        from training.utils_v44 import WarmupStableDecaySchedule
+        wsd = WarmupStableDecaySchedule()
+        wsd.step()
+        info = wsd.get_info()
+        assert 'phase' in info
+
+
+class TestV44Integration:
+    """Интеграционные тесты v44."""
+
+    def test_lookahead_training(self):
+        from training.utils_v44 import Lookahead
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        base_opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        la = Lookahead(base_opt, k=3, alpha=0.5)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(6):
+            la.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            la.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_gradient_noise_training(self):
+        from training.utils_v44 import GradientNoiseInjector
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        gni = GradientNoiseInjector(eta=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            gni.inject(model)
+            opt.step()
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
+
+    def test_wsd_training(self):
+        from training.utils_v44 import WarmupStableDecaySchedule
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        wsd = WarmupStableDecaySchedule(base_lr=1e-3, total_steps=10)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(10):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            opt.step()
+            wsd.apply(opt)
+        logits, _, _ = model(x)
+        assert not torch.isnan(logits).any()
