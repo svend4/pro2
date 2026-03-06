@@ -4537,3 +4537,316 @@ class TestV20Integration:
             opt.step()
             sched.step()
         assert not torch.isnan(loss)
+
+
+# ==================== v21 Tests ====================
+
+
+class TestFSDPSimulator:
+    """Тесты для FSDP Sharding Simulator."""
+
+    def test_single_gpu(self):
+        from training.utils_v21 import FSDPSimulator
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        sim = FSDPSimulator(model)
+        result = sim.estimate_memory(n_gpus=1)
+        assert result['savings_pct'] == 0.0
+        assert result['total_mb'] > 0
+
+    def test_multi_gpu_savings(self):
+        from training.utils_v21 import FSDPSimulator
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        sim = FSDPSimulator(model)
+        r1 = sim.estimate_memory(n_gpus=1)
+        r4 = sim.estimate_memory(n_gpus=4)
+        assert r4['total_mb'] < r1['total_mb']
+        assert r4['savings_pct'] > 0
+
+    def test_scaling_report(self):
+        from training.utils_v21 import FSDPSimulator
+        model = nn.Linear(100, 50)
+        sim = FSDPSimulator(model)
+        report = sim.scaling_report(gpu_counts=(1, 2, 4))
+        assert len(report) == 3
+        assert report[2]['total_mb'] < report[0]['total_mb']
+
+    def test_total_params(self):
+        from training.utils_v21 import FSDPSimulator
+        model = nn.Linear(10, 5, bias=False)
+        sim = FSDPSimulator(model)
+        assert sim.total_params == 50
+
+    def test_param_mb(self):
+        from training.utils_v21 import FSDPSimulator
+        model = nn.Linear(10, 5, bias=False)
+        sim = FSDPSimulator(model)
+        assert sim.total_param_mb > 0
+
+
+class TestGrokkingDetector:
+    """Тесты для Grokking Detector."""
+
+    def test_learning_phase(self):
+        from training.utils_v21 import GrokkingDetector
+        det = GrokkingDetector(train_threshold=0.1, gap_threshold=0.5)
+        result = det.update(train_loss=2.0, val_loss=2.5)
+        assert result['phase'] == 'learning'
+
+    def test_overfitting_phase(self):
+        from training.utils_v21 import GrokkingDetector
+        det = GrokkingDetector(train_threshold=0.5, gap_threshold=0.3)
+        for _ in range(5):
+            result = det.update(train_loss=0.01, val_loss=1.0)
+        assert result['phase'] == 'overfitting'
+        assert result['overfit_steps'] > 0
+
+    def test_grokking_detection(self):
+        from training.utils_v21 import GrokkingDetector
+        det = GrokkingDetector(train_threshold=0.5, gap_threshold=0.3)
+        for _ in range(10):
+            det.update(train_loss=0.01, val_loss=1.0)
+        assert not det.is_grokking()
+        result = det.update(train_loss=0.01, val_loss=0.02)
+        assert result['phase'] == 'grokking'
+        assert det.is_grokking()
+
+    def test_summary(self):
+        from training.utils_v21 import GrokkingDetector
+        det = GrokkingDetector()
+        for i in range(5):
+            det.update(1.0 / (i + 1), 1.5 / (i + 1))
+        summary = det.get_summary()
+        assert summary['total_steps'] == 5
+        assert summary['min_train_loss'] is not None
+
+    def test_reset(self):
+        from training.utils_v21 import GrokkingDetector
+        det = GrokkingDetector()
+        det.update(0.5, 1.0)
+        det.reset()
+        assert len(det.train_losses) == 0
+        assert not det.is_grokking()
+
+
+class TestGradEMA:
+    """Тесты для GradEMA."""
+
+    def test_smoothing(self):
+        from training.utils_v21 import GradEMA
+        model = nn.Linear(10, 5)
+        ema = GradEMA(model, decay=0.9)
+        x = torch.randn(4, 10)
+
+        model(x).sum().backward()
+        grad1 = model.weight.grad.clone()
+        ema.update()
+        ema_grad1 = model.weight.grad.clone()
+        assert torch.allclose(ema_grad1, grad1)
+
+        model.zero_grad()
+        model(torch.randn(4, 10)).sum().backward()
+        grad2 = model.weight.grad.clone()
+        ema.update()
+        ema_grad2 = model.weight.grad.clone()
+        expected = 0.9 * grad1 + 0.1 * grad2
+        assert torch.allclose(ema_grad2, expected, atol=1e-5)
+
+    def test_stats(self):
+        from training.utils_v21 import GradEMA
+        model = nn.Linear(10, 5)
+        ema = GradEMA(model, decay=0.9)
+        model(torch.randn(4, 10)).sum().backward()
+        ema.update()
+        stats = ema.get_grad_stats()
+        assert stats['n_params'] > 0
+        assert stats['avg_norm'] > 0
+
+    def test_reset(self):
+        from training.utils_v21 import GradEMA
+        model = nn.Linear(10, 5)
+        ema = GradEMA(model, decay=0.9)
+        model(torch.randn(4, 10)).sum().backward()
+        ema.update()
+        ema.reset()
+        assert len(ema.shadow_grads) == 0
+
+    def test_no_grad_params(self):
+        from training.utils_v21 import GradEMA
+        model = nn.Linear(10, 5)
+        ema = GradEMA(model, decay=0.9)
+        ema.update()
+        stats = ema.get_grad_stats()
+        assert stats['n_params'] == 0
+
+
+class TestMixtureOfTokenizations:
+    """Тесты для Mixture of Tokenizations."""
+
+    def _make_tokenizers(self):
+        class CharTok:
+            def encode(self, text):
+                return [ord(c) % 128 for c in text]
+            def decode(self, ids):
+                return ''.join(chr(i) for i in ids)
+
+        class PairTok:
+            def encode(self, text):
+                ids = []
+                i = 0
+                while i < len(text):
+                    if i + 1 < len(text):
+                        ids.append((ord(text[i]) + ord(text[i + 1])) % 128)
+                        i += 2
+                    else:
+                        ids.append(ord(text[i]) % 128)
+                        i += 1
+                return ids
+            def decode(self, ids):
+                return ''.join(chr(i) for i in ids)
+
+        return [CharTok(), PairTok()]
+
+    def test_encode_all(self):
+        from training.utils_v21 import MixtureOfTokenizations
+        toks = self._make_tokenizers()
+        mot = MixtureOfTokenizations(toks)
+        results = mot.encode_all("hello")
+        assert len(results) == 2
+        assert len(results[0]) == 5
+        assert len(results[1]) == 3
+
+    def test_select_shortest(self):
+        from training.utils_v21 import MixtureOfTokenizations
+        toks = self._make_tokenizers()
+        mot = MixtureOfTokenizations(toks)
+        ids, idx = mot.select_by_length("hello", prefer='shortest')
+        assert idx == 1
+        assert len(ids) == 3
+
+    def test_select_longest(self):
+        from training.utils_v21 import MixtureOfTokenizations
+        toks = self._make_tokenizers()
+        mot = MixtureOfTokenizations(toks)
+        ids, idx = mot.select_by_length("hello", prefer='longest')
+        assert idx == 0
+
+    def test_stochastic(self):
+        import random
+        from training.utils_v21 import MixtureOfTokenizations
+        toks = self._make_tokenizers()
+        mot = MixtureOfTokenizations(toks, weights=[0.5, 0.5])
+        random.seed(42)
+        indices = set()
+        for _ in range(20):
+            _, idx = mot.encode_stochastic("test")
+            indices.add(idx)
+        assert len(indices) == 2
+
+    def test_compression_stats(self):
+        from training.utils_v21 import MixtureOfTokenizations
+        toks = self._make_tokenizers()
+        mot = MixtureOfTokenizations(toks)
+        stats = mot.get_compression_stats("hello world")
+        assert len(stats) == 2
+        assert stats[1]['compression_ratio'] > stats[0]['compression_ratio']
+
+
+class TestAGC:
+    """Тесты для Adaptive Gradient Clipping."""
+
+    def test_clip_basic(self):
+        from training.utils_v21 import AGC
+        model = nn.Linear(10, 5)
+        agc = AGC(model, clip_factor=0.01)
+        model(torch.randn(4, 10)).sum().backward()
+        result = agc.clip()
+        assert 'n_clipped' in result
+        assert result['n_total'] >= 1
+
+    def test_large_gradient_clipped(self):
+        from training.utils_v21 import AGC
+        model = nn.Linear(10, 5, bias=False)
+        agc = AGC(model, clip_factor=0.01)
+        model.weight.grad = torch.ones_like(model.weight) * 1000
+        grad_before = model.weight.grad.norm().item()
+        agc.clip()
+        grad_after = model.weight.grad.norm().item()
+        assert grad_after < grad_before
+
+    def test_small_gradient_unchanged(self):
+        from training.utils_v21 import AGC
+        model = nn.Linear(10, 5, bias=False)
+        nn.init.ones_(model.weight)
+        agc = AGC(model, clip_factor=100.0)
+        model.weight.grad = torch.ones_like(model.weight) * 0.001
+        grad_before = model.weight.grad.clone()
+        agc.clip()
+        assert torch.allclose(model.weight.grad, grad_before)
+
+    def test_stats(self):
+        from training.utils_v21 import AGC
+        model = nn.Linear(10, 5)
+        agc = AGC(model, clip_factor=0.01)
+        for _ in range(3):
+            model.zero_grad()
+            model(torch.randn(4, 10)).sum().backward()
+            agc.clip()
+        stats = agc.get_stats()
+        assert len(stats) > 0
+
+    def test_reset_stats(self):
+        from training.utils_v21 import AGC
+        model = nn.Linear(10, 5)
+        agc = AGC(model, clip_factor=0.01)
+        model(torch.randn(4, 10)).sum().backward()
+        agc.clip()
+        agc.reset_stats()
+        assert len(agc._clip_stats) == 0
+
+
+class TestV21Integration:
+    """Интеграционные тесты v21."""
+
+    def test_agc_with_training(self):
+        from training.utils_v21 import AGC
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        agc = AGC(model, clip_factor=0.02)
+        opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            agc.clip()
+            opt.step()
+        assert not torch.isnan(loss)
+
+    def test_grad_ema_with_training(self):
+        from training.utils_v21 import GradEMA
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        ema = GradEMA(model, decay=0.9)
+        opt = torch.optim.SGD(model.parameters(), lr=0.01)
+        x = torch.randint(0, cfg.vocab_size, (2, 8))
+        y = torch.randint(0, cfg.vocab_size, (2, 8))
+        for _ in range(5):
+            opt.zero_grad()
+            _, loss, _ = model(x, y)
+            loss.backward()
+            ema.update()
+            opt.step()
+        assert not torch.isnan(loss)
+
+    def test_fsdp_with_model(self):
+        from training.utils_v21 import FSDPSimulator
+        cfg = make_cfg()
+        model = YiJingGPT(cfg)
+        sim = FSDPSimulator(model)
+        r1 = sim.estimate_memory(n_gpus=1)
+        r8 = sim.estimate_memory(n_gpus=8)
+        assert r8['savings_pct'] > 50
+        assert sim.total_params > 0

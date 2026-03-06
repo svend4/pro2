@@ -112,6 +112,10 @@ class YiJingConfig:
     sparse_attn_window: int = 0      # Sparse attention window (0 = выкл)
     cyclic_max_batch: int = 0        # Cyclic batch max size (0 = выкл)
 
+    # v21: AGC, GradEMA
+    agc_clip_factor: float = 0.0     # AGC clip factor (0 = выкл, 0.01 типично)
+    grad_ema_decay: float = 0.0      # GradEMA decay (0 = выкл, 0.95 типично)
+
     # MoE на гексаграммах
     use_hex_moe: bool = False    # Mixture of Experts на 8 триграммах
     moe_top_k: int = 2           # сколько экспертов активировать
