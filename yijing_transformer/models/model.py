@@ -70,6 +70,8 @@ from .geometry import (
     # v56: Ternary Quantizer
     TernaryQuantizer,
 )
+# v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
+from yijing_transformer.models.geometry.abriale import AbrialeLayer
 
 
 def build_quantizer(cfg):
@@ -772,6 +774,22 @@ class YiJingGPT(nn.Module):
                 n_heads=getattr(cfg, 'matrix_grammar_heads', 4),
             )
 
+        # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
+        self.use_abriale = getattr(cfg, 'use_abriale', False)
+        if self.use_abriale:
+            self.abriale = AbrialeLayer(
+                d_model=cfg.d_model,
+                d_event=getattr(cfg, 'abriale_d_event', 64),
+                n_heads=getattr(cfg, 'abriale_n_heads', 4),
+                arity=getattr(cfg, 'abriale_arity', 2),
+                n_rules=getattr(cfg, 'abriale_n_rules', 64),
+                n_hits=getattr(cfg, 'abriale_n_hits', 4),
+                n_alternatives=getattr(cfg, 'abriale_n_alternatives', 2),
+                n_event_types=getattr(cfg, 'abriale_n_event_types', 8),
+                dropout=cfg.dropout,
+            )
+            self._abriale_balance_weight = getattr(cfg, 'abriale_balance_weight', 0.01)
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -819,6 +837,11 @@ class YiJingGPT(nn.Module):
         if self.use_matrix_grammar:
             x = x + self.matrix_grammar(x)
 
+        # v57: Abriale — событийно-управляемые изотропные N-местные связи
+        abriale_info = None
+        if self.use_abriale:
+            x, abriale_info = self.abriale(x)
+
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)
 
@@ -840,6 +863,13 @@ class YiJingGPT(nn.Module):
                     convergence_info['assignments']
                 )
                 loss = loss + conv_loss
+
+            # v57: Abriale auxiliary loss (балансировка правил)
+            if abriale_info is not None and 'hit_weights' in abriale_info:
+                abriale_loss = self.abriale.get_auxiliary_loss(
+                    abriale_info['hit_weights']
+                )
+                loss = loss + self._abriale_balance_weight * abriale_loss
 
         return logits, loss, new_kv_cache
 

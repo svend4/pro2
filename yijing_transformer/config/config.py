@@ -380,6 +380,17 @@ class YiJingConfig:
     matrix_grammar_cols: int = 8          # столбцы (семантические слоты)
     matrix_grammar_heads: int = 4         # головы axial attention
 
+    # v57: Абриале — событийно-управляемые изотропные N-местные связи (Пацкин)
+    use_abriale: bool = False            # Абриале-слой (событийное управление)
+    abriale_d_event: int = 64            # размерность пространства событий
+    abriale_n_heads: int = 4             # число голов изотропного attention
+    abriale_arity: int = 2               # арность связей (2=бинарные, 3=тернарные)
+    abriale_n_rules: int = 64            # число правил в банке (64 = гексаграммы)
+    abriale_n_hits: int = 4              # макс. число хитов на событие
+    abriale_n_alternatives: int = 2      # число альтернатив (действий) на правило
+    abriale_n_event_types: int = 8       # число типов событий (8 = триграммы)
+    abriale_balance_weight: float = 0.01 # вес aux loss для балансировки правил
+
     # Обучение
     lr: float = 3e-4
     warmup_steps: int = 2000
