@@ -66,6 +66,9 @@ from .geometry import (
     CubicPositionalEncoding,
     # v55: Convergence Bridge
     ConvergenceBridge,
+    MatrixGrammar,
+    # v56: Ternary Quantizer
+    TernaryQuantizer,
 )
 
 
@@ -107,6 +110,15 @@ def build_quantizer(cfg):
             temp=cfg.temp,
             hard=cfg.use_gumbel,
             commitment_weight=cfg.commitment_weight,
+        )
+    elif cfg.quantizer_type == 'ternary':
+        return TernaryQuantizer(
+            total_dim=cfg.quant_total_dim,
+            mode=getattr(cfg, 'ternary_mode', 'factored'),
+            temp=cfg.temp,
+            adaptive_temp=cfg.adaptive_temp,
+            uncertainty_budget=getattr(cfg, 'ternary_uncertainty', 0.3),
+            max_zeros=getattr(cfg, 'ternary_max_zeros', 2),
         )
     else:
         raise ValueError(f"Unknown quantizer_type: {cfg.quantizer_type}")
@@ -687,6 +699,9 @@ class YiJingTransformer(nn.Module):
             # Commitment loss от Gumbel квантизатора
             if hasattr(layer.quantizer, 'get_commitment_loss'):
                 total = total + layer.quantizer.get_commitment_loss()
+            # v56: Ternary uncertainty loss
+            if hasattr(layer.quantizer, 'get_uncertainty_loss'):
+                total = total + layer.quantizer.get_uncertainty_loss()
             # MoD balance loss
             if hasattr(layer, '_mod_loss'):
                 total = total + layer._mod_loss
@@ -747,6 +762,16 @@ class YiJingGPT(nn.Module):
             # Каждый токен vocab → 6D вершина Q6
             self.tok_to_q6 = nn.Linear(cfg.d_model, 6, bias=False)
 
+        # v56: Matrix Grammar — 2D матричная грамматика (Atamiri/Аймара)
+        self.use_matrix_grammar = getattr(cfg, 'use_matrix_grammar', False)
+        if self.use_matrix_grammar:
+            self.matrix_grammar = MatrixGrammar(
+                d_model=cfg.d_model,
+                n_rows=getattr(cfg, 'matrix_grammar_rows', 8),
+                n_cols=getattr(cfg, 'matrix_grammar_cols', 8),
+                n_heads=getattr(cfg, 'matrix_grammar_heads', 4),
+            )
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -789,6 +814,10 @@ class YiJingGPT(nn.Module):
             # Генерируем Q6 вершины из token embeddings (learned projection)
             glyph_vertices = torch.tanh(self.tok_to_q6(x))  # (B, T, 6) → soft Q6
             x, convergence_info = self.convergence_bridge(x, glyph_vertices)
+
+        # v56: Matrix Grammar — 2D axial attention обогащение
+        if self.use_matrix_grammar:
+            x = x + self.matrix_grammar(x)
 
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)

@@ -516,3 +516,166 @@ class ConvergenceBridge(nn.Module):
         balance_loss = ((avg_usage - target_usage) ** 2).sum() * assignments.shape[-1]
 
         return 0.1 * entropy_loss + 0.1 * balance_loss
+
+
+class MatrixGrammar(nn.Module):
+    """Матричная грамматика сигилов — 2D представление вместо 1D цепочки.
+
+    Вдохновлено Atamiri (Гусман де Рохас): «Аймара — это матрица,
+    и её синтаксис определён в массиве». Синтаксис = не дерево и не
+    последовательность, а двумерный массив.
+
+    Архитектура:
+        1D сигилы → reshape в 2D матрицу (rows × cols)
+        Строки = синтаксические роли (агент, действие, объект, локация...)
+        Столбцы = семантические слоты (тип, модификатор, связь...)
+        2D self-attention по строкам и столбцам (axial attention)
+        → Развёртка обратно в 1D
+
+    Это обобщение: стандартный 1D attention видит только цепочку,
+    MatrixGrammar видит таблицу, где отношения по двум осям имеют
+    разный смысл.
+
+    Args:
+        d_model: размерность модели
+        n_rows: число строк матрицы (синтаксические роли)
+        n_cols: число столбцов (семантические слоты)
+        n_heads: число голов в axial attention
+    """
+
+    def __init__(self, d_model: int, n_rows: int = 8, n_cols: int = 8,
+                 n_heads: int = 4):
+        super().__init__()
+        self.d_model = d_model
+        self.n_rows = n_rows
+        self.n_cols = n_cols
+        self.n_slots = n_rows * n_cols  # 64 = число гексаграмм!
+
+        # Проекция из 1D потока в 2D слоты
+        self.slot_proj = nn.Linear(d_model, d_model, bias=False)
+
+        # Learnable slot embeddings (какая роль у каждого слота)
+        self.row_emb = nn.Parameter(torch.randn(n_rows, d_model // 2) * 0.02)
+        self.col_emb = nn.Parameter(torch.randn(n_cols, d_model // 2) * 0.02)
+
+        # Axial attention: по строкам (синтаксис)
+        self.row_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+        # Axial attention: по столбцам (семантика)
+        self.col_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+
+        # Norms
+        self.norm_row = nn.LayerNorm(d_model)
+        self.norm_col = nn.LayerNorm(d_model)
+        self.norm_out = nn.LayerNorm(d_model)
+
+        # Gated readout: матрица → 1D
+        self.readout = nn.Linear(d_model, d_model, bias=False)
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+    def _assign_to_slots(self, x: Tensor) -> Tensor:
+        """Мягко присваивает seq_len токенов к n_slots слотам матрицы.
+
+        Args:
+            x: (batch, seq_len, d_model)
+
+        Returns:
+            slots: (batch, n_slots, d_model)
+        """
+        B, T, D = x.shape
+
+        # Создаём slot queries из row + col embeddings
+        # row_emb: (n_rows, D//2), col_emb: (n_cols, D//2)
+        # Outer product → (n_rows, n_cols, D)
+        row_exp = self.row_emb.unsqueeze(1).expand(-1, self.n_cols, -1)  # (R, C, D//2)
+        col_exp = self.col_emb.unsqueeze(0).expand(self.n_rows, -1, -1)  # (R, C, D//2)
+        slot_queries = torch.cat([row_exp, col_exp], dim=-1)  # (R, C, D)
+        slot_queries = slot_queries.reshape(self.n_slots, D)  # (n_slots, D)
+
+        # Cross-attention: slots attend к входным токенам
+        # Similarity: (B, n_slots, T)
+        x_proj = self.slot_proj(x)  # (B, T, D)
+        sim = torch.matmul(
+            slot_queries.unsqueeze(0).expand(B, -1, -1),  # (B, n_slots, D)
+            x_proj.transpose(1, 2)  # (B, D, T)
+        ) / math.sqrt(D)
+
+        # Soft assignment
+        weights = F.softmax(sim, dim=-1)  # (B, n_slots, T)
+
+        # Weighted sum: каждый слот = weighted pool входных токенов
+        slots = torch.bmm(weights, x)  # (B, n_slots, D)
+
+        return slots
+
+    def _axial_attention(self, matrix: Tensor) -> Tensor:
+        """Axial attention: сначала по строкам, потом по столбцам.
+
+        Args:
+            matrix: (batch, n_rows, n_cols, d_model)
+
+        Returns:
+            matrix: (batch, n_rows, n_cols, d_model)
+        """
+        B, R, C, D = matrix.shape
+
+        # Row attention: каждая строка = последовательность из C токенов
+        rows = matrix.reshape(B * R, C, D)
+        rows = self.norm_row(rows)
+        rows_attn, _ = self.row_attn(rows, rows, rows)
+        rows = rows + rows_attn
+        matrix = rows.reshape(B, R, C, D)
+
+        # Col attention: каждый столбец = последовательность из R токенов
+        cols = matrix.permute(0, 2, 1, 3).reshape(B * C, R, D)
+        cols = self.norm_col(cols)
+        cols_attn, _ = self.col_attn(cols, cols, cols)
+        cols = cols + cols_attn
+        matrix = cols.reshape(B, C, R, D).permute(0, 2, 1, 3)
+
+        return matrix
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Матричная грамматика: 1D → 2D матрица → axial attention → 1D.
+
+        Args:
+            x: (batch, seq_len, d_model)
+
+        Returns:
+            enriched: (batch, seq_len, d_model) — обогащённое представление
+        """
+        B, T, D = x.shape
+
+        # 1. Присваиваем токены к слотам 2D матрицы
+        slots = self._assign_to_slots(x)  # (B, n_slots, D)
+
+        # 2. Reshape в 2D матрицу
+        matrix = slots.reshape(B, self.n_rows, self.n_cols, D)
+
+        # 3. Axial attention
+        matrix = self._axial_attention(matrix)
+
+        # 4. Развёртка обратно и readout к seq_len
+        slots_processed = matrix.reshape(B, self.n_slots, D)
+
+        # 5. Обратная проекция: slots → tokens
+        # Используем те же slot queries для обратного маппинга
+        row_exp = self.row_emb.unsqueeze(1).expand(-1, self.n_cols, -1)
+        col_exp = self.col_emb.unsqueeze(0).expand(self.n_rows, -1, -1)
+        slot_keys = torch.cat([row_exp, col_exp], dim=-1).reshape(self.n_slots, D)
+
+        # Similarity: tokens attend к обработанным слотам
+        x_proj = self.slot_proj(x)  # reuse projection
+        sim = torch.matmul(
+            x_proj,  # (B, T, D)
+            slot_keys.T  # (D, n_slots)
+        ) / math.sqrt(D)
+        weights = F.softmax(sim, dim=-1)  # (B, T, n_slots)
+
+        # Reconstruct: каждый токен = weighted sum обработанных слотов
+        readout = torch.bmm(weights, slots_processed)  # (B, T, D)
+
+        return self.norm_out(self.readout(readout)) * self.scale

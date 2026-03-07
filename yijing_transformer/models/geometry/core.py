@@ -54,6 +54,29 @@ def generate_tetragrams() -> torch.Tensor:
     return generate_hypercube(4)
 
 
+def generate_ternary_hypercube(n: int) -> torch.Tensor:
+    """Генерирует все вершины тернарного гиперкуба {-1, 0, +1}^n.
+
+    Трёхзначная логика (Лукасевич / Аймара / 变爻):
+    - +1 = истина / ян / сплошная линия
+    - -1 = ложь / инь / прерванная линия
+    -  0 = неопределённость / 变爻 / линия в процессе изменения
+
+    Для n=6: 3⁶ = 729 вершин (vs 2⁶ = 64 бинарных гексаграмм).
+    729 = 64 чистых + 665 смешанных (содержащих хотя бы один 0).
+    """
+    signs = [-1.0, 0.0, 1.0]
+    vertices = torch.tensor(
+        list(itertools.product(signs, repeat=n)), dtype=torch.float32
+    )
+    return vertices  # (3^n, n)
+
+
+def generate_ternary_trigrams() -> torch.Tensor:
+    """27 тернарных триграмм = {-1, 0, +1}³."""
+    return generate_ternary_hypercube(3)
+
+
 def generate_e8_roots() -> torch.Tensor:
     """
     240 корней решётки E8 в R⁸.

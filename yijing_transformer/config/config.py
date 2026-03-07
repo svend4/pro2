@@ -368,6 +368,18 @@ class YiJingConfig:
     convergence_compose_layers: int = 1   # слои self-attention в GlyphComposer
     convergence_n_heads: int = 4          # головы cross-attention в ConvergenceLayer
 
+    # v56: Ternary Quantizer — трёхзначная логика {-1,0,+1} (Лукасевич/Аймара/变爻)
+    use_ternary_quantizer: bool = False   # использовать тернарный квантизатор
+    ternary_mode: str = 'factored'        # 'full' (729), 'factored' (2×27), 'sparse'
+    ternary_uncertainty: float = 0.3      # бюджет неопределённости [0,1]
+    ternary_max_zeros: int = 2            # макс. число 变爻 (для sparse режима)
+
+    # v56: Matrix Grammar — 2D матричная грамматика сигилов (Atamiri/Аймара)
+    use_matrix_grammar: bool = False      # матричная грамматика
+    matrix_grammar_rows: int = 8          # строки (синтаксические роли)
+    matrix_grammar_cols: int = 8          # столбцы (семантические слоты)
+    matrix_grammar_heads: int = 4         # головы axial attention
+
     # Обучение
     lr: float = 3e-4
     warmup_steps: int = 2000

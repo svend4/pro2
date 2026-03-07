@@ -59,6 +59,7 @@ from .quantizers import (
     DeformableQuantizer,
     GumbelQuantizer,
     GroupedQuantizer,
+    TernaryQuantizer,
 )
 
 # Attention patterns & modules
@@ -128,4 +129,11 @@ from .convergence import (
     TokenAbstractor,
     ConvergenceLayer,
     ConvergenceBridge,
+    MatrixGrammar,
+)
+
+# Core: ternary hypercube
+from .core import (
+    generate_ternary_hypercube,
+    generate_ternary_trigrams,
 )
