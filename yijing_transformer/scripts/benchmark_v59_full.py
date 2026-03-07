@@ -2,18 +2,25 @@
 """
 v59 Full Benchmark: AbrialeBridge, AdaptiveBridge, SourceSpecializer + Ablation Study.
 
-Конфигурации:
+Модульный запуск — каждый конфиг отдельно, результаты сохраняются инкрементально.
 
- ЧАСТЬ 1: Сравнение новых архитектур (все 7 источников)
-  1. vanilla           — без геометрии (baseline)
-  2. seven_bridge      — v58 LightweightBridge (reference)
-  3. abriale_bridge    — v59 AbrialeBridge (гибрид Abriale + Bridge)
-  4. adaptive_bridge   — v59 AdaptiveBridge (адаптивная глубина)
-  5. specializer       — v59 SourceSpecializer (доменная специализация)
+Использование:
+  # Запустить один конфиг:
+  python benchmark_v59_full.py --run vanilla
+  python benchmark_v59_full.py --run seven_bridge
+  python benchmark_v59_full.py --run abriale_bridge
+  python benchmark_v59_full.py --run ablation_no_heisenberg_attention
 
- ЧАСТЬ 2: Ablation Study — вклад каждого из 7 источников
-  Для каждого из 7 источников: bridge с 6 из 7 (один убран)
-  Показывает, насколько критичен каждый источник.
+  # Запустить группу:
+  python benchmark_v59_full.py --group arch        # 5 архитектур
+  python benchmark_v59_full.py --group ablation    # 7 ablation
+  python benchmark_v59_full.py --group all          # всё (как раньше)
+
+  # Посмотреть текущие результаты:
+  python benchmark_v59_full.py --summary
+
+  # Список всех доступных конфигов:
+  python benchmark_v59_full.py --list
 """
 
 import sys
@@ -22,6 +29,7 @@ import math
 import time
 import json
 import random
+import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -29,6 +37,12 @@ import torch
 import torch.nn.functional as F
 from yijing_transformer.config import YiJingConfig
 from yijing_transformer.models.model import YiJingGPT
+
+
+RESULTS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    'benchmark_v59_full_results.json'
+)
 
 
 def set_seed(seed=42):
@@ -96,15 +110,15 @@ SOURCE_NAMES = [
     'use_dual_embedding',
 ]
 
-SOURCE_LABELS = [
-    'Heisenberg (Belyaev)',
-    'Palace (Skliarova)',
-    'PrivilegedAxis (Kasatkin)',
-    'FlowerGAT (Belyaev)',
-    'CubeDiagonal (Kasatkin)',
-    'D4Equivariant (Fomyuk)',
-    'DualEmbedding (Kasatkin)',
-]
+SOURCE_LABELS = {
+    'use_heisenberg_attention': 'Heisenberg (Belyaev)',
+    'use_palace_attention': 'Palace (Skliarova)',
+    'use_privileged_axis': 'PrivilegedAxis (Kasatkin)',
+    'use_flower_gat': 'FlowerGAT (Belyaev)',
+    'use_cube_diagonal': 'CubeDiagonal (Kasatkin)',
+    'use_d4_equivariant': 'D4Equivariant (Fomyuk)',
+    'use_dual_embedding': 'DualEmbedding (Kasatkin)',
+}
 
 # ── Configs ────────────────────────────────────────────────────
 
@@ -135,6 +149,25 @@ ARCH_CONFIGS = {
         n_domains=4,
     ),
 }
+
+ARCH_ORDER = ['vanilla', 'seven_bridge', 'abriale_bridge', 'adaptive_bridge', 'specializer']
+
+
+def get_ablation_configs():
+    """Generate ablation configs: bridge with 6/7 sources (one removed)."""
+    configs = {}
+    for src_flag in SOURCE_NAMES:
+        sources = {k: v for k, v in ALL_SOURCES.items() if k != src_flag}
+        sources['use_bridge_of_modules'] = True
+        sources['bridge_mode'] = 'lightweight'
+        name = f'ablation_no_{src_flag.replace("use_", "")}'
+        configs[name] = sources
+    return configs
+
+
+def get_all_config_names():
+    ablation = get_ablation_configs()
+    return ARCH_ORDER + list(ablation.keys())
 
 
 def make_config(overrides, vocab_size, d_model=128, n_layers=4, n_heads=4, block_size=128):
@@ -256,78 +289,221 @@ def train_and_eval(cfg, name, train_data, val_data,
     }
 
 
-def main():
-    print("=" * 70)
-    print("  v59 Full Benchmark: AbrialeBridge, AdaptiveBridge, Specializer + Ablation")
-    print("=" * 70)
+# ── Incremental results storage ──────────────────────────────
 
-    print("\n[1/3] Loading data...")
+def load_results():
+    """Load existing results from disk."""
+    if os.path.exists(RESULTS_PATH):
+        with open(RESULTS_PATH) as f:
+            return json.load(f)
+    return {}
+
+
+def save_result(name, result):
+    """Save one config result incrementally (merge into existing file)."""
+    data = load_results()
+    data[name] = result
+    data['_last_updated'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    with open(RESULTS_PATH, 'w') as f:
+        json.dump(data, f, indent=2, default=str)
+    print(f"  >> Result for '{name}' saved to {RESULTS_PATH}")
+
+
+def run_single(name, train_data, val_data, vocab_size):
+    """Run a single config by name, save result immediately."""
+    ablation_configs = get_ablation_configs()
+
+    if name in ARCH_CONFIGS:
+        overrides = ARCH_CONFIGS[name]
+    elif name in ablation_configs:
+        overrides = ablation_configs[name]
+    else:
+        print(f"  ERROR: Unknown config '{name}'")
+        print(f"  Available: {', '.join(get_all_config_names())}")
+        return None
+
+    cfg = make_config(overrides, vocab_size)
+    result = train_and_eval(cfg, name, train_data, val_data, n_steps=800)
+
+    # Add ablation metadata
+    if name.startswith('ablation_no_'):
+        src_flag = 'use_' + name.replace('ablation_no_', '')
+        if src_flag in SOURCE_LABELS:
+            result['removed_source'] = SOURCE_LABELS[src_flag]
+            result['removed_flag'] = src_flag
+
+    # Category tag
+    result['category'] = 'ablation' if name.startswith('ablation_') else 'architecture'
+
+    save_result(name, result)
+    return result
+
+
+def print_summary():
+    """Print summary table from saved results."""
+    data = load_results()
+    if not data:
+        print("  No results yet. Run some configs first.")
+        return
+
+    meta_keys = {'_last_updated'}
+    results = {k: v for k, v in data.items() if k not in meta_keys}
+
+    if not results:
+        print("  No results yet.")
+        return
+
+    print(f"\n  Last updated: {data.get('_last_updated', '?')}")
+
+    # Split by category
+    arch = {k: v for k, v in results.items() if v.get('category') != 'ablation'}
+    ablation = {k: v for k, v in results.items() if v.get('category') == 'ablation'}
+
+    # Architecture comparison
+    if arch:
+        print("\n" + "=" * 90)
+        print("  PART 1: Architecture Comparison")
+        print("=" * 90)
+        print(f"  {'Config':<22} {'Params':>10} {'Best PPL':>10} {'Final PPL':>10} {'Time':>8}")
+        print("  " + "-" * 86)
+
+        vanilla_ppl = arch.get('vanilla', {}).get('best_ppl')
+
+        for name in ARCH_ORDER:
+            if name not in arch:
+                print(f"  {name:<22} {'---':>10} {'(pending)':>10}")
+                continue
+            r = arch[name]
+            delta_str = ""
+            if vanilla_ppl is not None and name != 'vanilla':
+                delta = r['best_ppl'] - vanilla_ppl
+                sign = "+" if delta >= 0 else ""
+                delta_str = f"  {sign}{delta:.2f}"
+            print(f"  {name:<22} {r['params']:>10,} "
+                  f"{r['best_ppl']:>10.2f} {r['final_ppl']:>10.2f} "
+                  f"{r['time']:>7.1f}s{delta_str}")
+
+        done = len(arch)
+        total = len(ARCH_ORDER)
+        print(f"\n  Progress: {done}/{total} architecture configs done")
+
+    # Ablation study
+    if ablation:
+        print("\n" + "=" * 90)
+        print("  PART 2: Ablation Study (7-source bridge, remove 1)")
+        print("=" * 90)
+        print(f"  {'Removed Source':<30} {'Best PPL':>10} {'Delta':>10} {'Impact':>10}")
+        print("  " + "-" * 66)
+
+        ref_ppl = arch.get('seven_bridge', {}).get('best_ppl')
+
+        for src_flag in SOURCE_NAMES:
+            abl_name = f'ablation_no_{src_flag.replace("use_", "")}'
+            if abl_name not in ablation:
+                label = SOURCE_LABELS.get(src_flag, src_flag)
+                print(f"  {label:<30} {'---':>10} {'(pending)':>10}")
+                continue
+            r = ablation[abl_name]
+            label = r.get('removed_source', abl_name)
+            if ref_ppl is not None:
+                delta = r['best_ppl'] - ref_ppl
+                impact = ("CRITICAL" if delta > 0.3 else "HIGH" if delta > 0.1
+                          else "MEDIUM" if delta > 0.05 else "LOW")
+                print(f"  {label:<30} {r['best_ppl']:>10.2f} {delta:>+10.2f} {impact:>10}")
+            else:
+                print(f"  {label:<30} {r['best_ppl']:>10.2f} {'(no ref)':>10}")
+
+        done = len(ablation)
+        print(f"\n  Progress: {done}/{len(SOURCE_NAMES)} ablation configs done")
+
+    elif arch:
+        print(f"\n  Ablation: 0/{len(SOURCE_NAMES)} configs done (run --group ablation)")
+
+    # Overall
+    total_done = len(results)
+    total_all = len(ARCH_ORDER) + len(SOURCE_NAMES)
+    print(f"\n  Overall: {total_done}/{total_all} configs complete")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='v59 Modular Benchmark')
+    parser.add_argument('--run', type=str, help='Run a single config by name')
+    parser.add_argument('--group', type=str, choices=['arch', 'ablation', 'all'],
+                        help='Run a group of configs')
+    parser.add_argument('--summary', action='store_true', help='Show current results')
+    parser.add_argument('--list', action='store_true', help='List all available configs')
+    parser.add_argument('--reset', action='store_true', help='Clear saved results')
+    args = parser.parse_args()
+
+    if args.list:
+        print("\nAvailable configs:")
+        print("\n  Architecture (--group arch):")
+        for name in ARCH_ORDER:
+            print(f"    {name}")
+        print("\n  Ablation (--group ablation):")
+        for name in get_ablation_configs():
+            print(f"    {name}")
+        return
+
+    if args.summary:
+        print_summary()
+        return
+
+    if args.reset:
+        if os.path.exists(RESULTS_PATH):
+            os.remove(RESULTS_PATH)
+            print("  Results cleared.")
+        return
+
+    if not args.run and not args.group:
+        parser.print_help()
+        print("\nExamples:")
+        print("  python benchmark_v59_full.py --run vanilla")
+        print("  python benchmark_v59_full.py --group arch")
+        print("  python benchmark_v59_full.py --summary")
+        return
+
+    # Load data once
+    print("Loading data...")
     train_data, val_data, vocab_size = load_data(block_size=128)
 
-    # ── PART 1: Architecture comparison ──
-    print(f"\n[2/3] Architecture comparison (5 configs × 800 steps)...")
-    arch_results = []
-    for name in ['vanilla', 'seven_bridge', 'abriale_bridge', 'adaptive_bridge', 'specializer']:
-        cfg = make_config(ARCH_CONFIGS[name], vocab_size)
-        result = train_and_eval(cfg, name, train_data, val_data, n_steps=800)
-        arch_results.append(result)
+    if args.run:
+        run_single(args.run, train_data, val_data, vocab_size)
+        print("\n" + "-" * 40)
+        print_summary()
+        return
 
-    # ── PART 2: Ablation study ──
-    print(f"\n[3/3] Ablation study: remove 1 source at a time (7 configs × 800 steps)...")
-    ablation_results = []
+    if args.group:
+        if args.group == 'arch':
+            names = ARCH_ORDER
+        elif args.group == 'ablation':
+            names = list(get_ablation_configs().keys())
+        else:  # all
+            names = ARCH_ORDER + list(get_ablation_configs().keys())
 
-    # Full 7-source bridge as reference
-    full_ref = next(r for r in arch_results if r['name'] == 'seven_bridge')
+        # Skip already completed
+        existing = load_results()
+        meta_keys = {'_last_updated'}
+        remaining = [n for n in names if n not in existing or n in meta_keys]
 
-    for i, (src_flag, src_label) in enumerate(zip(SOURCE_NAMES, SOURCE_LABELS)):
-        # Copy all sources, remove one
-        sources = {k: v for k, v in ALL_SOURCES.items() if k != src_flag}
-        sources['use_bridge_of_modules'] = True
-        sources['bridge_mode'] = 'lightweight'
-        ablation_name = f'ablation_no_{src_flag.replace("use_", "")}'
-        cfg = make_config(sources, vocab_size)
-        result = train_and_eval(cfg, ablation_name, train_data, val_data, n_steps=800)
-        result['removed_source'] = src_label
-        result['removed_flag'] = src_flag
-        ablation_results.append(result)
+        if not remaining:
+            print(f"  All {len(names)} configs already done!")
+            print_summary()
+            return
 
-    # ── Summary ──
-    print("\n" + "=" * 90)
-    print("  PART 1: Architecture Comparison")
-    print("=" * 90)
-    print(f"{'Config':<22} {'Params':>10} {'Best PPL':>10} {'Final PPL':>10} {'Time':>8}")
-    print("-" * 90)
-    vanilla_ppl = arch_results[0]['best_ppl']
-    for r in arch_results:
-        delta = r['best_ppl'] - vanilla_ppl
-        sign = "+" if delta >= 0 else ""
-        print(f"{r['name']:<22} {r['params']:>10,} "
-              f"{r['best_ppl']:>10.2f} {r['final_ppl']:>10.2f} {r['time']:>7.1f}s  {sign}{delta:.2f}")
+        print(f"\n  Running {len(remaining)}/{len(names)} configs "
+              f"({len(names) - len(remaining)} already cached)...\n")
 
-    print("\n" + "=" * 90)
-    print("  PART 2: Ablation Study (7-source bridge, remove 1)")
-    print("=" * 90)
-    print(f"{'Removed Source':<30} {'Best PPL':>10} {'Delta':>10} {'Impact':>10}")
-    print("-" * 90)
-    ref_ppl = full_ref['best_ppl']
-    for r in ablation_results:
-        delta = r['best_ppl'] - ref_ppl
-        impact = "CRITICAL" if delta > 0.3 else "HIGH" if delta > 0.1 else "MEDIUM" if delta > 0.05 else "LOW"
-        print(f"{r['removed_source']:<30} {r['best_ppl']:>10.2f} {delta:>+10.2f} {impact:>10}")
+        for i, name in enumerate(remaining, 1):
+            print(f"\n{'#'*60}")
+            print(f"  [{i}/{len(remaining)}] Running: {name}")
+            print(f"{'#'*60}")
+            run_single(name, train_data, val_data, vocab_size)
 
-    # ── Save ──
-    output = {
-        'architecture_comparison': arch_results,
-        'ablation_study': ablation_results,
-        'reference_full_bridge_ppl': ref_ppl,
-    }
-    out_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        'benchmark_v59_full_results.json'
-    )
-    with open(out_path, 'w') as f:
-        json.dump(output, f, indent=2, default=str)
-    print(f"\n  Results saved to {out_path}")
+        print("\n" + "=" * 60)
+        print("  ALL DONE")
+        print("=" * 60)
+        print_summary()
 
 
 if __name__ == '__main__':
