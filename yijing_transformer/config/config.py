@@ -360,6 +360,14 @@ class YiJingConfig:
     use_cubic_bias: bool = False        # 3D distance-based attention bias (Касаткин)
     use_cubic_pe: bool = False          # 3D positional encoding (x,y,z in 4×4×4 cube)
 
+    # v55: Convergence Bridge — гибридная иерархия глифов ↔ токенов
+    use_convergence_bridge: bool = False  # конвергентный мост глиф↔токен
+    convergence_n_clusters: int = 64      # число кластеров (64 = гексаграммы)
+    convergence_window_size: int = 4      # окно для GlyphComposer
+    convergence_stride: int = 2           # шаг окна
+    convergence_compose_layers: int = 1   # слои self-attention в GlyphComposer
+    convergence_n_heads: int = 4          # головы cross-attention в ConvergenceLayer
+
     # Обучение
     lr: float = 3e-4
     warmup_steps: int = 2000

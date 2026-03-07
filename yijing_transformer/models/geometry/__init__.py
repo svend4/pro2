@@ -121,3 +121,11 @@ from .ffn import (
     GeometricFFN,
     MultiScaleHypercubeLayer,
 )
+
+# Convergence Bridge: гибридная иерархия глифов ↔ токенов
+from .convergence import (
+    GlyphComposer,
+    TokenAbstractor,
+    ConvergenceLayer,
+    ConvergenceBridge,
+)

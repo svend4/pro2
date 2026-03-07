@@ -64,6 +64,8 @@ from .geometry import (
     # v54: Kasatkin 3D embedding
     CubicAttentionBias,
     CubicPositionalEncoding,
+    # v55: Convergence Bridge
+    ConvergenceBridge,
 )
 
 
@@ -730,6 +732,21 @@ class YiJingGPT(nn.Module):
         # Label smoothing
         self.label_smoothing = getattr(cfg, 'label_smoothing', 0.0)
 
+        # v55: Convergence Bridge — гибридная иерархия глифов ↔ токенов
+        self.use_convergence_bridge = getattr(cfg, 'use_convergence_bridge', False)
+        if self.use_convergence_bridge:
+            self.convergence_bridge = ConvergenceBridge(
+                d_model=cfg.d_model,
+                n_clusters=getattr(cfg, 'convergence_n_clusters', 64),
+                window_size=getattr(cfg, 'convergence_window_size', 4),
+                stride=getattr(cfg, 'convergence_stride', 2),
+                n_compose_layers=getattr(cfg, 'convergence_compose_layers', 1),
+                n_heads=getattr(cfg, 'convergence_n_heads', 4),
+            )
+            # Проекция token ids → Q6 вершины (learned, не зависит от GlyphTokenizer)
+            # Каждый токен vocab → 6D вершина Q6
+            self.tok_to_q6 = nn.Linear(cfg.d_model, 6, bias=False)
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -766,6 +783,13 @@ class YiJingGPT(nn.Module):
             bi_mask = self.bi_tri_attn.get_mask(t)  # (t, t) soft directional mask
             x = x * bi_mask.diag().unsqueeze(0).unsqueeze(-1)
 
+        # v55: Convergence Bridge — обогащение через гибридную иерархию
+        convergence_info = None
+        if self.use_convergence_bridge:
+            # Генерируем Q6 вершины из token embeddings (learned projection)
+            glyph_vertices = torch.tanh(self.tok_to_q6(x))  # (B, T, 6) → soft Q6
+            x, convergence_info = self.convergence_bridge(x, glyph_vertices)
+
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)
 
@@ -780,6 +804,13 @@ class YiJingGPT(nn.Module):
             aux = self.core.get_aux_loss()
             if isinstance(aux, torch.Tensor):
                 loss = loss + aux
+
+            # v55: Convergence auxiliary loss
+            if convergence_info is not None:
+                conv_loss = self.convergence_bridge.get_convergence_loss(
+                    convergence_info['assignments']
+                )
+                loss = loss + conv_loss
 
         return logits, loss, new_kv_cache
 
