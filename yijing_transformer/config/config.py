@@ -325,6 +325,31 @@ class YiJingConfig:
     moe_top_k: int = 2           # сколько экспертов активировать
     n_experts: int = 8           # число экспертов (= число триграмм)
 
+    # v51 геометрия: интеграция шести источников
+    codebook_order: str = 'fuxi'         # 'fuxi' (binary), 'wenwang' (traditional), 'learned'
+    use_palace_attention: bool = False   # block-sparse attention по 8 дворцам (Склярова)
+    use_antipodal_reg: bool = False      # антиподальная регуляризация (Фомюк/Герман)
+    antipodal_weight: float = 0.01       # вес антиподального штрафа
+    use_triangular_bias: bool = False    # треугольный attention bias (Андреев)
+    use_four_state: bool = False         # 4-состояния линий: 4096 кодбук (Склярова 1.2)
+    use_dual_embedding: bool = False     # dual 6D+3D embedding (Касаткин)
+    use_quadrant_attention: bool = False # 4-квадрантный attention (Беляев)
+    use_graduated_biangua: bool = False  # градуированная 变卦 (Склярова 1.3)
+    use_d4_equivariant: bool = False    # D₄-эквивариантный слой (Фомюк 2.2)
+    use_heisenberg_attention: bool = False  # Гейзенберг-attention (Беляев 6.1)
+    use_dual_mode_head: bool = False    # мезонный/барионный head (Беляев 6.4)
+    use_recursive_cube: bool = False    # рекурсивный куб-attention (Беляев 6.5)
+    use_weaving_loom: bool = False      # 4-уровневый ткацкий станок (Беляев 6.8)
+    weaving_max_level: int = 3          # макс. уровень ткацкого станка (1-4)
+    use_mobius_bias: bool = False       # Мёбиусов attention-паттерн (Беляев 6.3)
+    use_privileged_axis: bool = False   # привилегированная ось (Касаткин 4.1)
+    use_cube_diagonal: bool = False     # 4 типа диагоналей куба (Касаткин 4.2)
+    use_four_level_pe: bool = False     # 4-уровневое позиционное кодирование (Андреев 3.1)
+    use_bidirectional_tri: bool = False # двунаправленный треугольный attention (Андреев 3.3)
+    use_flower_gat: bool = False        # Цветок Жизни GAT (Беляев 6.6)
+    use_structural_defect: bool = False  # Structural Defect bottleneck 16→12 (Беляев)
+    curriculum_strategy: str = 'linear' # 'linear', 'geometric_first', 'triangular' (Андреев 3.4)
+
     # Обучение
     lr: float = 3e-4
     warmup_steps: int = 2000

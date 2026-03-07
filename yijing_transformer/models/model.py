@@ -37,6 +37,27 @@ from .geometry import (
     TaskAwareRouter,
     DynamicCurriculumController,
     MultiScaleHypercubeLayer,
+    # v51: Six-source integration modules
+    FourStateQuantizer,
+    AntipodalQuantizer,
+    TriangularAttentionBias,
+    PalaceAttention,
+    DualEmbedding,
+    QuadrantAttention,
+    GraduatedBianGuaTransform,
+    D4EquivariantLayer,
+    DualModeHead,
+    RecursiveCubeAttention,
+    WeavingLoomArchitecture,
+    FourLevelPositionalEncoding,
+    BidirectionalTriangularAttention,
+    CubeDiagonalAttention,
+    MobiusAttentionPattern,
+    PrivilegedAxisAttention,
+    HeisenbergAttention,
+    FlowerOfLifeGAT,
+    StructuralDefectLayer,
+    HexagramAttentionPattern,
 )
 
 
@@ -146,7 +167,7 @@ class YiJingAttention(nn.Module):
         B, H, T, D = x.shape
         return x[:, :, None, :, :].expand(B, H, self.n_rep, T, D).reshape(B, H * self.n_rep, T, D)
 
-    def forward(self, x, kv_cache=None):
+    def forward(self, x, kv_cache=None, extra_attn_bias=None):
         B, T, C = x.shape
 
         # Раздельные проекции Q, K, V (для GQA)
@@ -175,7 +196,7 @@ class YiJingAttention(nn.Module):
 
         S = k.size(2)  # полная длина (с кэшем)
 
-        if self.use_flash and hasattr(F, 'scaled_dot_product_attention') and kv_cache is None:
+        if self.use_flash and hasattr(F, 'scaled_dot_product_attention') and kv_cache is None and extra_attn_bias is None:
             out = F.scaled_dot_product_attention(
                 q, k, v, is_causal=True, dropout_p=self.dropout.p if self.training else 0.0
             )
@@ -203,6 +224,21 @@ class YiJingAttention(nn.Module):
                 offset = S - T
                 alibi_bias = self.alibi(T, offset=offset)
                 scores = scores + alibi_bias
+
+            # v53: external attention biases (triangular, mobius, cube diagonal, etc.)
+            if extra_attn_bias is not None:
+                # Normalize to (B, 1, T, S) — broadcasts across heads
+                if extra_attn_bias.dim() == 2:
+                    bias = extra_attn_bias.unsqueeze(0).unsqueeze(0)
+                elif extra_attn_bias.dim() == 3:
+                    bias = extra_attn_bias.unsqueeze(1)
+                else:
+                    bias = extra_attn_bias
+                # Handle KV-cache: bias is (*, T, T) but scores are (*, T, S)
+                if bias.size(-1) < S:
+                    pad_size = S - bias.size(-1)
+                    bias = F.pad(bias, (pad_size, 0))
+                scores = scores + bias
 
             # Causal mask с учётом KV-cache
             causal = torch.tril(torch.ones(S, S, device=x.device))
@@ -246,16 +282,82 @@ class YiJingTransformerLayer(nn.Module):
     """
     Слой YiJing-трансформера:
 
-    1. Attention с триграммным bias и RoPE
+    1. Attention с триграммным bias и RoPE (+ v51 attention модули)
     2. Факторизованная квантизация к гексаграммам (6D гиперкуб)
     3. 变卦 трансформация (опционально)
-    4. FFN (SwiGLU или GELU) или MoE на триграммах
+    4. D₄-эквивариантный слой (v51, опционально)
+    5. FFN (SwiGLU или GELU) или MoE на триграммах
     """
     def __init__(self, cfg, layer_quant_dim=None):
         super().__init__()
-        # Attention
+        self.cfg = cfg
+
+        # Attention — может быть заменён на v51-модуль
         self.ln_attn = nn.LayerNorm(cfg.d_model)
-        self.attn = YiJingAttention(cfg)
+        self.use_quadrant_attention = getattr(cfg, 'use_quadrant_attention', False)
+        self.use_recursive_cube = getattr(cfg, 'use_recursive_cube', False)
+        self.use_weaving_loom = getattr(cfg, 'use_weaving_loom', False)
+
+        if self.use_quadrant_attention:
+            self.attn = QuadrantAttention(cfg.d_model, cfg.n_heads)
+            self._attn_returns_cache = False
+        elif self.use_recursive_cube:
+            self.attn = RecursiveCubeAttention(cfg.d_model, cfg.n_heads)
+            self._attn_returns_cache = False
+        elif self.use_weaving_loom:
+            self.attn = WeavingLoomArchitecture(
+                cfg.d_model,
+                max_level=getattr(cfg, 'weaving_max_level', 3),
+            )
+            self._attn_returns_cache = False
+        else:
+            self.attn = YiJingAttention(cfg)
+            self._attn_returns_cache = True
+
+        # v51: additional attention biases (composable with standard attention)
+        self.use_triangular_bias = getattr(cfg, 'use_triangular_bias', False)
+        if self.use_triangular_bias:
+            self.triangular_bias = TriangularAttentionBias(
+                max_seq_len=cfg.block_size
+            )
+
+        self.use_palace_attention = getattr(cfg, 'use_palace_attention', False)
+        if self.use_palace_attention:
+            self.palace_attn = PalaceAttention(cfg.d_model, cfg.n_heads)
+
+        self.use_mobius_bias = getattr(cfg, 'use_mobius_bias', False)
+        if self.use_mobius_bias:
+            self.mobius_pattern = MobiusAttentionPattern(
+                max_seq_len=cfg.block_size
+            )
+
+        self.use_privileged_axis = getattr(cfg, 'use_privileged_axis', False)
+        if self.use_privileged_axis:
+            self.privileged_axis = PrivilegedAxisAttention(cfg.d_model)
+
+        self.use_cube_diagonal = getattr(cfg, 'use_cube_diagonal', False)
+        if self.use_cube_diagonal:
+            self.cube_diag = CubeDiagonalAttention(cfg.d_model)
+
+        # v53: Heisenberg attention (Беляев 6.1) — additive enrichment
+        self.use_heisenberg = getattr(cfg, 'use_heisenberg_attention', False)
+        if self.use_heisenberg and not (self.use_quadrant_attention or self.use_recursive_cube or self.use_weaving_loom):
+            self.heisenberg_attn = HeisenbergAttention(cfg.d_model)
+
+        # v53: Hexagram attention pattern (64 fixed patterns)
+        self.use_hex_attn_pattern = getattr(cfg, 'use_hex_attn_pattern', False)
+        if self.use_hex_attn_pattern:
+            self.hex_pattern = HexagramAttentionPattern(cfg.d_model, cfg.block_size)
+
+        # v53: Flower of Life GAT (Беляев 6.6)
+        self.use_flower_gat = getattr(cfg, 'use_flower_gat', False)
+        if self.use_flower_gat:
+            self.flower_gat = FlowerOfLifeGAT(cfg.d_model)
+
+        # v53: Structural Defect bottleneck (Беляев)
+        self.use_structural_defect = getattr(cfg, 'use_structural_defect', False)
+        if self.use_structural_defect:
+            self.structural_defect = StructuralDefectLayer(cfg.d_model)
 
         # Квантизация к вершинам гиперкуба (bottleneck)
         # Multi-scale: layer_quant_dim overrides cfg.quant_total_dim
@@ -274,11 +376,31 @@ class YiJingTransformerLayer(nn.Module):
             self.quantizer = build_quantizer(cfg)
         self.hex_scale = nn.Parameter(torch.tensor(cfg.hex_strength))
 
-        # 变卦 (трансформация гексаграмм)
-        if cfg.use_bian_gua:
+        # v51: Antipodal regularization (Фомюк/Герман)
+        self.use_antipodal_reg = getattr(cfg, 'use_antipodal_reg', False)
+        if self.use_antipodal_reg:
+            self.antipodal = AntipodalQuantizer(
+                temp=cfg.temp, adaptive_temp=cfg.adaptive_temp
+            )
+
+        # 变卦 (трансформация гексаграмм) — standard or graduated
+        self.use_graduated_biangua = getattr(cfg, 'use_graduated_biangua', False)
+        if self.use_graduated_biangua:
+            self.bian_gua = GraduatedBianGuaTransform(cfg.d_model)
+        elif cfg.use_bian_gua:
             self.bian_gua = BianGuaTransform(cfg.d_model)
         else:
             self.bian_gua = None
+
+        # v51: D₄-эквивариантный слой (Фомюк 2.2)
+        self.use_d4_equivariant = getattr(cfg, 'use_d4_equivariant', False)
+        if self.use_d4_equivariant:
+            self.d4_layer = D4EquivariantLayer(cfg.d_model)
+
+        # v51: Dual Embedding (Касаткин 4.4)
+        self.use_dual_embedding = getattr(cfg, 'use_dual_embedding', False)
+        if self.use_dual_embedding:
+            self.dual_emb = DualEmbedding(cfg.d_model)
 
         # FFN или MoE
         self.use_moe = cfg.use_hex_moe
@@ -303,9 +425,59 @@ class YiJingTransformerLayer(nn.Module):
             )
 
     def forward(self, x, kv_cache=None):
-        # 1. Attention с триграммным bias (+ KV-cache)
-        attn_out, new_kv = self.attn(self.ln_attn(x), kv_cache=kv_cache)
+        B, T, C = x.shape
+
+        # 1. Attention (standard or v51 module)
+        h = self.ln_attn(x)
+        new_kv = None
+
+        # v53: compose external attention biases — injected into score computation
+        extra_bias = None
+        if self.use_triangular_bias:
+            tri_bias = self.triangular_bias(T).unsqueeze(0).unsqueeze(0)  # (1,1,T,T)
+            extra_bias = tri_bias if extra_bias is None else extra_bias + tri_bias
+        if self.use_mobius_bias:
+            mob_bias = self.mobius_pattern(T).unsqueeze(0).unsqueeze(0)  # (1,1,T,T)
+            extra_bias = mob_bias if extra_bias is None else extra_bias + mob_bias
+        if self.use_cube_diagonal:
+            cd_bias = self.cube_diag.get_bias(h).unsqueeze(1)  # (B,1,T,T)
+            extra_bias = cd_bias if extra_bias is None else extra_bias + cd_bias
+        if self.use_hex_attn_pattern:
+            hex_bias = self.hex_pattern(h, T)  # (B,1,T,T)
+            extra_bias = hex_bias if extra_bias is None else extra_bias + hex_bias
+
+        if self._attn_returns_cache:
+            attn_out, new_kv = self.attn(h, kv_cache=kv_cache, extra_attn_bias=extra_bias)
+        else:
+            attn_out = self.attn(h)
+            # For alternative attentions: compose bias post-hoc
+            if extra_bias is not None:
+                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
+                attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
+
+        # v53: Heisenberg attention enrichment (additive)
+        if self.use_heisenberg:
+            attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
+
+        # v51: compose additional attention biases (additive post-processing)
+        if self.use_palace_attention:
+            palace_out = self.palace_attn(h)
+            attn_out = attn_out + 0.1 * palace_out
+
+        if self.use_privileged_axis:
+            axis_bias = self.privileged_axis.get_bias(h)  # (B, T, T)
+            axis_w = F.softmax(axis_bias, dim=-1)
+            attn_out = attn_out + 0.05 * torch.bmm(axis_w, h)
+
         x = x + attn_out
+
+        # v51: Dual Embedding enrichment
+        if self.use_dual_embedding:
+            x = self.dual_emb(x)
+
+        # v53: Flower of Life GAT enrichment
+        if self.use_flower_gat:
+            x = self.flower_gat(x)
 
         # 2. Квантизация к вершинам гиперкуба
         h = self.ln_hex(x)
@@ -315,20 +487,44 @@ class YiJingTransformerLayer(nn.Module):
             zq_out = zq_out * (1.0 + 0.001 * torch.randn_like(zq_out))
         x = x + self.hex_scale * self.from_qd(zq_out)
 
+        # v51: Antipodal regularization (adds penalty during training)
+        if self.use_antipodal_reg and self.training:
+            self._antipodal_loss = self.antipodal.antipodal_loss(zq_out)
+        else:
+            self._antipodal_loss = 0.0
+
         # 3. 变卦 трансформация
         if self.bian_gua is not None:
             x = self.bian_gua(x)
 
-        # 4. FFN или MoE
+        # 4. D₄-эквивариантный слой
+        if self.use_d4_equivariant:
+            x = self.d4_layer(x)
+
+        # v53: Structural Defect bottleneck (geometric compression)
+        if self.use_structural_defect:
+            compressed = self.structural_defect(x)  # (B, 12, C)
+            if compressed.size(1) < T:
+                weights = F.softmax(
+                    torch.matmul(x, compressed.transpose(-2, -1)) / math.sqrt(C),
+                    dim=-1
+                )
+                x = x + 0.1 * torch.matmul(weights, compressed)
+
+        # 5. FFN или MoE
         h_ffn = self.ln_ffn(x)
         if self.use_moe:
             ffn_out, aux_loss = self.ffn(h_ffn)
             x = x + ffn_out
-            # Сохраняем aux_loss для добавления к основному loss
             self._aux_loss = aux_loss
         else:
             x = x + self.ffn(h_ffn)
             self._aux_loss = 0.0
+
+        # Aggregate v51 auxiliary losses
+        if isinstance(self._antipodal_loss, torch.Tensor):
+            antipodal_w = getattr(self.cfg, 'antipodal_weight', 0.01)
+            self._aux_loss = self._aux_loss + antipodal_w * self._antipodal_loss
 
         return x, new_kv
 
@@ -431,11 +627,24 @@ class YiJingGPT(nn.Module):
         self.cfg = cfg
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
 
-        # Позиционные эмбеддинги: если RoPE или ALiBi — не нужны отдельные
-        if not cfg.use_rope and not getattr(cfg, 'use_alibi', False):
+        # v51: 4-уровневое позиционное кодирование Андреева
+        self.use_four_level_pe = getattr(cfg, 'use_four_level_pe', False)
+        if self.use_four_level_pe:
+            self.four_level_pe = FourLevelPositionalEncoding(
+                cfg.d_model, max_seq_len=cfg.block_size
+            )
+            self.pos_emb = None  # FourLevelPE заменяет стандартный PE
+        elif not cfg.use_rope and not getattr(cfg, 'use_alibi', False):
             self.pos_emb = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
         else:
             self.pos_emb = None
+
+        # v51: Bidirectional triangular attention (Андреев 3.3)
+        self.use_bidirectional_tri = getattr(cfg, 'use_bidirectional_tri', False)
+        if self.use_bidirectional_tri:
+            self.bi_tri_attn = BidirectionalTriangularAttention(
+                cfg.d_model, max_seq_len=cfg.block_size
+            )
 
         # Token Merging (ToMe) — сокращение числа токенов в FFN
         self.token_merge_ratio = getattr(cfg, 'token_merge_ratio', 0.0)
@@ -462,11 +671,20 @@ class YiJingGPT(nn.Module):
     def forward(self, idx, targets=None, kv_cache=None):
         b, t = idx.size()
         x = self.tok_emb(idx)
-        if self.pos_emb is not None:
+
+        # Позиционное кодирование
+        if self.use_four_level_pe:
+            x = x + self.four_level_pe(t, device=idx.device)
+        elif self.pos_emb is not None:
             offset = 0
             if kv_cache is not None and kv_cache[0] is not None:
                 offset = kv_cache[0][0].size(2)
             x = x + self.pos_emb[:, offset:offset+t, :]
+
+        # v53: Bidirectional triangular pre-processing (Андреев 3.3)
+        if self.use_bidirectional_tri:
+            bi_mask = self.bi_tri_attn.get_mask(t)  # (t, t) soft directional mask
+            x = x * bi_mask.diag().unsqueeze(0).unsqueeze(-1)
 
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)
@@ -810,19 +1028,33 @@ class HybridGatedLayer(nn.Module):
     модель самостоятельно выбирает, какой путь использовать,
     через обучаемый гейт.
 
-    Принцип дипломатического подхода:
-    - Не навязываем ни стандартный, ни геометрический путь
-    - Модель свободна выбрать оптимальную комбинацию
-    - Все решения прозрачно логируются
+    v51: поддержка QuadrantAttention, RecursiveCubeAttention, WeavingLoom,
+    D₄-эквивариантного слоя, и антиподальной регуляризации.
     """
     def __init__(self, cfg, layer_quant_dim=None):
         super().__init__()
+        self.cfg = cfg
         gate_bias = cfg.gate_init_bias
 
         # === Attention: стандартный и геометрический ===
         self.ln_attn = nn.LayerNorm(cfg.d_model)
         self.std_attn = YiJingAttention(cfg)  # стандартный (с trigram bias)
-        self.geo_attn = GeometricAttention(cfg)  # чисто геометрический
+
+        # v51: выбор геометрического attention
+        use_quadrant = getattr(cfg, 'use_quadrant_attention', False)
+        use_recursive = getattr(cfg, 'use_recursive_cube', False)
+        use_weaving = getattr(cfg, 'use_weaving_loom', False)
+
+        if use_quadrant:
+            self.geo_attn = QuadrantAttention(cfg.d_model, cfg.n_heads)
+        elif use_recursive:
+            self.geo_attn = RecursiveCubeAttention(cfg.d_model, cfg.n_heads)
+        elif use_weaving:
+            self.geo_attn = WeavingLoomArchitecture(
+                cfg.d_model, max_level=getattr(cfg, 'weaving_max_level', 3)
+            )
+        else:
+            self.geo_attn = GeometricAttention(cfg)  # default
         self.attn_gate = GatedPathSelector(cfg.d_model, init_bias=gate_bias)
 
         # === Квантизация (геометрический путь) ===
@@ -833,14 +1065,28 @@ class HybridGatedLayer(nn.Module):
         self.quantizer = build_quantizer(cfg)
         self.hex_scale = nn.Parameter(torch.tensor(cfg.hex_strength))
 
-        # BianGua (геометрический путь)
-        if cfg.use_bian_gua:
+        # BianGua (геометрический путь) — standard or graduated
+        if getattr(cfg, 'use_graduated_biangua', False):
+            self.bian_gua = GraduatedBianGuaTransform(cfg.d_model)
+        elif cfg.use_bian_gua:
             self.bian_gua = BianGuaTransform(cfg.d_model)
         else:
             self.bian_gua = None
 
+        # v51: Antipodal regularization
+        self.use_antipodal_reg = getattr(cfg, 'use_antipodal_reg', False)
+        if self.use_antipodal_reg:
+            self.antipodal = AntipodalQuantizer(
+                temp=cfg.temp, adaptive_temp=cfg.adaptive_temp
+            )
+
         # Гейт для квантизации+BianGua (применять vs пропускать)
         self.quant_gate = GatedPathSelector(cfg.d_model, init_bias=gate_bias)
+
+        # v51: D₄-эквивариантный слой
+        self.use_d4_equivariant = getattr(cfg, 'use_d4_equivariant', False)
+        if self.use_d4_equivariant:
+            self.d4_layer = D4EquivariantLayer(cfg.d_model)
 
         # === FFN: стандартный и геометрический ===
         self.ln_ffn = nn.LayerNorm(cfg.d_model)
@@ -887,6 +1133,15 @@ class HybridGatedLayer(nn.Module):
         quant_out = self.quant_gate(identity, geo_contrib)
         x = x + quant_out
 
+        # v51: Antipodal regularization
+        self._antipodal_loss = 0.0
+        if self.use_antipodal_reg and self.training:
+            self._antipodal_loss = self.antipodal.antipodal_loss(zq_out)
+
+        # v51: D₄-эквивариантный слой (между quantization и FFN)
+        if self.use_d4_equivariant:
+            x = self.d4_layer(x)
+
         # 3. FFN с гейтом
         h = self.ln_ffn(x)
         std_ffn_out = self.std_ffn(h)
@@ -894,6 +1149,11 @@ class HybridGatedLayer(nn.Module):
         ffn_out = self.ffn_gate(std_ffn_out, geo_ffn_out)
         x = x + ffn_out
         self._aux_loss = aux_loss
+
+        # Aggregate v51 auxiliary losses
+        if isinstance(self._antipodal_loss, torch.Tensor):
+            antipodal_w = getattr(self.cfg, 'antipodal_weight', 0.01)
+            self._aux_loss = self._aux_loss + antipodal_w * self._antipodal_loss
 
         return x, new_kv
 

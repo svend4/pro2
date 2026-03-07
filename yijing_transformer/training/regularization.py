@@ -294,3 +294,38 @@ class GradientNoise:
     def load_state_dict(self, state):
         for k, v in state.items():
             setattr(self, k, v)
+
+
+# ==================== v51: Антиподальная регуляризация (Ступень 2) ====================
+
+class AntipodalRegularization(nn.Module):
+    """Антиподальная регуляризация для квантизатора (Фомюк + Герман).
+
+    Штраф: ||Q(x) + Q(-x)|| → 0.
+    Заставляет квантизатор «знать» об антиподальной структуре:
+    hex(i) + hex(63-i) = 0 (покоординатно).
+
+    Эквивалент weight tying: 64 кодовых слова работают как 128,
+    потому что каждое слово несёт информацию о своём антиподе.
+
+    Герман доказывает: n + n̄ = P+1 для упаковки с периодом P.
+    """
+    def __init__(self, weight: float = 0.01):
+        super().__init__()
+        self.weight = weight
+
+    def forward(self, quantizer, x):
+        """Вычисляет антиподальный loss.
+
+        Args:
+            quantizer: квантизатор с методом forward(x)
+            x: входной тензор (..., 6)
+
+        Returns:
+            scalar loss
+        """
+        q_x = quantizer(x)
+        q_neg_x = quantizer(-x)
+        # Антиподальность: Q(x) + Q(-x) ≈ 0
+        antipodal_loss = (q_x + q_neg_x).pow(2).mean()
+        return self.weight * antipodal_loss

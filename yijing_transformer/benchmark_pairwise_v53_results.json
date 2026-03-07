@@ -1,0 +1,110 @@
+{
+  "vanilla": {
+    "label": "vanilla",
+    "final_accuracy": 1.0,
+    "final_loss": 0.008770603686571121,
+    "acc_at_200": 0.2646484375,
+    "acc_at_600": 1.0,
+    "params": 109018,
+    "time": 446.20083713531494
+  },
+  "F": {
+    "label": "F(Fomyuk)",
+    "final_accuracy": 1.0,
+    "final_loss": 0.0077965473756194115,
+    "acc_at_200": 0.2041015625,
+    "acc_at_600": 1.0,
+    "params": 109806,
+    "time": 625.6057963371277
+  },
+  "B": {
+    "label": "B(Belyaev)",
+    "final_accuracy": 1.0,
+    "final_loss": 0.007203704211860895,
+    "acc_at_200": 0.275390625,
+    "acc_at_600": 1.0,
+    "params": 168158,
+    "time": 773.8068923950195
+  },
+  "H": {
+    "label": "H(Hermann)",
+    "final_accuracy": 1.0,
+    "final_loss": 0.008770603686571121,
+    "acc_at_200": 0.2646484375,
+    "acc_at_600": 1.0,
+    "params": 109018,
+    "time": 454.2785382270813
+  },
+  "F+B": {
+    "label": "F+B",
+    "final_accuracy": 1.0,
+    "final_loss": 0.03826148062944412,
+    "acc_at_200": 0.244140625,
+    "acc_at_600": 0.5322265625,
+    "params": 168946,
+    "time": 1012.473343372345
+  },
+  "F+A": {
+    "label": "F+A",
+    "final_accuracy": 1.0,
+    "final_loss": 0.02664170041680336,
+    "acc_at_200": 0.0419921875,
+    "acc_at_600": 1.0,
+    "params": 114418,
+    "time": 684.7135393619537
+  },
+  "F+H": {
+    "label": "F+H",
+    "final_accuracy": 1.0,
+    "final_loss": 0.0077965473756194115,
+    "acc_at_200": 0.2041015625,
+    "acc_at_600": 1.0,
+    "params": 109806,
+    "time": 640.8253197669983
+  },
+  "B+A": {
+    "label": "B+A",
+    "final_accuracy": 1.0,
+    "final_loss": 0.013894941657781601,
+    "acc_at_200": 0.087890625,
+    "acc_at_600": 1.0,
+    "params": 172770,
+    "time": 807.6357748508453
+  },
+  "B+H": {
+    "label": "B+H",
+    "final_accuracy": 1.0,
+    "final_loss": 0.007203704211860895,
+    "acc_at_200": 0.275390625,
+    "acc_at_600": 1.0,
+    "params": 168158,
+    "time": 783.4020454883575
+  },
+  "A+H": {
+    "label": "A+H",
+    "final_accuracy": 1.0,
+    "final_loss": 0.010752029716968536,
+    "acc_at_200": 0.08203125,
+    "acc_at_600": 0.9990234375,
+    "params": 113630,
+    "time": 481.50457549095154
+  },
+  "F+B+H": {
+    "label": "F+B+H",
+    "final_accuracy": 1.0,
+    "final_loss": 0.03826148062944412,
+    "acc_at_200": 0.244140625,
+    "acc_at_600": 0.5322265625,
+    "params": 168946,
+    "time": 971.1217424869537
+  },
+  "F+B+A": {
+    "label": "F+B+A",
+    "final_accuracy": 1.0,
+    "final_loss": 0.008301502093672752,
+    "acc_at_200": 0.361328125,
+    "acc_at_600": 1.0,
+    "params": 173558,
+    "time": 639.4495413303375
+  }
+}

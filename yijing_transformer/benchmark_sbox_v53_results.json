@@ -1,0 +1,116 @@
+{
+  "sbox": {
+    "vanilla": {
+      "source": "vanilla",
+      "final_accuracy": 1.0,
+      "final_loss": 0.004592665005475283,
+      "params": 109018,
+      "time": 371.3624427318573,
+      "acc_at_200": 1.0,
+      "acc_at_600": 1.0
+    },
+    "fomyuk": {
+      "source": "fomyuk",
+      "final_accuracy": 1.0,
+      "final_loss": 0.004558761138468981,
+      "params": 109806,
+      "time": 477.91481280326843,
+      "acc_at_200": 1.0,
+      "acc_at_600": 1.0
+    },
+    "belyaev": {
+      "source": "belyaev",
+      "final_accuracy": 1.0,
+      "final_loss": 0.004600935149937868,
+      "params": 168158,
+      "time": 632.4260656833649,
+      "acc_at_200": 1.0,
+      "acc_at_600": 1.0
+    },
+    "fomyuk_belyaev": {
+      "source": "fomyuk_belyaev",
+      "final_accuracy": 1.0,
+      "final_loss": 0.004711970686912537,
+      "params": 168946,
+      "time": 757.4931626319885,
+      "acc_at_200": 1.0,
+      "acc_at_600": 1.0
+    }
+  },
+  "xor": {
+    "vanilla": {
+      "source": "vanilla",
+      "final_accuracy": 0.490234375,
+      "final_loss": 0.7093155980110168,
+      "params": 109018,
+      "time": 447.9848828315735,
+      "acc_at_200": 0.1455078125,
+      "acc_at_600": 0.50390625
+    },
+    "fomyuk": {
+      "source": "fomyuk",
+      "final_accuracy": 0.4951171875,
+      "final_loss": 0.7149034738540649,
+      "params": 109806,
+      "time": 675.1067757606506,
+      "acc_at_200": 0.236328125,
+      "acc_at_600": 0.25
+    },
+    "belyaev": {
+      "source": "belyaev",
+      "final_accuracy": 1.0,
+      "final_loss": 0.00841496977955103,
+      "params": 168158,
+      "time": 785.9958159923553,
+      "acc_at_200": 0.41015625,
+      "acc_at_600": 0.484375
+    },
+    "fomyuk_belyaev": {
+      "source": "fomyuk_belyaev",
+      "final_accuracy": 1.0,
+      "final_loss": 0.006220883224159479,
+      "params": 168946,
+      "time": 959.6747255325317,
+      "acc_at_200": 0.52734375,
+      "acc_at_600": 1.0
+    }
+  },
+  "sbox_xor": {
+    "vanilla": {
+      "source": "vanilla",
+      "final_accuracy": 1.0,
+      "final_loss": 0.052003487944602966,
+      "params": 109018,
+      "time": 470.67935013771057,
+      "acc_at_200": 0.0576171875,
+      "acc_at_600": 0.130859375
+    },
+    "fomyuk": {
+      "source": "fomyuk",
+      "final_accuracy": 1.0,
+      "final_loss": 0.028140578418970108,
+      "params": 109806,
+      "time": 652.8020172119141,
+      "acc_at_200": 0.05859375,
+      "acc_at_600": 0.130859375
+    },
+    "belyaev": {
+      "source": "belyaev",
+      "final_accuracy": 1.0,
+      "final_loss": 0.08725740760564804,
+      "params": 168158,
+      "time": 797.713297367096,
+      "acc_at_200": 0.0654296875,
+      "acc_at_600": 0.1767578125
+    },
+    "fomyuk_belyaev": {
+      "source": "fomyuk_belyaev",
+      "final_accuracy": 1.0,
+      "final_loss": 0.02125919982790947,
+      "params": 168946,
+      "time": 978.7174859046936,
+      "acc_at_200": 0.0615234375,
+      "acc_at_600": 0.2451171875
+    }
+  }
+}

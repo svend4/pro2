@@ -28,6 +28,34 @@ from models.geometry import (
     apply_rotary_emb,
     SwiGLU,
     TrigramMoE,
+    # v51 modules
+    FourStateQuantizer,
+    GraduatedBianGuaTransform,
+    PalaceAttention,
+    AntipodalQuantizer,
+    TriangularAttentionBias,
+    DualEmbedding,
+    QuadrantAttention,
+    D4EquivariantLayer,
+    DualModeHead,
+    RecursiveCubeAttention,
+    StructuralDefectLayer,
+    MobiusAttentionPattern,
+    PrivilegedAxisAttention,
+    MagicSquareInitializer,
+    WeavingLoomArchitecture,
+    FourLevelPositionalEncoding,
+    BidirectionalTriangularAttention,
+    TriangularCurriculumScheduler,
+    CubeDiagonalAttention,
+    HeisenbergAttention,
+    FlowerOfLifeGAT,
+    hermann_packing,
+    collision_test,
+    e8_collision_proof,
+    antipodal_pairs,
+    find_fixed_points,
+    loshu_kernel,
 )
 
 
@@ -527,3 +555,336 @@ class TestE8Lattice:
         assert 'Octograms {-1,+1}⁸' in results
         # E8 имеет меньший минимальный зазор чем октограммы
         assert results['E8 (240 roots)']['min_dist'] < results['Octograms {-1,+1}⁸']['min_dist']
+
+
+# ==================== v51 TESTS ====================
+
+
+class TestFourStateQuantizer:
+    """Тесты FourStateQuantizer (4096 кодбук)."""
+
+    def test_shape(self):
+        fq = FourStateQuantizer(temp=0.3)
+        x = torch.randn(2, 8, 6)
+        out = fq(x)
+        assert out.shape == (2, 8, 6)
+
+    def test_gradient_flow(self):
+        fq = FourStateQuantizer(temp=0.3)
+        x = torch.randn(2, 8, 6, requires_grad=True)
+        out = fq(x)
+        out.sum().backward()
+        assert x.grad is not None
+
+
+class TestGraduatedBianGua:
+    """Тесты GraduatedBianGuaTransform."""
+
+    def test_shape(self):
+        gb = GraduatedBianGuaTransform(d_model=64)
+        x = torch.randn(2, 8, 64)
+        out = gb(x)
+        assert out.shape == (2, 8, 64)
+
+    def test_residual_connection(self):
+        gb = GraduatedBianGuaTransform(d_model=64)
+        x = torch.randn(2, 8, 64)
+        out = gb(x)
+        # Выход не должен быть идентичен входу
+        assert not torch.allclose(out, x)
+
+
+class TestPalaceAttention:
+    """Тесты PalaceAttention (block-sparse)."""
+
+    def test_shape(self):
+        pa = PalaceAttention(d_model=64, n_heads=4)
+        x = torch.randn(2, 64, 64)
+        out = pa(x)
+        assert out.shape == (2, 64, 64)
+
+
+class TestAntipodalQuantizer:
+    """Тесты AntipodalQuantizer."""
+
+    def test_shape(self):
+        aq = AntipodalQuantizer(temp=0.3)
+        x = torch.randn(2, 8, 6)
+        out = aq(x)
+        assert out.shape == (2, 8, 6)
+
+
+class TestTriangularAttentionBias:
+    """Тесты TriangularAttentionBias."""
+
+    def test_shape(self):
+        tab = TriangularAttentionBias(max_seq_len=64)
+        bias = tab(16)
+        assert bias.shape == (16, 16)
+
+    def test_symmetry(self):
+        tab = TriangularAttentionBias(max_seq_len=64)
+        bias = tab(16)
+        assert torch.allclose(bias, bias.T)
+
+
+class TestDualEmbedding:
+    """Тесты DualEmbedding (6D+3D)."""
+
+    def test_shape(self):
+        de = DualEmbedding(d_model=64)
+        x = torch.randn(2, 8, 64)
+        out = de(x)
+        assert out.shape == (2, 8, 64)
+
+
+class TestQuadrantAttention:
+    """Тесты QuadrantAttention (4 квадранта)."""
+
+    def test_shape(self):
+        qa = QuadrantAttention(d_model=64, n_heads=4)
+        x = torch.randn(2, 8, 64)
+        out = qa(x)
+        assert out.shape == (2, 8, 64)
+
+    def test_gradient_flow(self):
+        qa = QuadrantAttention(d_model=64, n_heads=4)
+        x = torch.randn(2, 8, 64, requires_grad=True)
+        out = qa(x)
+        out.sum().backward()
+        assert x.grad is not None
+
+
+class TestD4EquivariantLayer:
+    """Тесты D₄-эквивариантности."""
+
+    def test_shape(self):
+        d4 = D4EquivariantLayer(d_model=64)
+        x = torch.randn(2, 8, 64)
+        out = d4(x)
+        assert out.shape == (2, 8, 64)
+
+    def test_8_operations(self):
+        d4 = D4EquivariantLayer(d_model=64)
+        assert d4.d4_ops.shape == (8, 3, 3)
+        # Первая операция = единичная
+        assert torch.allclose(d4.d4_ops[0], torch.eye(3))
+        # Четвёртая = -I (антипод)
+        assert torch.allclose(d4.d4_ops[3], -torch.eye(3))
+
+
+class TestDualModeHead:
+    """Тесты DualModeHead (мезон/барион)."""
+
+    def test_shape(self):
+        dmh = DualModeHead(head_dim=16)
+        q = torch.randn(2, 8, 16)
+        k = torch.randn(2, 8, 16)
+        v = torch.randn(2, 8, 16)
+        out = dmh(q, k, v)
+        assert out.shape == (2, 8, 16)
+
+
+class TestRecursiveCubeAttention:
+    """Тесты RecursiveCubeAttention."""
+
+    def test_shape_exact(self):
+        rca = RecursiveCubeAttention(d_model=64, n_heads=8)
+        x = torch.randn(2, 16, 64)
+        out = rca(x)
+        assert out.shape == (2, 16, 64)
+
+    def test_shape_non_multiple_of_8(self):
+        rca = RecursiveCubeAttention(d_model=64, n_heads=8)
+        x = torch.randn(2, 13, 64)
+        out = rca(x)
+        assert out.shape == (2, 13, 64)
+
+
+class TestStructuralDefect:
+    """Тесты StructuralDefectLayer (16→12)."""
+
+    def test_shape(self):
+        sd = StructuralDefectLayer(d_model=64, input_size=16, output_size=12)
+        x = torch.randn(2, 16, 64)
+        out = sd(x)
+        assert out.shape == (2, 12, 64)
+
+    def test_custom_sizes(self):
+        sd = StructuralDefectLayer(d_model=64, input_size=8, output_size=6)
+        x = torch.randn(2, 10, 64)
+        out = sd(x)
+        assert out.shape == (2, 6, 64)
+
+
+class TestMobiusAttention:
+    """Тесты MobiusAttentionPattern."""
+
+    def test_shape(self):
+        mob = MobiusAttentionPattern(max_seq_len=64)
+        bias = mob(16)
+        assert bias.shape == (16, 16)
+
+    def test_antisymmetry(self):
+        """Мёбиус: верхняя половина видит нижнюю в обратном порядке."""
+        mob = MobiusAttentionPattern(max_seq_len=32)
+        bias = mob(32)
+        # bias[0, 16] (верх→низ) ≠ bias[0, 31] (верх→низ-зеркало)
+        # Они должны различаться
+        assert bias.shape == (32, 32)
+
+
+class TestPrivilegedAxis:
+    """Тесты PrivilegedAxisAttention."""
+
+    def test_bias_shape(self):
+        paa = PrivilegedAxisAttention(d_model=64)
+        x = torch.randn(2, 8, 64)
+        bias = paa.get_bias(x)
+        assert bias.shape == (2, 8, 8)
+
+
+class TestMagicSquare:
+    """Тесты MagicSquareInitializer."""
+
+    def test_loshu_magic_constant(self):
+        ms = MagicSquareInitializer.loshu_3x3()
+        # Сумма по строкам = 15
+        assert torch.allclose(ms.sum(dim=1), torch.tensor([15.0, 15.0, 15.0]))
+        # Сумма по столбцам = 15
+        assert torch.allclose(ms.sum(dim=0), torch.tensor([15.0, 15.0, 15.0]))
+
+    def test_magic_4x4_constant(self):
+        ms = MagicSquareInitializer.magic_4x4()
+        assert torch.allclose(ms.sum(dim=1), torch.full((4,), 34.0))
+
+    def test_hermann_packing(self):
+        ms = MagicSquareInitializer.from_hermann_packing(2)
+        assert ms.shape == (4, 4)
+
+
+class TestWeavingLoom:
+    """Тесты WeavingLoomArchitecture."""
+
+    def test_level1(self):
+        wl = WeavingLoomArchitecture(d_model=64, max_level=1)
+        x = torch.randn(2, 8, 64)
+        out = wl(x)
+        assert out.shape == (2, 8, 64)
+
+    def test_level3(self):
+        wl = WeavingLoomArchitecture(d_model=64, max_level=3)
+        x = torch.randn(2, 16, 64)
+        out = wl(x)
+        assert out.shape == (2, 16, 64)
+
+
+class TestFourLevelPE:
+    """Тесты FourLevelPositionalEncoding."""
+
+    def test_shape(self):
+        pe = FourLevelPositionalEncoding(d_model=64, max_seq_len=64)
+        out = pe(16)
+        assert out.shape == (16, 64)
+
+
+class TestBiTriangularAttention:
+    """Тесты BidirectionalTriangularAttention."""
+
+    def test_mask_shape(self):
+        bta = BidirectionalTriangularAttention(d_model=64, max_seq_len=64)
+        mask = bta.get_mask(16)
+        assert mask.shape == (16, 16)
+
+    def test_mask_values(self):
+        bta = BidirectionalTriangularAttention(d_model=64, max_seq_len=64)
+        mask = bta.get_mask(16)
+        assert mask.min() >= 0.0
+        assert mask.max() <= 1.0
+
+
+class TestCurriculumScheduler:
+    """Тесты TriangularCurriculumScheduler."""
+
+    def test_monotonic(self):
+        tcs = TriangularCurriculumScheduler(max_level=11)
+        lens = [tcs.get_seq_len(e, 20) for e in range(21)]
+        for i in range(len(lens) - 1):
+            assert lens[i] <= lens[i + 1]
+
+    def test_triangular_numbers(self):
+        tcs = TriangularCurriculumScheduler(max_level=11)
+        # T(k) = k(k+1)/2
+        assert tcs.levels == [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66]
+
+
+class TestCubeDiagonal:
+    """Тесты CubeDiagonalAttention."""
+
+    def test_bias_shape(self):
+        cda = CubeDiagonalAttention(d_model=64)
+        x = torch.randn(2, 8, 64)
+        bias = cda.get_bias(x)
+        assert bias.shape == (2, 8, 8)
+
+
+class TestHeisenbergAttention:
+    """Тесты HeisenbergAttention."""
+
+    def test_shape(self):
+        ha = HeisenbergAttention(d_model=64)
+        x = torch.randn(2, 8, 64)
+        out = ha(x)
+        assert out.shape == (2, 8, 64)
+
+
+class TestFlowerOfLife:
+    """Тесты FlowerOfLifeGAT."""
+
+    def test_shape(self):
+        fol = FlowerOfLifeGAT(d_model=64)
+        x = torch.randn(2, 14, 64)
+        out = fol(x)
+        assert out.shape == (2, 14, 64)
+
+    def test_adjacency(self):
+        fol = FlowerOfLifeGAT(d_model=64)
+        # Центральный узел связан со всеми 6
+        assert fol.adjacency[0].sum() == 6
+        # Периферийные связаны с центральным + 2 соседями = 3
+        for i in range(1, 7):
+            assert fol.adjacency[i].sum() == 3
+
+
+class TestHermannPacking:
+    """Тесты упаковки Германа."""
+
+    def test_no_collisions_power_of_2(self):
+        for k in [3, 4, 5, 6]:
+            P = 2 ** k
+            result = collision_test(P)
+            assert result['n_collisions'] == 0, f"P={P} should have 0 collisions, got {result['n_collisions']}"
+
+    def test_collisions_non_power_of_2(self):
+        assert collision_test(60)['n_collisions'] > 0
+        assert collision_test(100)['n_collisions'] > 0
+
+    def test_e8_collisions(self):
+        result = e8_collision_proof()
+        assert result['n_collisions'] == 144
+
+    def test_antipodal_pairs(self):
+        pairs = antipodal_pairs()
+        assert len(pairs) == 32
+        for idx_a, idx_b in pairs:
+            assert idx_a + idx_b == 63  # антиподы: i + (63-i) = 63
+
+    def test_fixed_points(self):
+        fps = find_fixed_points(64)
+        assert len(fps) > 0
+
+    def test_loshu_kernel(self):
+        kernel = loshu_kernel()
+        assert kernel.shape == (3, 3)
+        # Нормализованное ядро: сумма по строкам = 1
+        assert torch.allclose(kernel.sum(dim=1), torch.ones(3), atol=1e-4)
