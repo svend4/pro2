@@ -350,6 +350,47 @@ class YiJingConfig:
     use_structural_defect: bool = False  # Structural Defect bottleneck 16→12 (Беляев)
     curriculum_strategy: str = 'linear' # 'linear', 'geometric_first', 'triangular' (Андреев 3.4)
 
+    # v54: Anti-interference source routing
+    use_source_mixer: bool = False      # learnable per-source gates (lightweight)
+    use_source_router: bool = False     # MoE-style top-k source routing
+    source_router_top_k: int = 2        # how many sources to select per token
+    source_routing_weight: float = 0.01 # aux loss weight for load balancing
+
+    # v54: Kasatkin 3D embedding
+    use_cubic_bias: bool = False        # 3D distance-based attention bias (Касаткин)
+    use_cubic_pe: bool = False          # 3D positional encoding (x,y,z in 4×4×4 cube)
+
+    # v55: Convergence Bridge — гибридная иерархия глифов ↔ токенов
+    use_convergence_bridge: bool = False  # конвергентный мост глиф↔токен
+    convergence_n_clusters: int = 64      # число кластеров (64 = гексаграммы)
+    convergence_window_size: int = 4      # окно для GlyphComposer
+    convergence_stride: int = 2           # шаг окна
+    convergence_compose_layers: int = 1   # слои self-attention в GlyphComposer
+    convergence_n_heads: int = 4          # головы cross-attention в ConvergenceLayer
+
+    # v56: Ternary Quantizer — трёхзначная логика {-1,0,+1} (Лукасевич/Аймара/变爻)
+    use_ternary_quantizer: bool = False   # использовать тернарный квантизатор
+    ternary_mode: str = 'factored'        # 'full' (729), 'factored' (2×27), 'sparse'
+    ternary_uncertainty: float = 0.3      # бюджет неопределённости [0,1]
+    ternary_max_zeros: int = 2            # макс. число 变爻 (для sparse режима)
+
+    # v56: Matrix Grammar — 2D матричная грамматика сигилов (Atamiri/Аймара)
+    use_matrix_grammar: bool = False      # матричная грамматика
+    matrix_grammar_rows: int = 8          # строки (синтаксические роли)
+    matrix_grammar_cols: int = 8          # столбцы (семантические слоты)
+    matrix_grammar_heads: int = 4         # головы axial attention
+
+    # v57: Абриале — событийно-управляемые изотропные N-местные связи (Пацкин)
+    use_abriale: bool = False            # Абриале-слой (событийное управление)
+    abriale_d_event: int = 64            # размерность пространства событий
+    abriale_n_heads: int = 4             # число голов изотропного attention
+    abriale_arity: int = 2               # арность связей (2=бинарные, 3=тернарные)
+    abriale_n_rules: int = 64            # число правил в банке (64 = гексаграммы)
+    abriale_n_hits: int = 4              # макс. число хитов на событие
+    abriale_n_alternatives: int = 2      # число альтернатив (действий) на правило
+    abriale_n_event_types: int = 8       # число типов событий (8 = триграммы)
+    abriale_balance_weight: float = 0.01 # вес aux loss для балансировки правил
+
     # Обучение
     lr: float = 3e-4
     warmup_steps: int = 2000

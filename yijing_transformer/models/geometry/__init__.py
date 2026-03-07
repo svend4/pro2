@@ -43,6 +43,9 @@ from .core import (
     find_fixed_points,
     e8_collision_proof,
     generate_four_state_codebook,
+    kasatkin_embedding,
+    kasatkin_distance_matrix,
+    kasatkin_axis_projection,
 )
 
 # Quantizers
@@ -56,6 +59,7 @@ from .quantizers import (
     DeformableQuantizer,
     GumbelQuantizer,
     GroupedQuantizer,
+    TernaryQuantizer,
 )
 
 # Attention patterns & modules
@@ -67,6 +71,7 @@ from .attention import (
     WeavingLoomArchitecture,
     BidirectionalTriangularAttention,
     CubeDiagonalAttention,
+    CubicAttentionBias,
     HeisenbergAttention,
     FlowerOfLifeGAT,
     MobiusAttentionPattern,
@@ -86,6 +91,7 @@ from .positional import (
     apply_rotary_emb,
     ALiBi,
     FourLevelPositionalEncoding,
+    CubicPositionalEncoding,
 )
 
 # Equivariant & structural layers
@@ -104,6 +110,9 @@ from .routing import (
     GateLogger,
     GeometryCurriculumScheduler,
     DynamicCurriculumController,
+    GeometricSourceRouter,
+    GeometricSourceMixer,
+    SequentialSourceCurriculum,
 )
 
 # FFN modules
@@ -112,4 +121,19 @@ from .ffn import (
     TrigramMoE,
     GeometricFFN,
     MultiScaleHypercubeLayer,
+)
+
+# Convergence Bridge: гибридная иерархия глифов ↔ токенов
+from .convergence import (
+    GlyphComposer,
+    TokenAbstractor,
+    ConvergenceLayer,
+    ConvergenceBridge,
+    MatrixGrammar,
+)
+
+# Core: ternary hypercube
+from .core import (
+    generate_ternary_hypercube,
+    generate_ternary_trigrams,
 )

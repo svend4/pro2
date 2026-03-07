@@ -58,7 +58,20 @@ from .geometry import (
     FlowerOfLifeGAT,
     StructuralDefectLayer,
     HexagramAttentionPattern,
+    # v54: Anti-interference routing
+    GeometricSourceRouter,
+    GeometricSourceMixer,
+    # v54: Kasatkin 3D embedding
+    CubicAttentionBias,
+    CubicPositionalEncoding,
+    # v55: Convergence Bridge
+    ConvergenceBridge,
+    MatrixGrammar,
+    # v56: Ternary Quantizer
+    TernaryQuantizer,
 )
+# v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
+from yijing_transformer.models.geometry.abriale import AbrialeLayer
 
 
 def build_quantizer(cfg):
@@ -99,6 +112,15 @@ def build_quantizer(cfg):
             temp=cfg.temp,
             hard=cfg.use_gumbel,
             commitment_weight=cfg.commitment_weight,
+        )
+    elif cfg.quantizer_type == 'ternary':
+        return TernaryQuantizer(
+            total_dim=cfg.quant_total_dim,
+            mode=getattr(cfg, 'ternary_mode', 'factored'),
+            temp=cfg.temp,
+            adaptive_temp=cfg.adaptive_temp,
+            uncertainty_budget=getattr(cfg, 'ternary_uncertainty', 0.3),
+            max_zeros=getattr(cfg, 'ternary_max_zeros', 2),
         )
     else:
         raise ValueError(f"Unknown quantizer_type: {cfg.quantizer_type}")
@@ -339,6 +361,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_cube_diagonal:
             self.cube_diag = CubeDiagonalAttention(cfg.d_model)
 
+        # v54: Kasatkin cubic attention bias (3D distance-based)
+        self.use_cubic_bias = getattr(cfg, 'use_cubic_bias', False)
+        if self.use_cubic_bias:
+            self.cubic_bias = CubicAttentionBias(max_seq_len=cfg.block_size)
+
         # v53: Heisenberg attention (Беляев 6.1) — additive enrichment
         self.use_heisenberg = getattr(cfg, 'use_heisenberg_attention', False)
         if self.use_heisenberg and not (self.use_quadrant_attention or self.use_recursive_cube or self.use_weaving_loom):
@@ -358,6 +385,33 @@ class YiJingTransformerLayer(nn.Module):
         self.use_structural_defect = getattr(cfg, 'use_structural_defect', False)
         if self.use_structural_defect:
             self.structural_defect = StructuralDefectLayer(cfg.d_model)
+
+        # v54: Geometric Source Mixer — replaces fixed coefficients with learnable gates
+        self.use_source_mixer = getattr(cfg, 'use_source_mixer', False)
+        self.use_source_router = getattr(cfg, 'use_source_router', False)
+        if self.use_source_mixer or self.use_source_router:
+            # Count how many enrichment sources are active
+            self._enrichment_sources = []
+            if self.use_heisenberg:
+                self._enrichment_sources.append('heisenberg')
+            if self.use_palace_attention:
+                self._enrichment_sources.append('palace')
+            if self.use_privileged_axis:
+                self._enrichment_sources.append('privileged_axis')
+            if self.use_flower_gat:
+                self._enrichment_sources.append('flower_gat')
+            n_sources = len(self._enrichment_sources)
+            if n_sources > 0:
+                if self.use_source_router:
+                    self.source_router = GeometricSourceRouter(
+                        cfg.d_model, n_sources,
+                        top_k=getattr(cfg, 'source_router_top_k', min(2, n_sources)),
+                    )
+                else:
+                    self.source_mixer = GeometricSourceMixer(cfg.d_model, n_sources)
+            else:
+                self.use_source_mixer = False
+                self.use_source_router = False
 
         # Квантизация к вершинам гиперкуба (bottleneck)
         # Multi-scale: layer_quant_dim overrides cfg.quant_total_dim
@@ -445,6 +499,9 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_hex_attn_pattern:
             hex_bias = self.hex_pattern(h, T)  # (B,1,T,T)
             extra_bias = hex_bias if extra_bias is None else extra_bias + hex_bias
+        if self.use_cubic_bias:
+            cub_bias = self.cubic_bias(T).unsqueeze(0).unsqueeze(0)  # (1,1,T,T)
+            extra_bias = cub_bias if extra_bias is None else extra_bias + cub_bias
 
         if self._attn_returns_cache:
             attn_out, new_kv = self.attn(h, kv_cache=kv_cache, extra_attn_bias=extra_bias)
@@ -455,19 +512,45 @@ class YiJingTransformerLayer(nn.Module):
                 bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
-        # v53: Heisenberg attention enrichment (additive)
-        if self.use_heisenberg:
-            attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
+        # v54: Geometric source mixing (replaces fixed 0.05/0.1 coefficients)
+        if self.use_source_mixer or self.use_source_router:
+            enrichments = []
+            if self.use_heisenberg:
+                enrichments.append(self.heisenberg_attn(h))
+            if self.use_palace_attention:
+                enrichments.append(self.palace_attn(h))
+            if self.use_privileged_axis:
+                axis_bias = self.privileged_axis.get_bias(h)
+                axis_w = F.softmax(axis_bias, dim=-1)
+                enrichments.append(torch.bmm(axis_w, h))
+            if self.use_flower_gat:
+                enrichments.append(self.flower_gat.enrich(h) if hasattr(self.flower_gat, 'enrich') else self.flower_gat(h) - h)
 
-        # v51: compose additional attention biases (additive post-processing)
-        if self.use_palace_attention:
-            palace_out = self.palace_attn(h)
-            attn_out = attn_out + 0.1 * palace_out
+            if enrichments:
+                if self.use_source_router:
+                    mixed = self.source_router(h, enrichments)
+                    attn_out = attn_out + mixed
+                    self._source_routing_aux = self.source_router._aux_loss
+                else:
+                    attn_out = self.source_mixer(attn_out, enrichments)
+                    self._source_routing_aux = 0.0
+            else:
+                self._source_routing_aux = 0.0
+        else:
+            self._source_routing_aux = 0.0
+            # v53: Heisenberg attention enrichment (additive)
+            if self.use_heisenberg:
+                attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
 
-        if self.use_privileged_axis:
-            axis_bias = self.privileged_axis.get_bias(h)  # (B, T, T)
-            axis_w = F.softmax(axis_bias, dim=-1)
-            attn_out = attn_out + 0.05 * torch.bmm(axis_w, h)
+            # v51: compose additional attention biases (additive post-processing)
+            if self.use_palace_attention:
+                palace_out = self.palace_attn(h)
+                attn_out = attn_out + 0.1 * palace_out
+
+            if self.use_privileged_axis:
+                axis_bias = self.privileged_axis.get_bias(h)  # (B, T, T)
+                axis_w = F.softmax(axis_bias, dim=-1)
+                attn_out = attn_out + 0.05 * torch.bmm(axis_w, h)
 
         x = x + attn_out
 
@@ -475,8 +558,8 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_dual_embedding:
             x = self.dual_emb(x)
 
-        # v53: Flower of Life GAT enrichment
-        if self.use_flower_gat:
+        # v53: Flower of Life GAT enrichment (only if not handled by source mixer)
+        if self.use_flower_gat and not (self.use_source_mixer or self.use_source_router):
             x = self.flower_gat(x)
 
         # 2. Квантизация к вершинам гиперкуба
@@ -521,10 +604,14 @@ class YiJingTransformerLayer(nn.Module):
             x = x + self.ffn(h_ffn)
             self._aux_loss = 0.0
 
-        # Aggregate v51 auxiliary losses
+        # Aggregate v51+ auxiliary losses
         if isinstance(self._antipodal_loss, torch.Tensor):
             antipodal_w = getattr(self.cfg, 'antipodal_weight', 0.01)
             self._aux_loss = self._aux_loss + antipodal_w * self._antipodal_loss
+        # v54: source routing balance loss
+        if isinstance(getattr(self, '_source_routing_aux', 0.0), torch.Tensor):
+            source_w = getattr(self.cfg, 'source_routing_weight', 0.01)
+            self._aux_loss = self._aux_loss + source_w * self._source_routing_aux
 
         return x, new_kv
 
@@ -614,6 +701,9 @@ class YiJingTransformer(nn.Module):
             # Commitment loss от Gumbel квантизатора
             if hasattr(layer.quantizer, 'get_commitment_loss'):
                 total = total + layer.quantizer.get_commitment_loss()
+            # v56: Ternary uncertainty loss
+            if hasattr(layer.quantizer, 'get_uncertainty_loss'):
+                total = total + layer.quantizer.get_uncertainty_loss()
             # MoD balance loss
             if hasattr(layer, '_mod_loss'):
                 total = total + layer._mod_loss
@@ -629,11 +719,18 @@ class YiJingGPT(nn.Module):
 
         # v51: 4-уровневое позиционное кодирование Андреева
         self.use_four_level_pe = getattr(cfg, 'use_four_level_pe', False)
+        # v54: Kasatkin 3D positional encoding
+        self.use_cubic_pe = getattr(cfg, 'use_cubic_pe', False)
         if self.use_four_level_pe:
             self.four_level_pe = FourLevelPositionalEncoding(
                 cfg.d_model, max_seq_len=cfg.block_size
             )
             self.pos_emb = None  # FourLevelPE заменяет стандартный PE
+        elif self.use_cubic_pe:
+            self.cubic_pe = CubicPositionalEncoding(
+                cfg.d_model, max_seq_len=cfg.block_size
+            )
+            self.pos_emb = None  # CubicPE заменяет стандартный PE
         elif not cfg.use_rope and not getattr(cfg, 'use_alibi', False):
             self.pos_emb = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
         else:
@@ -651,6 +748,47 @@ class YiJingGPT(nn.Module):
 
         # Label smoothing
         self.label_smoothing = getattr(cfg, 'label_smoothing', 0.0)
+
+        # v55: Convergence Bridge — гибридная иерархия глифов ↔ токенов
+        self.use_convergence_bridge = getattr(cfg, 'use_convergence_bridge', False)
+        if self.use_convergence_bridge:
+            self.convergence_bridge = ConvergenceBridge(
+                d_model=cfg.d_model,
+                n_clusters=getattr(cfg, 'convergence_n_clusters', 64),
+                window_size=getattr(cfg, 'convergence_window_size', 4),
+                stride=getattr(cfg, 'convergence_stride', 2),
+                n_compose_layers=getattr(cfg, 'convergence_compose_layers', 1),
+                n_heads=getattr(cfg, 'convergence_n_heads', 4),
+            )
+            # Проекция token ids → Q6 вершины (learned, не зависит от GlyphTokenizer)
+            # Каждый токен vocab → 6D вершина Q6
+            self.tok_to_q6 = nn.Linear(cfg.d_model, 6, bias=False)
+
+        # v56: Matrix Grammar — 2D матричная грамматика (Atamiri/Аймара)
+        self.use_matrix_grammar = getattr(cfg, 'use_matrix_grammar', False)
+        if self.use_matrix_grammar:
+            self.matrix_grammar = MatrixGrammar(
+                d_model=cfg.d_model,
+                n_rows=getattr(cfg, 'matrix_grammar_rows', 8),
+                n_cols=getattr(cfg, 'matrix_grammar_cols', 8),
+                n_heads=getattr(cfg, 'matrix_grammar_heads', 4),
+            )
+
+        # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
+        self.use_abriale = getattr(cfg, 'use_abriale', False)
+        if self.use_abriale:
+            self.abriale = AbrialeLayer(
+                d_model=cfg.d_model,
+                d_event=getattr(cfg, 'abriale_d_event', 64),
+                n_heads=getattr(cfg, 'abriale_n_heads', 4),
+                arity=getattr(cfg, 'abriale_arity', 2),
+                n_rules=getattr(cfg, 'abriale_n_rules', 64),
+                n_hits=getattr(cfg, 'abriale_n_hits', 4),
+                n_alternatives=getattr(cfg, 'abriale_n_alternatives', 2),
+                n_event_types=getattr(cfg, 'abriale_n_event_types', 8),
+                dropout=cfg.dropout,
+            )
+            self._abriale_balance_weight = getattr(cfg, 'abriale_balance_weight', 0.01)
 
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
@@ -675,6 +813,8 @@ class YiJingGPT(nn.Module):
         # Позиционное кодирование
         if self.use_four_level_pe:
             x = x + self.four_level_pe(t, device=idx.device)
+        elif self.use_cubic_pe:
+            x = x + self.cubic_pe(t, device=idx.device)
         elif self.pos_emb is not None:
             offset = 0
             if kv_cache is not None and kv_cache[0] is not None:
@@ -685,6 +825,22 @@ class YiJingGPT(nn.Module):
         if self.use_bidirectional_tri:
             bi_mask = self.bi_tri_attn.get_mask(t)  # (t, t) soft directional mask
             x = x * bi_mask.diag().unsqueeze(0).unsqueeze(-1)
+
+        # v55: Convergence Bridge — обогащение через гибридную иерархию
+        convergence_info = None
+        if self.use_convergence_bridge:
+            # Генерируем Q6 вершины из token embeddings (learned projection)
+            glyph_vertices = torch.tanh(self.tok_to_q6(x))  # (B, T, 6) → soft Q6
+            x, convergence_info = self.convergence_bridge(x, glyph_vertices)
+
+        # v56: Matrix Grammar — 2D axial attention обогащение
+        if self.use_matrix_grammar:
+            x = x + self.matrix_grammar(x)
+
+        # v57: Abriale — событийно-управляемые изотропные N-местные связи
+        abriale_info = None
+        if self.use_abriale:
+            x, abriale_info = self.abriale(x)
 
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)
@@ -700,6 +856,20 @@ class YiJingGPT(nn.Module):
             aux = self.core.get_aux_loss()
             if isinstance(aux, torch.Tensor):
                 loss = loss + aux
+
+            # v55: Convergence auxiliary loss
+            if convergence_info is not None:
+                conv_loss = self.convergence_bridge.get_convergence_loss(
+                    convergence_info['assignments']
+                )
+                loss = loss + conv_loss
+
+            # v57: Abriale auxiliary loss (балансировка правил)
+            if abriale_info is not None and 'hit_weights' in abriale_info:
+                abriale_loss = self.abriale.get_auxiliary_loss(
+                    abriale_info['hit_weights']
+                )
+                loss = loss + self._abriale_balance_weight * abriale_loss
 
         return logits, loss, new_kv_cache
 

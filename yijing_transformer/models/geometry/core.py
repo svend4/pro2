@@ -54,6 +54,29 @@ def generate_tetragrams() -> torch.Tensor:
     return generate_hypercube(4)
 
 
+def generate_ternary_hypercube(n: int) -> torch.Tensor:
+    """Генерирует все вершины тернарного гиперкуба {-1, 0, +1}^n.
+
+    Трёхзначная логика (Лукасевич / Аймара / 变爻):
+    - +1 = истина / ян / сплошная линия
+    - -1 = ложь / инь / прерванная линия
+    -  0 = неопределённость / 变爻 / линия в процессе изменения
+
+    Для n=6: 3⁶ = 729 вершин (vs 2⁶ = 64 бинарных гексаграмм).
+    729 = 64 чистых + 665 смешанных (содержащих хотя бы один 0).
+    """
+    signs = [-1.0, 0.0, 1.0]
+    vertices = torch.tensor(
+        list(itertools.product(signs, repeat=n)), dtype=torch.float32
+    )
+    return vertices  # (3^n, n)
+
+
+def generate_ternary_trigrams() -> torch.Tensor:
+    """27 тернарных триграмм = {-1, 0, +1}³."""
+    return generate_ternary_hypercube(3)
+
+
 def generate_e8_roots() -> torch.Tensor:
     """
     240 корней решётки E8 в R⁸.
@@ -422,6 +445,69 @@ def e8_collision_proof(P: int = 240) -> dict:
     result['factorization'] = factorization
     result['is_power_of_2'] = len(set(factorization)) == 1 and factorization[0] == 2
     return result
+
+
+def kasatkin_embedding() -> torch.Tensor:
+    """Касаткинское 3D-embedding: 64 гексаграммы → (x, y, z) ∈ Z³.
+
+    Отображение 6D {-1,+1}⁶ → 3D по Касаткину:
+    - Пара (b₁, b₂) → координата x
+    - Пара (b₃, b₄) → координата y
+    - Пара (b₅, b₆) → координата z
+
+    Каждая пара битов даёт целочисленную координату:
+      (-1,-1) → 0, (-1,+1) → 1, (+1,-1) → 2, (+1,+1) → 3
+
+    Результат: 64 точки в кубе 4×4×4.
+    """
+    hexagrams = generate_hexagrams()  # (64, 6)
+
+    def pair_to_coord(b1, b2):
+        """Отображение пары {-1,+1}² → {0,1,2,3}."""
+        return int((b1 + 1) + (b2 + 1) / 2)
+
+    coords = torch.zeros(64, 3, dtype=torch.float32)
+    for i in range(64):
+        h = hexagrams[i]
+        coords[i, 0] = pair_to_coord(h[0].item(), h[1].item())
+        coords[i, 1] = pair_to_coord(h[2].item(), h[3].item())
+        coords[i, 2] = pair_to_coord(h[4].item(), h[5].item())
+
+    return coords  # (64, 3)
+
+
+def kasatkin_distance_matrix() -> torch.Tensor:
+    """Матрица евклидовых расстояний в 3D пространстве Касаткина.
+
+    distance[i][j] = ||kasatkin(hex_i) - kasatkin(hex_j)||²
+    """
+    coords = kasatkin_embedding()  # (64, 3)
+    # Pairwise squared Euclidean distance
+    diff = coords.unsqueeze(0) - coords.unsqueeze(1)  # (64, 64, 3)
+    dist_sq = (diff ** 2).sum(dim=-1)  # (64, 64)
+    return dist_sq
+
+
+def kasatkin_axis_projection(axis: str = 'diagonal') -> torch.Tensor:
+    """Проекция гексаграмм на привилегированную ось Касаткина.
+
+    Диагональ куба (1,1,1) — ось «времени» / прогресса.
+    Возвращает скалярную проекцию каждой гексаграммы на эту ось.
+    """
+    coords = kasatkin_embedding()  # (64, 3)
+    if axis == 'diagonal':
+        direction = torch.ones(3) / math.sqrt(3.0)
+    elif axis == 'x':
+        direction = torch.tensor([1.0, 0.0, 0.0])
+    elif axis == 'y':
+        direction = torch.tensor([0.0, 1.0, 0.0])
+    elif axis == 'z':
+        direction = torch.tensor([0.0, 0.0, 1.0])
+    else:
+        raise ValueError(f"Unknown axis: {axis}")
+
+    projections = (coords * direction.unsqueeze(0)).sum(dim=-1)  # (64,)
+    return projections
 
 
 def generate_four_state_codebook() -> torch.Tensor:

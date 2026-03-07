@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from .core import (
     get_trigrams, get_hexagrams, generate_hypercube,
     generate_e8_roots, generate_four_state_codebook, antipodal_index,
+    generate_ternary_hypercube, generate_ternary_trigrams,
 )
 
 
@@ -406,3 +407,176 @@ class GroupedQuantizer(nn.Module):
         return (f"d_model={self.d_model}, groups={self.n_groups}, "
                 f"group_size={self.group_size}, bits={self.n_bits}, "
                 f"symmetric={self.symmetric}")
+
+
+class TernaryQuantizer(nn.Module):
+    """Тернарная квантизация к {-1, 0, +1}^n — объединение Лукасевича, Аймара и 变爻.
+
+    Трёхзначная логика:
+    - +1 = ян / истина / сплошная линия (━━━)
+    - -1 = инь / ложь / прерванная линия (━ ━)
+    -  0 = 变爻 / неопределённость / линия в изменении (━·━)
+
+    Три режима квантизации:
+    1. 'full': полный кодбук 3^n вершин (729 для n=6)
+    2. 'factored': факторизованная по триграммам 2 × 27 = O(54) вместо O(729)
+    3. 'sparse': только вершины с ≤ k нулей (ограничивает неопределённость)
+
+    Параметр uncertainty_budget [0,1] контролирует, сколько 0-значений допускается:
+    - 0.0 = чисто бинарные {-1,+1} (= стандартный YiJing)
+    - 1.0 = полный тернарный (все 729 вершин)
+    - 0.3 = не более ~2 变爻 из 6 линий
+
+    Связь с Atamiri/Аймара: третье значение 0 кодирует эпистемическую
+    неопределённость — «не знаю, ян или инь». Модель учится, какие
+    компоненты представления «ещё не определены» vs «определённо ян/инь».
+    """
+
+    def __init__(self, total_dim: int = 6, mode: str = 'factored',
+                 temp: float = 0.3, adaptive_temp: bool = False,
+                 uncertainty_budget: float = 0.3, max_zeros: int = 2):
+        super().__init__()
+        self.total_dim = total_dim
+        self.mode = mode
+        self.max_zeros = max_zeros
+
+        self.adaptive_temp = adaptive_temp
+        if adaptive_temp:
+            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+        else:
+            self.temp = temp
+
+        # Learnable uncertainty budget
+        self.log_uncertainty = nn.Parameter(
+            torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
+        )
+
+        if mode == 'full':
+            codebook = generate_ternary_hypercube(total_dim)  # (3^n, n)
+            self.register_buffer('codebook', codebook)
+            self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
+        elif mode == 'factored':
+            assert total_dim % 3 == 0, f"factored mode needs total_dim divisible by 3, got {total_dim}"
+            trigrams = generate_ternary_trigrams()  # (27, 3)
+            self.register_buffer('trigrams', trigrams)
+            self.register_buffer('trigrams_norm_sq', (trigrams ** 2).sum(dim=1))
+        elif mode == 'sparse':
+            codebook = self._generate_sparse_codebook(total_dim, max_zeros)
+            self.register_buffer('codebook', codebook)
+            self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
+        else:
+            raise ValueError(f"Unknown TernaryQuantizer mode: {mode}")
+
+        # Penalty weight for uncertainty usage
+        self._uncertainty_loss = torch.tensor(0.0)
+
+    @staticmethod
+    def _generate_sparse_codebook(n: int, max_zeros: int) -> torch.Tensor:
+        """Генерирует только вершины с ≤ max_zeros нулевых координат."""
+        import itertools
+        signs = [-1.0, 0.0, 1.0]
+        vertices = []
+        for v in itertools.product(signs, repeat=n):
+            if sum(1 for x in v if x == 0.0) <= max_zeros:
+                vertices.append(v)
+        return torch.tensor(vertices, dtype=torch.float32)
+
+    @property
+    def current_temp(self):
+        if self.adaptive_temp:
+            return self.log_temp.exp().clamp(min=0.01, max=5.0)
+        return self.temp
+
+    @property
+    def uncertainty_budget(self) -> torch.Tensor:
+        return torch.sigmoid(self.log_uncertainty)
+
+    @property
+    def codebook_size(self) -> int:
+        if self.mode == 'factored':
+            return 27  # per trigram group
+        return self.codebook.shape[0]
+
+    def _soft_quantize_full(self, x: torch.Tensor) -> torch.Tensor:
+        """Полная квантизация к 3^n вершинам."""
+        x_norm_sq = (x * x).sum(dim=-1, keepdim=True)
+        cross = x @ self.codebook.T
+        dists_sq = x_norm_sq - 2 * cross + self.codebook_norm_sq
+        weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
+        return weights @ self.codebook
+
+    def _soft_quantize_factored(self, x: torch.Tensor) -> torch.Tensor:
+        """Факторизованная квантизация: 2 × softmax(27) = O(54)."""
+        n_groups = self.total_dim // 3
+        parts = []
+        for g in range(n_groups):
+            z = x[..., g*3:(g+1)*3]
+            z_norm_sq = (z * z).sum(dim=-1, keepdim=True)
+            cross = z @ self.trigrams.T
+            dists_sq = z_norm_sq - 2 * cross + self.trigrams_norm_sq
+            weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
+            parts.append(weights @ self.trigrams)
+        return torch.cat(parts, dim=-1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Квантизация с контролем неопределённости.
+
+        Args:
+            x: (..., total_dim) — входные координаты
+
+        Returns:
+            quantized: (..., total_dim) — квантизованные к {-1, 0, +1}
+        """
+        if self.mode == 'factored':
+            quantized = self._soft_quantize_factored(x)
+        else:
+            quantized = self._soft_quantize_full(x)
+
+        # Uncertainty penalty: штраф за слишком много 0-компонент
+        # |quantized| близок к 0 → это "变爻" (неопределённость)
+        zero_fraction = (1.0 - quantized.abs()).clamp(min=0).mean()
+        target_fraction = self.uncertainty_budget
+        self._uncertainty_loss = ((zero_fraction - target_fraction) ** 2) * 0.1
+
+        if self.adaptive_temp:
+            return quantized
+        return x + (quantized - x).detach()
+
+    def hard_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        """Жёсткая квантизация: каждый компонент → ближайший из {-1, 0, +1}.
+
+        Правило:
+        - |x| < threshold → 0 (变爻)
+        - x ≥ threshold → +1 (ян)
+        - x ≤ -threshold → -1 (инь)
+
+        threshold адаптируется через uncertainty_budget.
+        """
+        threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1  # [0.1, 0.6]
+        result = torch.zeros_like(x)
+        result[x > threshold] = 1.0
+        result[x < -threshold] = -1.0
+        return result
+
+    def get_uncertainty_loss(self) -> torch.Tensor:
+        """Возвращает штраф за неопределённость для добавления к основному loss."""
+        return self._uncertainty_loss
+
+    def analyze_bian_yao(self, x: torch.Tensor) -> dict:
+        """Анализирует распределение 变爻 (изменяющихся линий).
+
+        Полезно для интерпретируемости: какие измерения «не определены»?
+
+        Returns:
+            dict с:
+            - n_bian_yao: среднее число 变爻 на вектор
+            - bian_yao_mask: (batch, seq_len, dim) маска 变爻
+            - uncertainty_per_dim: (dim,) — частота 变爻 по измерениям
+        """
+        q = self.hard_quantize(x)
+        bian_mask = (q == 0.0)
+        return {
+            'n_bian_yao': bian_mask.float().sum(dim=-1).mean().item(),
+            'bian_yao_mask': bian_mask,
+            'uncertainty_per_dim': bian_mask.float().mean(dim=tuple(range(bian_mask.dim() - 1))),
+        }
