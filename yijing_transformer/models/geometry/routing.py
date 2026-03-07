@@ -341,6 +341,184 @@ class SequentialSourceCurriculum:
                     mixer.gate_logits.data[i] = -10.0  # sigmoid(-10) ≈ 0
 
 
+class PairwiseBridge(nn.Module):
+    """Мост между двумя источниками: cross-attention медиатор.
+
+    Вместо линейного смешивания (w₁·src₁ + w₂·src₂) мост находит
+    «общий язык» через cross-attention:
+    - src₁ спрашивает у src₂: "что из тебя совместимо со мной?"
+    - src₂ спрашивает у src₁: "что из тебя совместимо со мной?"
+    - Gated merge → согласованное представление
+
+    Семантическая аналогия с RAG: мост «извлекает» из каждого источника
+    только совместимую информацию, подавляя конфликтующие сигналы.
+    """
+    def __init__(self, d_model: int, n_heads: int = 2, dropout: float = 0.1):
+        super().__init__()
+        # Cross-attention: src_a ← src_b
+        self.cross_ab = nn.MultiheadAttention(
+            d_model, n_heads, dropout=dropout, batch_first=True
+        )
+        # Cross-attention: src_b ← src_a
+        self.cross_ba = nn.MultiheadAttention(
+            d_model, n_heads, dropout=dropout, batch_first=True
+        )
+        self.norm_a = nn.LayerNorm(d_model)
+        self.norm_b = nn.LayerNorm(d_model)
+        # Gated merge
+        self.gate = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
+            nn.Sigmoid(),
+        )
+        self.out_norm = nn.LayerNorm(d_model)
+        # Learnable scale (starts small → non-coercion)
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, src_a: torch.Tensor, src_b: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            src_a: (B, T, C) — выход источника A
+            src_b: (B, T, C) — выход источника B
+        Returns:
+            mediated: (B, T, C) — согласованное представление
+        """
+        a = self.norm_a(src_a)
+        b = self.norm_b(src_b)
+        # A спрашивает B: "что ты можешь предложить мне?"
+        a_from_b, _ = self.cross_ab(query=a, key=b, value=b)
+        # B спрашивает A: "что ты можешь предложить мне?"
+        b_from_a, _ = self.cross_ba(query=b, key=a, value=a)
+        # Residuals
+        a_enriched = src_a + a_from_b
+        b_enriched = src_b + b_from_a
+        # Gated merge: выбираем пропорцию каждого
+        g = self.gate(torch.cat([a_enriched, b_enriched], dim=-1))
+        merged = g * a_enriched + (1 - g) * b_enriched
+        return self.out_norm(merged) * self.scale
+
+
+class BridgeOfModules(nn.Module):
+    """Мост Модулей: иерархическая медиация между геометрическими источниками.
+
+    Вместо прямого смешивания (линейная комбинация как в MoE),
+    источники соединяются попарно через PairwiseBridge, который
+    выполняет cross-attention медиацию. Это:
+
+    1. Устраняет деструктивную интерференцию — несовместимые сигналы
+       подавляются cross-attention (низкие веса для конфликтующих).
+    2. Строит иерархию согласования:
+       - Уровень 1: попарные мосты (Bridge₁₂, Bridge₃₄, Bridge₅₆)
+       - Уровень 2: мета-мосты между результатами уровня 1
+       - Уровень 3: финальный мост → единый выход
+    3. Семантический RAG: каждый мост «извлекает» из пары источников
+       только совместимую информацию, как RAG извлекает релевантные
+       документы, но здесь — в пространстве представлений.
+
+    Принцип «золотой середины»: мост не выбирает один из источников,
+    а находит согласованное представление, в котором оба вносят вклад
+    пропорционально их совместимости.
+
+    При нечётном числе источников: последний источник проецируется
+    напрямую на следующий уровень.
+
+    Args:
+        d_model: размерность модели
+        n_sources: число геометрических источников
+        n_heads: число голов cross-attention в каждом мосте
+        dropout: dropout в cross-attention
+    """
+    def __init__(self, d_model: int, n_sources: int, n_heads: int = 2,
+                 dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+
+        # Строим дерево мостов снизу вверх
+        self.bridge_tree = nn.ModuleList()
+        self.tree_structure = []  # [(level, pairs)] для forward
+
+        remaining = n_sources
+        level = 0
+        while remaining > 1:
+            n_pairs = remaining // 2
+            has_odd = (remaining % 2 == 1)
+            bridges = nn.ModuleList([
+                PairwiseBridge(d_model, n_heads, dropout)
+                for _ in range(n_pairs)
+            ])
+            self.bridge_tree.append(bridges)
+            self.tree_structure.append((n_pairs, has_odd))
+            remaining = n_pairs + (1 if has_odd else 0)
+            level += 1
+
+        # Глобальный gate: возможность полностью отключить мост
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        # Per-source input projections (alignment перед медиацией)
+        self.source_norms = nn.ModuleList([
+            nn.LayerNorm(d_model) for _ in range(n_sources)
+        ])
+
+        # Статистика
+        self._last_global_gate = 0.5
+
+    def forward(self, x: torch.Tensor,
+                source_outputs: list) -> torch.Tensor:
+        """
+        Args:
+            x: (B, T, C) — базовый выход (identity path)
+            source_outputs: list of N tensors (B, T, C)
+        Returns:
+            enriched: (B, T, C) — x + bridge_contribution
+        """
+        assert len(source_outputs) == self.n_sources
+
+        # Нормализуем каждый источник
+        current_level = [
+            self.source_norms[i](src)
+            for i, src in enumerate(source_outputs)
+        ]
+
+        # Иерархическая медиация
+        for bridges, (n_pairs, has_odd) in zip(
+            self.bridge_tree, self.tree_structure
+        ):
+            next_level = []
+            for p in range(n_pairs):
+                a = current_level[2 * p]
+                b = current_level[2 * p + 1]
+                mediated = bridges[p](a, b)
+                next_level.append(mediated)
+            # Нечётный элемент проходит напрямую
+            if has_odd:
+                next_level.append(current_level[-1])
+            current_level = next_level
+
+        # Финальный результат — единственный оставшийся элемент
+        bridge_output = current_level[0]
+
+        # Глобальный gate: residual connection
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * bridge_output
+
+    def get_bridge_stats(self) -> dict:
+        stats = {
+            'global_gate': self._last_global_gate,
+            'n_levels': len(self.bridge_tree),
+            'bridge_scales': [],
+        }
+        for level_idx, bridges in enumerate(self.bridge_tree):
+            for bridge_idx, bridge in enumerate(bridges):
+                stats['bridge_scales'].append({
+                    'level': level_idx,
+                    'pair': bridge_idx,
+                    'scale': bridge.scale.item(),
+                })
+        return stats
+
+
 class DynamicCurriculumController:
     """Dynamic curriculum: адаптирует стратегию на основе гейтов."""
     def __init__(self, base_strength: float = 0.1, adapt_rate: float = 0.01):
