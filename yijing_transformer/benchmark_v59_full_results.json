@@ -42,7 +42,7 @@
     "layer_stats": {},
     "category": "architecture"
   },
-  "_last_updated": "2026-03-07 17:00:21",
+  "_last_updated": "2026-03-07 18:09:51",
   "seven_bridge": {
     "name": "seven_bridge",
     "params": 1406268,
@@ -383,5 +383,530 @@
       ]
     },
     "category": "architecture"
+  },
+  "ablation_no_palace_attention": {
+    "name": "ablation_no_palace_attention",
+    "params": 1369264,
+    "final_val": 0.07005712750057379,
+    "final_ppl": 1.0725694527160825,
+    "best_val": 0.07005712750057379,
+    "best_ppl": 1.0725694527160825,
+    "time": 581.8928129673004,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.425689697265625,
+        "val": 4.953647025426229,
+        "ppl": 141.69077261643628
+      },
+      {
+        "step": 200,
+        "train": 1.069911241531372,
+        "val": 1.0548628211021422,
+        "ppl": 2.8715812065363098
+      },
+      {
+        "step": 400,
+        "train": 0.5925360321998596,
+        "val": 0.5363322099049886,
+        "ppl": 1.70972443756312
+      },
+      {
+        "step": 600,
+        "train": 0.0834403783082962,
+        "val": 0.07752164453268051,
+        "ppl": 1.0806056214091249
+      },
+      {
+        "step": 800,
+        "train": 0.07686939835548401,
+        "val": 0.07005712750057379,
+        "ppl": 1.0725694527160825
+      }
+    ],
+    "layer_stats": {
+      "global_gate": 0.5176906585693359,
+      "n_levels": 3,
+      "bridge_scales": [
+        {
+          "level": 0,
+          "pair": 0,
+          "scale": 0.11255446076393127
+        },
+        {
+          "level": 0,
+          "pair": 1,
+          "scale": 0.08748414367437363
+        },
+        {
+          "level": 0,
+          "pair": 2,
+          "scale": 0.13836249709129333
+        },
+        {
+          "level": 1,
+          "pair": 0,
+          "scale": 0.06124665588140488
+        },
+        {
+          "level": 2,
+          "pair": 0,
+          "scale": 0.16738048195838928
+        }
+      ]
+    },
+    "removed_source": "Palace (Skliarova)",
+    "removed_flag": "use_palace_attention",
+    "category": "ablation"
+  },
+  "ablation_no_heisenberg_attention": {
+    "name": "ablation_no_heisenberg_attention",
+    "params": 1172656,
+    "final_val": 0.7454241434733073,
+    "final_ppl": 2.1073350578660386,
+    "best_val": 0.7454241434733073,
+    "best_ppl": 2.1073350578660386,
+    "time": 1292.4356906414032,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.237487316131592,
+        "val": 4.859083716074625,
+        "ppl": 128.9060334512906
+      },
+      {
+        "step": 200,
+        "train": 1.053427815437317,
+        "val": 1.0591624895731608,
+        "ppl": 2.883954635470711
+      },
+      {
+        "step": 400,
+        "train": 0.9309332966804504,
+        "val": 0.9415173927942911,
+        "ppl": 2.563868864332343
+      },
+      {
+        "step": 600,
+        "train": 0.8508399128913879,
+        "val": 0.8144419034322102,
+        "ppl": 2.2579151859302184
+      },
+      {
+        "step": 800,
+        "train": 0.7673304080963135,
+        "val": 0.7454241434733073,
+        "ppl": 2.1073350578660386
+      }
+    ],
+    "layer_stats": {
+      "global_gate": 0.5002573132514954,
+      "n_levels": 3,
+      "bridge_scales": [
+        {
+          "level": 0,
+          "pair": 0,
+          "scale": 0.11505858600139618
+        },
+        {
+          "level": 0,
+          "pair": 1,
+          "scale": 0.08454861491918564
+        },
+        {
+          "level": 0,
+          "pair": 2,
+          "scale": 0.13641969859600067
+        },
+        {
+          "level": 1,
+          "pair": 0,
+          "scale": 0.06107063591480255
+        },
+        {
+          "level": 2,
+          "pair": 0,
+          "scale": 0.10104593634605408
+        }
+      ]
+    },
+    "removed_source": "Heisenberg (Belyaev)",
+    "removed_flag": "use_heisenberg_attention",
+    "category": "ablation"
+  },
+  "ablation_no_flower_gat": {
+    "name": "ablation_no_flower_gat",
+    "params": 1237172,
+    "final_val": 0.6652617851893107,
+    "final_ppl": 1.9449996267912983,
+    "best_val": 0.6652617851893107,
+    "best_ppl": 1.9449996267912983,
+    "time": 2503.187370300293,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.3778076171875,
+        "val": 4.943381102879842,
+        "ppl": 140.24362697120552
+      },
+      {
+        "step": 200,
+        "train": 1.0832499265670776,
+        "val": 1.0830447196960449,
+        "ppl": 2.9536589378142266
+      },
+      {
+        "step": 400,
+        "train": 0.8552002310752869,
+        "val": 0.8459739625453949,
+        "ppl": 2.3302462822901107
+      },
+      {
+        "step": 600,
+        "train": 0.7264584898948669,
+        "val": 0.7080546796321869,
+        "ppl": 2.030038340116392
+      },
+      {
+        "step": 800,
+        "train": 0.6700776219367981,
+        "val": 0.6652617851893107,
+        "ppl": 1.9449996267912983
+      }
+    ],
+    "layer_stats": {
+      "global_gate": 0.5119662880897522,
+      "n_levels": 3,
+      "bridge_scales": [
+        {
+          "level": 0,
+          "pair": 0,
+          "scale": 0.07443537563085556
+        },
+        {
+          "level": 0,
+          "pair": 1,
+          "scale": 0.12326540052890778
+        },
+        {
+          "level": 0,
+          "pair": 2,
+          "scale": 0.13040906190872192
+        },
+        {
+          "level": 1,
+          "pair": 0,
+          "scale": 0.06904145330190659
+        },
+        {
+          "level": 2,
+          "pair": 0,
+          "scale": 0.14646516740322113
+        }
+      ]
+    },
+    "removed_source": "FlowerGAT (Belyaev)",
+    "removed_flag": "use_flower_gat",
+    "category": "ablation"
+  },
+  "ablation_no_privileged_axis": {
+    "name": "ablation_no_privileged_axis",
+    "params": 1367728,
+    "final_val": 0.08179054607947668,
+    "final_ppl": 1.085228480662949,
+    "best_val": 0.08179054607947668,
+    "best_ppl": 1.085228480662949,
+    "time": 2650.4931495189667,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.446662425994873,
+        "val": 5.016317351659139,
+        "ppl": 150.85473466055706
+      },
+      {
+        "step": 200,
+        "train": 1.0439507961273193,
+        "val": 1.0220520774523416,
+        "ppl": 2.778891417398353
+      },
+      {
+        "step": 400,
+        "train": 0.6382715106010437,
+        "val": 0.5772407869497935,
+        "ppl": 1.781117162739476
+      },
+      {
+        "step": 600,
+        "train": 0.1844557225704193,
+        "val": 0.12445628146330516,
+        "ppl": 1.132532506713966
+      },
+      {
+        "step": 800,
+        "train": 0.14083196222782135,
+        "val": 0.08179054607947668,
+        "ppl": 1.085228480662949
+      }
+    ],
+    "layer_stats": {
+      "global_gate": 0.5068784952163696,
+      "n_levels": 3,
+      "bridge_scales": [
+        {
+          "level": 0,
+          "pair": 0,
+          "scale": 0.09514781087636948
+        },
+        {
+          "level": 0,
+          "pair": 1,
+          "scale": 0.10428021103143692
+        },
+        {
+          "level": 0,
+          "pair": 2,
+          "scale": 0.14366473257541656
+        },
+        {
+          "level": 1,
+          "pair": 0,
+          "scale": 0.05304427817463875
+        },
+        {
+          "level": 2,
+          "pair": 0,
+          "scale": 0.1277853548526764
+        }
+      ]
+    },
+    "removed_source": "PrivilegedAxis (Kasatkin)",
+    "removed_flag": "use_privileged_axis",
+    "category": "ablation"
+  },
+  "ablation_no_cube_diagonal": {
+    "name": "ablation_no_cube_diagonal",
+    "params": 1367716,
+    "final_val": 0.09385423809289932,
+    "final_ppl": 1.098399629423271,
+    "best_val": 0.09385423809289932,
+    "best_ppl": 1.098399629423271,
+    "time": 2625.0423181056976,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.368671894073486,
+        "val": 4.992267084121704,
+        "ppl": 147.2699186162102
+      },
+      {
+        "step": 200,
+        "train": 1.1007802486419678,
+        "val": 1.0705381711324056,
+        "ppl": 2.9169488953276494
+      },
+      {
+        "step": 400,
+        "train": 0.8270352482795715,
+        "val": 0.8040380676587423,
+        "ppl": 2.234545982611565
+      },
+      {
+        "step": 600,
+        "train": 0.1977904587984085,
+        "val": 0.13073792979121207,
+        "ppl": 1.1396690688610571
+      },
+      {
+        "step": 800,
+        "train": 0.12059900909662247,
+        "val": 0.09385423809289932,
+        "ppl": 1.098399629423271
+      }
+    ],
+    "layer_stats": {
+      "global_gate": 0.5059975981712341,
+      "n_levels": 3,
+      "bridge_scales": [
+        {
+          "level": 0,
+          "pair": 0,
+          "scale": 0.08016467094421387
+        },
+        {
+          "level": 0,
+          "pair": 1,
+          "scale": 0.11818186938762665
+        },
+        {
+          "level": 0,
+          "pair": 2,
+          "scale": 0.13993558287620544
+        },
+        {
+          "level": 1,
+          "pair": 0,
+          "scale": 0.057931605726480484
+        },
+        {
+          "level": 2,
+          "pair": 0,
+          "scale": 0.12385217100381851
+        }
+      ]
+    },
+    "removed_source": "CubeDiagonal (Kasatkin)",
+    "removed_flag": "use_cube_diagonal",
+    "category": "ablation"
+  },
+  "ablation_no_d4_equivariant": {
+    "name": "ablation_no_d4_equivariant",
+    "params": 1366160,
+    "final_val": 0.07539341871937116,
+    "final_ppl": 1.0783082941143756,
+    "best_val": 0.07539341871937116,
+    "best_ppl": 1.0783082941143756,
+    "time": 2641.602039337158,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.26990270614624,
+        "val": 4.92782400449117,
+        "ppl": 138.0787265155803
+      },
+      {
+        "step": 200,
+        "train": 1.09182870388031,
+        "val": 1.067518663406372,
+        "ppl": 2.9081544297620305
+      },
+      {
+        "step": 400,
+        "train": 0.7522612810134888,
+        "val": 0.7275049209594726,
+        "ppl": 2.0699095712974063
+      },
+      {
+        "step": 600,
+        "train": 0.10947265475988388,
+        "val": 0.09035741413633029,
+        "ppl": 1.0945654269577156
+      },
+      {
+        "step": 800,
+        "train": 0.09071193635463715,
+        "val": 0.07539341871937116,
+        "ppl": 1.0783082941143756
+      }
+    ],
+    "layer_stats": {
+      "global_gate": 0.5003349781036377,
+      "n_levels": 3,
+      "bridge_scales": [
+        {
+          "level": 0,
+          "pair": 0,
+          "scale": 0.10606984049081802
+        },
+        {
+          "level": 0,
+          "pair": 1,
+          "scale": 0.0943436324596405
+        },
+        {
+          "level": 0,
+          "pair": 2,
+          "scale": 0.11427154392004013
+        },
+        {
+          "level": 1,
+          "pair": 0,
+          "scale": 0.08561497181653976
+        },
+        {
+          "level": 2,
+          "pair": 0,
+          "scale": 0.10106093436479568
+        }
+      ]
+    },
+    "removed_source": "D4Equivariant (Fomyuk)",
+    "removed_flag": "use_d4_equivariant",
+    "category": "ablation"
+  },
+  "ablation_no_dual_embedding": {
+    "name": "ablation_no_dual_embedding",
+    "params": 1359904,
+    "final_val": 0.08169456919034322,
+    "final_ppl": 1.0851243288075416,
+    "best_val": 0.08169456919034322,
+    "best_ppl": 1.0851243288075416,
+    "time": 2640.9380493164062,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.3497467041015625,
+        "val": 4.905925528208415,
+        "ppl": 135.08787980972974
+      },
+      {
+        "step": 200,
+        "train": 1.080283761024475,
+        "val": 1.0590712984402975,
+        "ppl": 2.883691656371239
+      },
+      {
+        "step": 400,
+        "train": 0.7720739245414734,
+        "val": 0.7597054143746694,
+        "ppl": 2.1376464078307076
+      },
+      {
+        "step": 600,
+        "train": 0.130851611495018,
+        "val": 0.10663214027881622,
+        "ppl": 1.112524926087107
+      },
+      {
+        "step": 800,
+        "train": 0.1064254492521286,
+        "val": 0.08169456919034322,
+        "ppl": 1.0851243288075416
+      }
+    ],
+    "layer_stats": {
+      "global_gate": 0.4966872036457062,
+      "n_levels": 3,
+      "bridge_scales": [
+        {
+          "level": 0,
+          "pair": 0,
+          "scale": 0.09777248650789261
+        },
+        {
+          "level": 0,
+          "pair": 1,
+          "scale": 0.10232049226760864
+        },
+        {
+          "level": 0,
+          "pair": 2,
+          "scale": 0.0993596613407135
+        },
+        {
+          "level": 1,
+          "pair": 0,
+          "scale": 0.10075448453426361
+        },
+        {
+          "level": 2,
+          "pair": 0,
+          "scale": 0.0855240672826767
+        }
+      ]
+    },
+    "removed_source": "DualEmbedding (Kasatkin)",
+    "removed_flag": "use_dual_embedding",
+    "category": "ablation"
   }
 }
