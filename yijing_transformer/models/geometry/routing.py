@@ -570,6 +570,375 @@ class BridgeOfModules(nn.Module):
         return stats
 
 
+class AbrialeBridgeMediator(nn.Module):
+    """Абриале-мост: событийно-управляемая медиация между уровнями bridge.
+
+    Комбинирует BridgeOfModules (иерархическая cross-attention медиация)
+    с AbrialeLayer (событийно-управляемые N-местные связи):
+
+    1. Иерархический bridge строит дерево согласования источников
+    2. AbrialeLayer на каждом уровне генерирует «события» из медиированных
+       представлений и активизирует правила для дополнительной модуляции
+    3. N-местные связи позволяют учитывать тройки/четвёрки источников,
+       а не только пары
+
+    Это v59 гибрид — объединяет лучшее из v57 (Abriale) и v58 (Bridge).
+
+    Args:
+        d_model: размерность модели
+        n_sources: число геометрических источников
+        n_heads: число голов cross-attention
+        dropout: dropout
+        bridge_mode: 'full' или 'lightweight'
+        d_event: размерность пространства событий Абриале
+        n_rules: число правил в банке
+        arity: арность N-местных связей (2 или 3)
+    """
+    def __init__(self, d_model: int, n_sources: int, n_heads: int = 2,
+                 dropout: float = 0.1, bridge_mode: str = 'lightweight',
+                 d_event: int = 64, n_rules: int = 64, arity: int = 2):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+
+        # --- Bridge tree (как в BridgeOfModules) ---
+        self.bridge_mode = bridge_mode
+
+        def make_bridge():
+            if bridge_mode == 'lightweight':
+                return LightweightBridge(d_model)
+            return PairwiseBridge(d_model, n_heads, dropout)
+
+        self.bridge_tree = nn.ModuleList()
+        self.tree_structure = []
+
+        remaining = n_sources
+        level = 0
+        while remaining > 1:
+            n_pairs = remaining // 2
+            has_odd = (remaining % 2 == 1)
+            bridges = nn.ModuleList([make_bridge() for _ in range(n_pairs)])
+            self.bridge_tree.append(bridges)
+            self.tree_structure.append((n_pairs, has_odd))
+            remaining = n_pairs + (1 if has_odd else 0)
+            level += 1
+
+        # --- Abriale компонент на финальном уровне ---
+        # EventGenerator: медиированный сигнал → событие
+        from .abriale import EventGenerator, RuleBank, TransactionGate, IsotropicAttention
+        self.iso_attn = IsotropicAttention(d_model, n_heads=n_heads, arity=arity, dropout=dropout)
+        self.event_gen = EventGenerator(d_model, d_event=d_event)
+        self.rule_bank = RuleBank(d_event=d_event, d_model=d_model, n_rules=n_rules)
+        self.transaction = TransactionGate(d_model, d_event=d_event)
+        self.abriale_norm = nn.LayerNorm(d_model)
+        self.abriale_scale = nn.Parameter(torch.tensor(0.05))
+
+        # --- Global gate и norms ---
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        self.source_norms = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(n_sources)])
+        self._last_global_gate = 0.5
+        self._last_abriale_commit = 0.0
+
+    def forward(self, x: torch.Tensor, source_outputs: list) -> torch.Tensor:
+        assert len(source_outputs) == self.n_sources
+
+        # Нормализуем источники
+        current_level = [self.source_norms[i](src) for i, src in enumerate(source_outputs)]
+
+        # Иерархическая медиация (bridge tree)
+        for bridges, (n_pairs, has_odd) in zip(self.bridge_tree, self.tree_structure):
+            next_level = []
+            for p in range(n_pairs):
+                mediated = bridges[p](current_level[2*p], current_level[2*p+1])
+                next_level.append(mediated)
+            if has_odd:
+                next_level.append(current_level[-1])
+            current_level = next_level
+
+        bridge_output = current_level[0]
+
+        # Abriale модуляция: событийно-управляемая коррекция bridge output
+        h = self.abriale_norm(bridge_output)
+        iso_out, _ = self.iso_attn(h)
+        enriched = h + iso_out
+        events, event_types = self.event_gen(enriched)
+        actions, hit_weights = self.rule_bank(events, enriched)
+        committed = self.transaction(enriched, actions, event_types)
+        bridge_output = bridge_output + self.abriale_scale * committed
+
+        # Сохраняем для диагностики и aux loss
+        self._last_hit_weights = hit_weights
+        with torch.no_grad():
+            self._last_abriale_commit = (committed.abs().mean() / (actions.abs().mean() + 1e-10)).item()
+
+        # Global gate
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * bridge_output
+
+    def get_bridge_stats(self) -> dict:
+        stats = {
+            'global_gate': self._last_global_gate,
+            'abriale_commit_rate': self._last_abriale_commit,
+            'abriale_scale': self.abriale_scale.item(),
+            'n_levels': len(self.bridge_tree),
+            'bridge_scales': [],
+        }
+        for level_idx, bridges in enumerate(self.bridge_tree):
+            for bridge_idx, bridge in enumerate(bridges):
+                stats['bridge_scales'].append({
+                    'level': level_idx, 'pair': bridge_idx,
+                    'scale': bridge.scale.item(),
+                })
+        return stats
+
+    def get_abriale_aux_loss(self) -> torch.Tensor:
+        """Aux loss для балансировки правил Абриале."""
+        if hasattr(self, '_last_hit_weights'):
+            hw = self._last_hit_weights
+            avg_usage = hw.mean(dim=(0, 1))
+            target = 1.0 / hw.shape[-1]
+            return ((avg_usage - target) ** 2).sum() * hw.shape[-1]
+        return torch.tensor(0.0)
+
+
+class AdaptiveBridgeOfModules(nn.Module):
+    """Bridge of Modules с адаптивной глубиной.
+
+    Вместо фиксированного числа уровней bridge, глубина определяется
+    динамически на основе сложности входа:
+
+    1. Complexity estimator оценивает «сложность» набора источников
+       (дисперсия, попарное расхождение, энтропия)
+    2. На основе сложности выбирается число уровней mediation:
+       - Простой вход (источники согласованы) → 1 уровень (быстро)
+       - Сложный вход (источники конфликтуют) → полное дерево (тщательно)
+    3. Экономия вычислений на простых примерах
+
+    Args:
+        d_model: размерность модели
+        n_sources: число источников
+        n_heads: число голов cross-attention
+        dropout: dropout
+        bridge_mode: 'full' или 'lightweight'
+        max_levels: максимальное число уровней (None = полное дерево)
+    """
+    def __init__(self, d_model: int, n_sources: int, n_heads: int = 2,
+                 dropout: float = 0.1, bridge_mode: str = 'lightweight',
+                 max_levels: int = 0):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+        self.bridge_mode = bridge_mode
+
+        def make_bridge():
+            if bridge_mode == 'lightweight':
+                return LightweightBridge(d_model)
+            return PairwiseBridge(d_model, n_heads, dropout)
+
+        # Строим полное дерево
+        self.bridge_tree = nn.ModuleList()
+        self.tree_structure = []
+        remaining = n_sources
+        while remaining > 1:
+            n_pairs = remaining // 2
+            has_odd = (remaining % 2 == 1)
+            bridges = nn.ModuleList([make_bridge() for _ in range(n_pairs)])
+            self.bridge_tree.append(bridges)
+            self.tree_structure.append((n_pairs, has_odd))
+            remaining = n_pairs + (1 if has_odd else 0)
+
+        self.total_levels = len(self.bridge_tree)
+        self.max_levels = max_levels if max_levels > 0 else self.total_levels
+
+        # Complexity estimator: оценивает сколько уровней нужно
+        # Вход: попарные расхождения источников → скаляр [0, 1]
+        self.complexity_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 4),
+            nn.SiLU(),
+            nn.Linear(d_model // 4, 1),
+            nn.Sigmoid(),
+        )
+
+        # Per-level reduction: промежуточные average pools для ранней остановки
+        self.level_reducers = nn.ModuleList([
+            nn.Linear(d_model, d_model, bias=False)
+            for _ in range(self.total_levels)
+        ])
+
+        # Global gate
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        self.source_norms = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(n_sources)])
+
+        # Stats
+        self._last_global_gate = 0.5
+        self._last_complexity = 0.5
+        self._last_active_levels = self.total_levels
+
+    def _estimate_complexity(self, source_outputs: list) -> torch.Tensor:
+        """Оценка сложности: насколько источники расходятся.
+
+        Высокая дисперсия между источниками → высокая сложность → больше уровней.
+        """
+        # Средний вектор всех источников
+        stacked = torch.stack(source_outputs, dim=0)  # (N, B, T, C)
+        mean_src = stacked.mean(dim=0)  # (B, T, C)
+
+        # Дисперсия между источниками
+        variance = ((stacked - mean_src.unsqueeze(0)) ** 2).mean(dim=(0, 2))  # (B, C)
+        # → скаляр сложности [0, 1]
+        complexity = self.complexity_proj(variance)  # (B, 1)
+        return complexity.squeeze(-1)  # (B,)
+
+    def forward(self, x: torch.Tensor, source_outputs: list) -> torch.Tensor:
+        assert len(source_outputs) == self.n_sources
+
+        # Нормализуем
+        current_level = [self.source_norms[i](src) for i, src in enumerate(source_outputs)]
+
+        # Оценка сложности
+        complexity = self._estimate_complexity(current_level)  # (B,)
+        with torch.no_grad():
+            self._last_complexity = complexity.mean().item()
+
+        # Определяем число активных уровней
+        # complexity ∈ [0, 1] → n_levels ∈ [1, max_levels]
+        n_active = max(1, int(round(self._last_complexity * self.max_levels)))
+        n_active = min(n_active, self.total_levels)
+        with torch.no_grad():
+            self._last_active_levels = n_active
+
+        # Иерархическая медиация до n_active уровней
+        for lvl in range(n_active):
+            bridges = self.bridge_tree[lvl]
+            n_pairs, has_odd = self.tree_structure[lvl]
+            next_level = []
+            for p in range(n_pairs):
+                mediated = bridges[p](current_level[2*p], current_level[2*p+1])
+                next_level.append(mediated)
+            if has_odd:
+                next_level.append(current_level[-1])
+            current_level = next_level
+
+        # Если остановились рано, суммируем оставшиеся элементы
+        if len(current_level) > 1:
+            bridge_output = sum(current_level) / len(current_level)
+        else:
+            bridge_output = current_level[0]
+
+        # Global gate
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * bridge_output
+
+    def get_bridge_stats(self) -> dict:
+        stats = {
+            'global_gate': self._last_global_gate,
+            'complexity': self._last_complexity,
+            'active_levels': self._last_active_levels,
+            'total_levels': self.total_levels,
+            'bridge_scales': [],
+        }
+        for level_idx, bridges in enumerate(self.bridge_tree):
+            for bridge_idx, bridge in enumerate(bridges):
+                stats['bridge_scales'].append({
+                    'level': level_idx, 'pair': bridge_idx,
+                    'scale': bridge.scale.item(),
+                })
+        return stats
+
+
+class SourceSpecializer(nn.Module):
+    """Доменная специализация источников.
+
+    Каждый из N источников получает soft domain assignment:
+    - Оценщик домена определяет, к какому домену принадлежит текущий вход
+    - Каждый источник имеет learnable domain affinity (какие домены ему «близки»)
+    - Источники автоматически специализируются на разных доменах
+
+    Это позволяет разным источникам отвечать за разные типы данных:
+    например, HeisenbergAttention → числовые паттерны,
+    PalaceAttention → синтаксические структуры, и т.д.
+
+    Args:
+        d_model: размерность модели
+        n_sources: число источников
+        n_domains: число доменов
+    """
+    def __init__(self, d_model: int, n_sources: int, n_domains: int = 4):
+        super().__init__()
+        self.n_sources = n_sources
+        self.n_domains = n_domains
+
+        # Domain detector: определяет домен входа
+        self.domain_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 4),
+            nn.SiLU(),
+            nn.Linear(d_model // 4, n_domains),
+        )
+
+        # Per-source domain affinity: (n_sources, n_domains)
+        # Инициализируем как identity-like → каждый источник предпочитает свой домен
+        init = torch.zeros(n_sources, n_domains)
+        for i in range(min(n_sources, n_domains)):
+            init[i, i] = 1.0
+        self.domain_affinity = nn.Parameter(init)
+
+        # Per-source scale
+        self.source_scales = nn.Parameter(torch.full((n_sources,), 0.1))
+
+        # Stats
+        self._last_domain_probs = None
+        self._last_source_weights = None
+
+    def forward(self, x: torch.Tensor, source_outputs: list) -> torch.Tensor:
+        """
+        Args:
+            x: (B, T, C) — базовый выход
+            source_outputs: list of N tensors (B, T, C)
+        Returns:
+            enriched: x + специализированная комбинация источников
+        """
+        B, T, C = x.shape
+        n = len(source_outputs)
+
+        # Определяем домен: mean-pool → domain logits
+        x_mean = x.mean(dim=1)  # (B, C)
+        domain_logits = self.domain_proj(x_mean)  # (B, n_domains)
+        domain_probs = F.softmax(domain_logits, dim=-1)  # (B, n_domains)
+
+        # Source weights: domain_probs × domain_affinity^T → (B, n_sources)
+        affinity = F.softmax(self.domain_affinity, dim=-1)  # (n_sources, n_domains)
+        source_weights = torch.matmul(domain_probs, affinity.T)  # (B, n_sources)
+        source_weights = source_weights * self.source_scales.abs().unsqueeze(0)
+
+        with torch.no_grad():
+            self._last_domain_probs = domain_probs.mean(dim=0).tolist()
+            self._last_source_weights = source_weights.mean(dim=0).tolist()
+
+        # Взвешенная комбинация
+        result = x
+        for i, src in enumerate(source_outputs):
+            w = source_weights[:, i].unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
+            result = result + w * src
+
+        return result
+
+    def get_specialization_stats(self) -> dict:
+        stats = {}
+        if self._last_domain_probs is not None:
+            stats['domain_probs'] = self._last_domain_probs
+            stats['source_weights'] = self._last_source_weights
+            # Domain affinity matrix
+            affinity = F.softmax(self.domain_affinity, dim=-1)
+            stats['affinity'] = affinity.detach().tolist()
+        return stats
+
+
 class DynamicCurriculumController:
     """Dynamic curriculum: адаптирует стратегию на основе гейтов."""
     def __init__(self, base_strength: float = 0.1, adapt_rate: float = 0.01):

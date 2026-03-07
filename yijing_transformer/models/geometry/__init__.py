@@ -116,6 +116,9 @@ from .routing import (
     PairwiseBridge,
     LightweightBridge,
     BridgeOfModules,
+    AbrialeBridgeMediator,
+    AdaptiveBridgeOfModules,
+    SourceSpecializer,
 )
 
 # FFN modules
