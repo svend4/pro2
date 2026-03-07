@@ -400,6 +400,14 @@ class YiJingConfig:
     use_source_specialization: bool = False  # специализация источников по доменам
     n_domains: int = 4                       # число доменов для специализации
 
+    # v60: Archetypal Interlingua — hub-and-spoke посредник (Atamiri/Aymara siwi)
+    use_archetypal_interlingua: bool = False  # интерлингва вместо мостов
+    interlingua_n_archetypes: int = 64       # число архетипов (64 = гексаграммы)
+    interlingua_d_bottleneck: int = 0        # bottleneck в кодировщиках (0 = d//4)
+    interlingua_use_ternary: bool = True     # тернарная квантизация {-1,0,+1}
+    interlingua_uncertainty: float = 0.3     # бюджет неопределённости [0,1]
+    interlingua_n_heads: int = 4             # головы cross-attention в readout
+
     # v57: Абриале — событийно-управляемые изотропные N-местные связи (Пацкин)
     use_abriale: bool = False            # Абриале-слой (событийное управление)
     abriale_d_event: int = 64            # размерность пространства событий

@@ -939,6 +939,317 @@ class SourceSpecializer(nn.Module):
         return stats
 
 
+class ArchetypalInterlingua(nn.Module):
+    """Архетипальная Интерлингва: hub-and-spoke посредник для N модулей.
+
+    Вместо дерева попарных мостов (BridgeOfModules) — единое промежуточное
+    представление из 64 архетипов, через которое проходят все источники.
+
+    Архитектура (по аналогии с Atamiri Гусмана де Рохаса):
+    1. Фаза 1 — КОДИРОВАНИЕ: каждый модуль проецирует свой выход
+       в архетипальное пространство (64 × d_model) через bottleneck
+    2. Фаза 2 — АГРЕГАЦИЯ: вклады всех модулей агрегируются
+       в единое архетипальное представление с тернарной квантизацией
+       {-1, 0, +1} (кольцо Aymara siwi)
+    3. Фаза 3 — ДЕКОДИРОВАНИЕ: архетипальное представление
+       проецируется обратно в пространство токенов через readout
+
+    Преимущества:
+    - O(N) вместо O(N log N) — полный параллелизм кодировщиков
+    - Масштабируемость: добавление модуля = +1 кодировщик
+    - Интерпретируемость: 64 архетипа × 3 состояния = «язык» системы
+    - Тернарная логика: модуль может голосовать «за» (+1), «против» (-1),
+      или «воздержаться» (0 = 变爻 = ina аймара)
+
+    Теоретическое обоснование: archetypal-interlingua-theory.md,
+    Теоремы 16–19.
+
+    Args:
+        d_model: размерность модели
+        n_sources: число геометрических источников (модулей)
+        n_archetypes: число архетипов (64 = гексаграммы Q6)
+        d_bottleneck: размерность bottleneck в кодировщиках
+        use_ternary: использовать тернарную квантизацию {-1,0,+1}
+        uncertainty_budget: бюджет неопределённости [0, 1] для тернарного режима
+        n_heads: число голов readout cross-attention
+    """
+    def __init__(self, d_model: int, n_sources: int,
+                 n_archetypes: int = 64, d_bottleneck: int = 0,
+                 use_ternary: bool = True, uncertainty_budget: float = 0.3,
+                 n_heads: int = 4):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+        self.n_archetypes = n_archetypes
+        self.use_ternary = use_ternary
+        d_bn = d_bottleneck or max(d_model // 4, 16)
+
+        # --- Фаза 1: Кодировщики (по одному на источник) ---
+        # Каждый кодировщик проецирует (B, T, d_model) → (B, n_archetypes, d_model)
+        self.encoders = nn.ModuleList()
+        self.source_norms = nn.ModuleList()
+        for _ in range(n_sources):
+            self.source_norms.append(nn.LayerNorm(d_model))
+            self.encoders.append(nn.Sequential(
+                nn.Linear(d_model, d_bn, bias=False),
+                nn.SiLU(),
+                nn.Linear(d_bn, d_model, bias=False),
+            ))
+
+        # Архетипальные якоря (learnable queries для cross-attention)
+        self.archetype_queries = nn.Parameter(
+            torch.randn(n_archetypes, d_model) * 0.02
+        )
+
+        # Cross-attention: архетипы attend к каждому источнику
+        self.encode_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+        self.encode_norm = nn.LayerNorm(d_model)
+
+        # --- Фаза 2: Тернарная агрегация ---
+        if use_ternary:
+            # Тернарный scoring: каждый модуль → {-1, 0, +1} на каждый архетип
+            self.trit_proj = nn.Linear(d_model, 1, bias=True)
+            nn.init.zeros_(self.trit_proj.bias)
+            # Learnable uncertainty budget
+            self.log_uncertainty = nn.Parameter(
+                torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
+            )
+
+        # Агрегационная проекция: объединяет N вкладов
+        self.aggregate_proj = nn.Linear(d_model, d_model, bias=False)
+        self.aggregate_norm = nn.LayerNorm(d_model)
+
+        # --- Фаза 3: Декодирование (readout) ---
+        # Cross-attention: токены attend к архетипам
+        self.readout_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+        self.readout_norm = nn.LayerNorm(d_model)
+        self.readout_proj = nn.Linear(d_model, d_model, bias=False)
+
+        # Global gate: возможность отключить интерлингву
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        # Learnable scale
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+        # Статистика
+        self._last_global_gate = 0.5
+        self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
+        self._last_archetype_usage = None
+
+        # Q6 якоря для корреляционного анализа
+        self._init_q6_anchors()
+
+    def _init_q6_anchors(self):
+        """Инициализирует Q6 координаты 64 архетипов = 64 гексаграммы."""
+        anchors = []
+        for i in range(min(self.n_archetypes, 64)):
+            vertex = tuple(2 * ((i >> (5 - b)) & 1) - 1 for b in range(6))
+            anchors.append(vertex)
+        # Дополняем если n_archetypes > 64
+        while len(anchors) < self.n_archetypes:
+            anchors.append(tuple(0.0 for _ in range(6)))
+        self.register_buffer(
+            'q6_anchors',
+            torch.tensor(anchors, dtype=torch.float32)
+        )
+
+    @property
+    def uncertainty_budget(self) -> torch.Tensor:
+        if self.use_ternary:
+            return torch.sigmoid(self.log_uncertainty)
+        return torch.tensor(0.0)
+
+    def _encode_source(self, source_output: torch.Tensor,
+                       encoder: nn.Module, norm: nn.Module) -> torch.Tensor:
+        """Кодирует один источник в архетипальное пространство.
+
+        Args:
+            source_output: (B, T, d_model) — выход модуля-источника
+            encoder: bottleneck encoder для этого источника
+            norm: LayerNorm для этого источника
+
+        Returns:
+            contribution: (B, n_archetypes, d_model) — вклад в архетипы
+        """
+        B = source_output.shape[0]
+        h = norm(source_output)
+        h = encoder(h)  # (B, T, d_model) — bottleneck transformation
+
+        # Cross-attention: архетипальные queries attend к трансформированному источнику
+        queries = self.archetype_queries.unsqueeze(0).expand(B, -1, -1)  # (B, 64, d_model)
+        contribution, _ = self.encode_attn(
+            query=queries, key=h, value=h
+        )  # (B, n_archetypes, d_model)
+
+        return contribution
+
+    def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+        """Тернарная квантизация вклада: {-1, 0, +1} per archetype.
+
+        Args:
+            contribution: (B, n_archetypes, d_model)
+
+        Returns:
+            trit_scores: (B, n_archetypes) в {-1, 0, +1} (soft)
+        """
+        # Проецируем каждый архетип в скаляр
+        scores = self.trit_proj(contribution).squeeze(-1)  # (B, n_archetypes)
+
+        # Soft ternary: tanh даёт [-1, +1], threshold определяет зону "0"
+        raw = torch.tanh(scores)
+
+        # Uncertainty threshold из budget
+        threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1  # [0.1, 0.6]
+
+        # Hard ternary (with STE)
+        hard = torch.zeros_like(raw)
+        hard[raw > threshold] = 1.0
+        hard[raw < -threshold] = -1.0
+        # STE: gradient flows through raw
+        trit_scores = raw + (hard - raw).detach()
+
+        return trit_scores
+
+    def forward(self, x: torch.Tensor,
+                source_outputs: list) -> torch.Tensor:
+        """Forward pass Архетипальной Интерлингвы.
+
+        Args:
+            x: (B, T, C) — базовый выход (identity path)
+            source_outputs: list of N tensors (B, T, C)
+
+        Returns:
+            enriched: (B, T, C) — x + interlingua_contribution
+        """
+        assert len(source_outputs) == self.n_sources
+        B, T, C = x.shape
+
+        # === Фаза 1: Кодирование (параллельно для каждого модуля) ===
+        contributions = []
+        trit_scores_list = []
+        for i, src in enumerate(source_outputs):
+            contrib = self._encode_source(src, self.encoders[i], self.source_norms[i])
+            contributions.append(contrib)  # (B, n_archetypes, d_model)
+
+            if self.use_ternary:
+                trits = self._ternary_quantize(contrib)  # (B, n_archetypes)
+                trit_scores_list.append(trits)
+
+        # === Фаза 2: Агрегация ===
+        if self.use_ternary and trit_scores_list:
+            # Тернарное голосование: суммируем триты всех модулей
+            trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)  # (B, n_archetypes)
+            # Консенсус: sign(сумма) → {-1, 0, +1}
+            # Мягкий вариант: tanh(сумма / N) → [-1, +1]
+            consensus = torch.tanh(trit_sum / max(self.n_sources, 1))  # (B, n_archetypes)
+
+            # Взвешиваем вклады по консенсусу
+            # |consensus| = 1: все модули согласны → сильный вклад
+            # |consensus| ≈ 0: разногласие → слабый вклад
+            weights = consensus.abs().unsqueeze(-1)  # (B, n_archetypes, 1)
+
+            # Средний вклад, взвешенный консенсусом
+            stacked = torch.stack(contributions, dim=0)  # (N, B, archetypes, d_model)
+            mean_contrib = stacked.mean(dim=0)  # (B, archetypes, d_model)
+            aggregated = mean_contrib * weights  # (B, archetypes, d_model)
+
+            # Статистика тритов
+            with torch.no_grad():
+                all_trits = torch.stack(trit_scores_list, dim=0)  # (N, B, archetypes)
+                hard_trits = all_trits.sign()
+                total = hard_trits.numel()
+                self._last_trit_distribution = {
+                    'pos': (hard_trits > 0).float().sum().item() / total,
+                    'zero': (hard_trits == 0).float().sum().item() / total,
+                    'neg': (hard_trits < 0).float().sum().item() / total,
+                }
+                self._last_archetype_usage = consensus.abs().mean(dim=0).detach()
+        else:
+            # Без тернарной квантизации: простое среднее
+            stacked = torch.stack(contributions, dim=0)
+            aggregated = stacked.mean(dim=0)  # (B, n_archetypes, d_model)
+
+        # Проекция агрегированного представления
+        aggregated = self.aggregate_norm(self.aggregate_proj(aggregated))
+
+        # === Фаза 3: Декодирование (readout) ===
+        # Токены attend к архетипам: "какие архетипы релевантны мне?"
+        readout, _ = self.readout_attn(
+            query=x, key=aggregated, value=aggregated
+        )  # (B, T, d_model)
+        readout = self.readout_proj(self.readout_norm(readout))
+
+        # Global gate + scale
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * self.scale * readout
+
+    def get_interlingua_loss(self) -> torch.Tensor:
+        """Вспомогательный loss для обучения интерлингвы.
+
+        Два компонента:
+        1. Archetype balance: все архетипы используются примерно одинаково
+        2. Uncertainty penalty: штраф за несоответствие тритового баланса бюджету
+        """
+        loss = torch.tensor(0.0, device=self.archetype_queries.device)
+
+        if self._last_archetype_usage is not None:
+            # Balance loss: равномерное использование архетипов
+            usage = self._last_archetype_usage  # (n_archetypes,)
+            target = usage.mean()
+            balance_loss = ((usage - target) ** 2).mean()
+            loss = loss + 0.1 * balance_loss
+
+        if self.use_ternary:
+            # Uncertainty penalty: доля нулей ≈ uncertainty_budget
+            zero_frac = self._last_trit_distribution.get('zero', 0.33)
+            target_frac = self.uncertainty_budget.item()
+            uncertainty_loss = (zero_frac - target_frac) ** 2
+            loss = loss + 0.05 * uncertainty_loss
+
+        return loss
+
+    def get_interlingua_stats(self) -> dict:
+        """Статистика для мониторинга."""
+        stats = {
+            'global_gate': self._last_global_gate,
+            'scale': self.scale.item(),
+            'trit_distribution': self._last_trit_distribution,
+        }
+        if self.use_ternary:
+            stats['uncertainty_budget'] = self.uncertainty_budget.item()
+        if self._last_archetype_usage is not None:
+            usage = self._last_archetype_usage
+            stats['archetype_usage_mean'] = usage.mean().item()
+            stats['archetype_usage_std'] = usage.std().item()
+            stats['active_archetypes'] = (usage > 0.1).sum().item()
+        return stats
+
+    def archetype_q6_correlation(self) -> torch.Tensor:
+        """Измеряет корреляцию между выученными архетипами и гексаграммами Q6.
+
+        Аналог TokenAbstractor.cluster_hexagram_correlation().
+        """
+        if self.d_model < 6:
+            return torch.tensor(0.0, device=self.archetype_queries.device)
+
+        # Берём первые 6 компонент archetype_queries
+        q6_proj = self.archetype_queries[:, :6]  # (64, 6)
+        q6_binary = q6_proj.sign()
+
+        # Сходство с Q6 якорями
+        dots = torch.matmul(q6_binary, self.q6_anchors[:64].T)  # (64, 64)
+        max_sim = dots.max(dim=1).values  # (64,)
+        correlation = max_sim.mean() / 6.0  # [0, 1]
+
+        return correlation
+
+
 class DynamicCurriculumController:
     """Dynamic curriculum: адаптирует стратегию на основе гейтов."""
     def __init__(self, base_strength: float = 0.1, adapt_rate: float = 0.01):
