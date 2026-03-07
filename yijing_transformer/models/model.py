@@ -388,12 +388,18 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_structural_defect:
             self.structural_defect = StructuralDefectLayer(cfg.d_model)
 
+        # v58: early flag reads for expanded enrichment sources
+        self.use_cube_diagonal = getattr(cfg, 'use_cube_diagonal', False)
+        self.use_d4_equivariant = getattr(cfg, 'use_d4_equivariant', False)
+        self.use_dual_embedding = getattr(cfg, 'use_dual_embedding', False)
+
         # v54: Geometric Source Mixer — replaces fixed coefficients with learnable gates
         self.use_source_mixer = getattr(cfg, 'use_source_mixer', False)
         self.use_source_router = getattr(cfg, 'use_source_router', False)
         self.use_bridge_of_modules = getattr(cfg, 'use_bridge_of_modules', False)
         if self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules:
             # Count how many enrichment sources are active
+            # v58: expanded to cover all 6 mathematical source groups
             self._enrichment_sources = []
             if self.use_heisenberg:
                 self._enrichment_sources.append('heisenberg')
@@ -403,6 +409,12 @@ class YiJingTransformerLayer(nn.Module):
                 self._enrichment_sources.append('privileged_axis')
             if self.use_flower_gat:
                 self._enrichment_sources.append('flower_gat')
+            if self.use_cube_diagonal:
+                self._enrichment_sources.append('cube_diagonal')
+            if self.use_d4_equivariant:
+                self._enrichment_sources.append('d4_equivariant')
+            if self.use_dual_embedding:
+                self._enrichment_sources.append('dual_embedding')
             n_sources = len(self._enrichment_sources)
             if n_sources > 0:
                 if self.use_bridge_of_modules:
@@ -525,6 +537,7 @@ class YiJingTransformerLayer(nn.Module):
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
         # v54/v58: Geometric source mixing (replaces fixed 0.05/0.1 coefficients)
+        # v54/v58: Geometric source mixing (replaces fixed coefficients)
         if self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules:
             enrichments = []
             if self.use_heisenberg:
@@ -537,6 +550,15 @@ class YiJingTransformerLayer(nn.Module):
                 enrichments.append(torch.bmm(axis_w, h))
             if self.use_flower_gat:
                 enrichments.append(self.flower_gat.enrich(h) if hasattr(self.flower_gat, 'enrich') else self.flower_gat(h) - h)
+            # v58: expanded enrichments for 6-source bridge
+            if self.use_cube_diagonal:
+                cd_bias = self.cube_diag.get_bias(h)  # (B, T, T)
+                cd_w = F.softmax(cd_bias, dim=-1)
+                enrichments.append(torch.bmm(cd_w, h))
+            if self.use_d4_equivariant:
+                enrichments.append(self.d4_layer(h) - h)  # delta only
+            if self.use_dual_embedding:
+                enrichments.append(self.dual_emb(h) - h)  # delta only
 
             if enrichments:
                 if self.use_bridge_of_modules:
@@ -570,8 +592,9 @@ class YiJingTransformerLayer(nn.Module):
 
         x = x + attn_out
 
-        # v51: Dual Embedding enrichment
-        if self.use_dual_embedding:
+        # v51: Dual Embedding enrichment (skip if handled by bridge/router)
+        _routed = self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules
+        if self.use_dual_embedding and not _routed:
             x = self.dual_emb(x)
 
         # v53: Flower of Life GAT enrichment (only if not handled by source mixer/bridge)
@@ -596,8 +619,8 @@ class YiJingTransformerLayer(nn.Module):
         if self.bian_gua is not None:
             x = self.bian_gua(x)
 
-        # 4. D₄-эквивариантный слой
-        if self.use_d4_equivariant:
+        # 4. D₄-эквивариантный слой (skip if handled by bridge/router)
+        if self.use_d4_equivariant and not _routed:
             x = self.d4_layer(x)
 
         # v53: Structural Defect bottleneck (geometric compression)
