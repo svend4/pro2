@@ -61,6 +61,8 @@ from .geometry import (
     # v54: Anti-interference routing
     GeometricSourceRouter,
     GeometricSourceMixer,
+    # v58: Bridge of Modules
+    BridgeOfModules,
     # v54: Kasatkin 3D embedding
     CubicAttentionBias,
     CubicPositionalEncoding,
@@ -389,7 +391,8 @@ class YiJingTransformerLayer(nn.Module):
         # v54: Geometric Source Mixer — replaces fixed coefficients with learnable gates
         self.use_source_mixer = getattr(cfg, 'use_source_mixer', False)
         self.use_source_router = getattr(cfg, 'use_source_router', False)
-        if self.use_source_mixer or self.use_source_router:
+        self.use_bridge_of_modules = getattr(cfg, 'use_bridge_of_modules', False)
+        if self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules:
             # Count how many enrichment sources are active
             self._enrichment_sources = []
             if self.use_heisenberg:
@@ -402,7 +405,14 @@ class YiJingTransformerLayer(nn.Module):
                 self._enrichment_sources.append('flower_gat')
             n_sources = len(self._enrichment_sources)
             if n_sources > 0:
-                if self.use_source_router:
+                if self.use_bridge_of_modules:
+                    # v58: Bridge of Modules — иерархическая cross-attention медиация
+                    self.bridge_of_modules = BridgeOfModules(
+                        cfg.d_model, n_sources,
+                        n_heads=getattr(cfg, 'bridge_n_heads', 2),
+                        dropout=getattr(cfg, 'bridge_dropout', 0.1),
+                    )
+                elif self.use_source_router:
                     self.source_router = GeometricSourceRouter(
                         cfg.d_model, n_sources,
                         top_k=getattr(cfg, 'source_router_top_k', min(2, n_sources)),
@@ -412,6 +422,7 @@ class YiJingTransformerLayer(nn.Module):
             else:
                 self.use_source_mixer = False
                 self.use_source_router = False
+                self.use_bridge_of_modules = False
 
         # Квантизация к вершинам гиперкуба (bottleneck)
         # Multi-scale: layer_quant_dim overrides cfg.quant_total_dim
@@ -512,8 +523,8 @@ class YiJingTransformerLayer(nn.Module):
                 bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
-        # v54: Geometric source mixing (replaces fixed 0.05/0.1 coefficients)
-        if self.use_source_mixer or self.use_source_router:
+        # v54/v58: Geometric source mixing (replaces fixed 0.05/0.1 coefficients)
+        if self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules:
             enrichments = []
             if self.use_heisenberg:
                 enrichments.append(self.heisenberg_attn(h))
@@ -527,7 +538,11 @@ class YiJingTransformerLayer(nn.Module):
                 enrichments.append(self.flower_gat.enrich(h) if hasattr(self.flower_gat, 'enrich') else self.flower_gat(h) - h)
 
             if enrichments:
-                if self.use_source_router:
+                if self.use_bridge_of_modules:
+                    # v58: Bridge of Modules — иерархическая медиация
+                    attn_out = self.bridge_of_modules(attn_out, enrichments)
+                    self._source_routing_aux = 0.0
+                elif self.use_source_router:
                     mixed = self.source_router(h, enrichments)
                     attn_out = attn_out + mixed
                     self._source_routing_aux = self.source_router._aux_loss
@@ -558,8 +573,8 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_dual_embedding:
             x = self.dual_emb(x)
 
-        # v53: Flower of Life GAT enrichment (only if not handled by source mixer)
-        if self.use_flower_gat and not (self.use_source_mixer or self.use_source_router):
+        # v53: Flower of Life GAT enrichment (only if not handled by source mixer/bridge)
+        if self.use_flower_gat and not (self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules):
             x = self.flower_gat(x)
 
         # 2. Квантизация к вершинам гиперкуба
