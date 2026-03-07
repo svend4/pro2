@@ -114,6 +114,7 @@ from .routing import (
     GeometricSourceMixer,
     SequentialSourceCurriculum,
     PairwiseBridge,
+    LightweightBridge,
     BridgeOfModules,
 )
 

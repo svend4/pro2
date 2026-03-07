@@ -397,6 +397,51 @@ class PairwiseBridge(nn.Module):
         return self.out_norm(merged) * self.scale
 
 
+class LightweightBridge(nn.Module):
+    """Облегчённый мост: bilinear compatibility вместо full cross-attention.
+
+    Вместо O(d²) cross-attention использует:
+    1. Bilinear compatibility score: score = src_a^T · W · src_b (bottleneck)
+    2. Gated blend на основе score
+    3. ~10x меньше параметров чем PairwiseBridge
+
+    Идея: если cross-attention — это «подробный разговор» между источниками,
+    то bilinear bridge — это «быстрый взгляд» на совместимость.
+    Для многих задач достаточно знать «совместимы ли эти два сигнала»,
+    не нужно детально разбирать каждую позицию.
+
+    Args:
+        d_model: размерность модели
+        bottleneck: размер bottleneck для bilinear (d_model // 4)
+    """
+    def __init__(self, d_model: int, bottleneck: int = 0):
+        super().__init__()
+        bn = bottleneck or max(d_model // 4, 8)
+        # Bottleneck projections для bilinear scoring
+        self.proj_a = nn.Linear(d_model, bn, bias=False)
+        self.proj_b = nn.Linear(d_model, bn, bias=False)
+        # Compatibility → gate
+        self.compat_proj = nn.Linear(bn, 1, bias=True)
+        nn.init.zeros_(self.compat_proj.bias)
+        # Norm
+        self.norm_a = nn.LayerNorm(d_model)
+        self.norm_b = nn.LayerNorm(d_model)
+        self.out_norm = nn.LayerNorm(d_model)
+        # Learnable scale
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, src_a: torch.Tensor, src_b: torch.Tensor) -> torch.Tensor:
+        a = self.norm_a(src_a)
+        b = self.norm_b(src_b)
+        # Bilinear compatibility: element-wise product in bottleneck space
+        za = self.proj_a(a)  # (B, T, bn)
+        zb = self.proj_b(b)  # (B, T, bn)
+        compat = torch.sigmoid(self.compat_proj(za * zb))  # (B, T, 1)
+        # Gated blend: высокая совместимость → больше от обоих, низкая → suppress
+        merged = compat * (src_a + src_b) * 0.5 + (1 - compat) * src_a
+        return self.out_norm(merged) * self.scale
+
+
 class BridgeOfModules(nn.Module):
     """Мост Модулей: иерархическая медиация между геометрическими источниками.
 
@@ -426,16 +471,23 @@ class BridgeOfModules(nn.Module):
         n_sources: число геометрических источников
         n_heads: число голов cross-attention в каждом мосте
         dropout: dropout в cross-attention
+        bridge_mode: 'full' (cross-attention) или 'lightweight' (bilinear)
     """
     def __init__(self, d_model: int, n_sources: int, n_heads: int = 2,
-                 dropout: float = 0.1):
+                 dropout: float = 0.1, bridge_mode: str = 'full'):
         super().__init__()
         self.d_model = d_model
         self.n_sources = n_sources
+        self.bridge_mode = bridge_mode
 
         # Строим дерево мостов снизу вверх
         self.bridge_tree = nn.ModuleList()
         self.tree_structure = []  # [(level, pairs)] для forward
+
+        def make_bridge():
+            if bridge_mode == 'lightweight':
+                return LightweightBridge(d_model)
+            return PairwiseBridge(d_model, n_heads, dropout)
 
         remaining = n_sources
         level = 0
@@ -443,8 +495,7 @@ class BridgeOfModules(nn.Module):
             n_pairs = remaining // 2
             has_odd = (remaining % 2 == 1)
             bridges = nn.ModuleList([
-                PairwiseBridge(d_model, n_heads, dropout)
-                for _ in range(n_pairs)
+                make_bridge() for _ in range(n_pairs)
             ])
             self.bridge_tree.append(bridges)
             self.tree_structure.append((n_pairs, has_odd))

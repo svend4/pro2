@@ -411,6 +411,7 @@ class YiJingTransformerLayer(nn.Module):
                         cfg.d_model, n_sources,
                         n_heads=getattr(cfg, 'bridge_n_heads', 2),
                         dropout=getattr(cfg, 'bridge_dropout', 0.1),
+                        bridge_mode=getattr(cfg, 'bridge_mode', 'full'),
                     )
                 elif self.use_source_router:
                     self.source_router = GeometricSourceRouter(

@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.geometry.routing import (
     PairwiseBridge,
+    LightweightBridge,
     BridgeOfModules,
     GeometricSourceRouter,
 )
@@ -204,3 +205,53 @@ class TestBridgeVsRouter:
         assert ratio < 1000, f"Bridge too heavy: {bridge_params} vs Router {router_params}"
         # Абсолютный лимит: Bridge < 1M params для d_model=64
         assert bridge_params < 1_000_000, f"Bridge too large: {bridge_params}"
+
+
+# ── LightweightBridge ───────────────────────────────────────────
+
+
+class TestLightweightBridge:
+    def test_output_shape(self, d_model, batch_size, seq_len):
+        bridge = LightweightBridge(d_model=d_model)
+        a = torch.randn(batch_size, seq_len, d_model)
+        b = torch.randn(batch_size, seq_len, d_model)
+        out = bridge(a, b)
+        assert out.shape == (batch_size, seq_len, d_model)
+
+    def test_much_lighter_than_full(self, d_model):
+        """LightweightBridge должен быть значительно легче PairwiseBridge."""
+        light = LightweightBridge(d_model=d_model)
+        full = PairwiseBridge(d_model=d_model)
+        light_params = sum(p.numel() for p in light.parameters())
+        full_params = sum(p.numel() for p in full.parameters())
+        assert light_params < full_params, \
+            f"Lightweight ({light_params}) should be < Full ({full_params})"
+
+    def test_gradient_flow(self, d_model, batch_size, seq_len):
+        bridge = LightweightBridge(d_model=d_model)
+        a = torch.randn(batch_size, seq_len, d_model, requires_grad=True)
+        b = torch.randn(batch_size, seq_len, d_model, requires_grad=True)
+        out = bridge(a, b)
+        out.sum().backward()
+        assert a.grad is not None and a.grad.abs().sum() > 0
+        assert b.grad is not None and b.grad.abs().sum() > 0
+
+
+class TestBridgeOfModulesLightweight:
+    def test_lightweight_mode(self, d_model, batch_size, seq_len):
+        """bridge_mode='lightweight' создаёт LightweightBridge внутри."""
+        bom = BridgeOfModules(d_model=d_model, n_sources=4, bridge_mode='lightweight')
+        x = torch.randn(batch_size, seq_len, d_model)
+        sources = [torch.randn(batch_size, seq_len, d_model) for _ in range(4)]
+        out = bom(x, sources)
+        assert out.shape == (batch_size, seq_len, d_model)
+
+    def test_lightweight_fewer_params(self, d_model):
+        """Lightweight mode должен быть легче full mode."""
+        full = BridgeOfModules(d_model=d_model, n_sources=6, bridge_mode='full')
+        light = BridgeOfModules(d_model=d_model, n_sources=6, bridge_mode='lightweight')
+        full_p = sum(p.numel() for p in full.parameters())
+        light_p = sum(p.numel() for p in light.parameters())
+        assert light_p < full_p, f"Lightweight ({light_p}) should be < Full ({full_p})"
+        ratio = full_p / light_p
+        assert ratio > 2, f"Expected >2x reduction, got {ratio:.1f}x"
