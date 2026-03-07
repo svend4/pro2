@@ -888,3 +888,196 @@ class TestHermannPacking:
         assert kernel.shape == (3, 3)
         # Нормализованное ядро: сумма по строкам = 1
         assert torch.allclose(kernel.sum(dim=1), torch.ones(3), atol=1e-4)
+
+
+class TestGeometricSourceRouter:
+    """Тесты GeometricSourceRouter — MoE routing для геометрических источников."""
+
+    def test_shape(self):
+        from models.geometry import GeometricSourceRouter
+        router = GeometricSourceRouter(d_model=64, n_sources=4, top_k=2)
+        x = torch.randn(2, 8, 64)
+        sources = [torch.randn(2, 8, 64) for _ in range(4)]
+        out = router(x, sources)
+        assert out.shape == (2, 8, 64)
+
+    def test_top_k_selection(self):
+        """Top-k маршрутизация: только k из N источников активны."""
+        from models.geometry import GeometricSourceRouter
+        router = GeometricSourceRouter(d_model=64, n_sources=4, top_k=1)
+        x = torch.randn(2, 8, 64)
+        sources = [torch.randn(2, 8, 64) for _ in range(4)]
+        out = router(x, sources)
+        stats = router.get_routing_stats()
+        assert len(stats['scales']) == 4
+        assert out.shape == (2, 8, 64)
+
+    def test_aux_loss_nonzero(self):
+        """Balance loss должен быть > 0 при неравномерной маршрутизации."""
+        from models.geometry import GeometricSourceRouter
+        router = GeometricSourceRouter(d_model=64, n_sources=3, top_k=2)
+        x = torch.randn(2, 8, 64)
+        sources = [torch.randn(2, 8, 64) for _ in range(3)]
+        _ = router(x, sources)
+        assert router._aux_loss > 0
+
+    def test_gradient_flow(self):
+        """Градиенты проходят через router."""
+        from models.geometry import GeometricSourceRouter
+        router = GeometricSourceRouter(d_model=32, n_sources=3, top_k=2)
+        x = torch.randn(2, 4, 32, requires_grad=True)
+        sources = [torch.randn(2, 4, 32, requires_grad=True) for _ in range(3)]
+        out = router(x, sources)
+        loss = out.sum()
+        loss.backward()
+        assert x.grad is not None
+        for s in sources:
+            assert s.grad is not None
+
+
+class TestGeometricSourceMixer:
+    """Тесты GeometricSourceMixer — residual gating для источников."""
+
+    def test_shape(self):
+        from models.geometry import GeometricSourceMixer
+        mixer = GeometricSourceMixer(d_model=64, n_sources=4)
+        x = torch.randn(2, 8, 64)
+        sources = [torch.randn(2, 8, 64) for _ in range(4)]
+        out = mixer(x, sources)
+        assert out.shape == (2, 8, 64)
+
+    def test_initial_gates_near_zero(self):
+        """При инициализации gates ≈ 0.12 (sigmoid(-2))."""
+        from models.geometry import GeometricSourceMixer
+        mixer = GeometricSourceMixer(d_model=64, n_sources=4)
+        x = torch.randn(2, 8, 64)
+        sources = [torch.randn(2, 8, 64) for _ in range(4)]
+        _ = mixer(x, sources)
+        stats = mixer.get_gate_stats()
+        for g in stats['gates']:
+            assert g < 0.2, f"Initial gate should be near 0, got {g}"
+
+    def test_output_close_to_input_initially(self):
+        """Начальный выход ≈ вход (gates near zero)."""
+        from models.geometry import GeometricSourceMixer
+        mixer = GeometricSourceMixer(d_model=64, n_sources=3)
+        x = torch.randn(2, 8, 64)
+        sources = [torch.randn(2, 8, 64) for _ in range(3)]
+        out = mixer(x, sources)
+        diff = (out - x).abs().mean().item()
+        x_norm = x.abs().mean().item()
+        assert diff / x_norm < 0.5, f"Output should be close to input, ratio={diff/x_norm}"
+
+
+class TestSequentialSourceCurriculum:
+    """Тесты SequentialSourceCurriculum."""
+
+    def test_warmup_all_inactive(self):
+        from models.geometry import SequentialSourceCurriculum
+        cur = SequentialSourceCurriculum(n_sources=4, steps_per_source=100, warmup_steps=50)
+        mask = cur.get_active_mask(step=30)
+        assert all(not m for m in mask)
+
+    def test_progressive_activation(self):
+        from models.geometry import SequentialSourceCurriculum
+        cur = SequentialSourceCurriculum(n_sources=4, steps_per_source=100, warmup_steps=0)
+        # Step 0: 1 active
+        assert sum(cur.get_active_mask(0)) == 1
+        # Step 100: 2 active
+        assert sum(cur.get_active_mask(100)) == 2
+        # Step 300: 4 active
+        assert sum(cur.get_active_mask(300)) == 4
+
+    def test_custom_order(self):
+        from models.geometry import SequentialSourceCurriculum
+        cur = SequentialSourceCurriculum(
+            n_sources=3, steps_per_source=100, warmup_steps=0,
+            source_order=[2, 0, 1]
+        )
+        mask = cur.get_active_mask(0)
+        assert mask == [False, False, True]  # source 2 first
+
+
+class TestKasatkinEmbedding:
+    """Тесты Касаткинского 3D-embedding."""
+
+    def test_shape(self):
+        from models.geometry import kasatkin_embedding
+        coords = kasatkin_embedding()
+        assert coords.shape == (64, 3)
+
+    def test_covers_4x4x4_cube(self):
+        """64 точки должны покрывать куб 4×4×4."""
+        from models.geometry import kasatkin_embedding
+        coords = kasatkin_embedding()
+        for dim in range(3):
+            unique = coords[:, dim].unique()
+            assert len(unique) == 4, f"Dim {dim}: expected 4 unique, got {len(unique)}"
+
+    def test_unique_points(self):
+        """Все 64 точки должны быть уникальными."""
+        from models.geometry import kasatkin_embedding
+        coords = kasatkin_embedding()
+        unique = torch.unique(coords, dim=0)
+        assert unique.shape[0] == 64
+
+    def test_distance_matrix_symmetric(self):
+        from models.geometry import kasatkin_distance_matrix
+        dist = kasatkin_distance_matrix()
+        assert torch.allclose(dist, dist.T)
+        assert (dist.diag() == 0).all()
+
+    def test_axis_projection(self):
+        from models.geometry import kasatkin_axis_projection
+        proj = kasatkin_axis_projection('diagonal')
+        assert proj.shape == (64,)
+        # Diagonal projection should vary
+        assert proj.std() > 0
+
+
+class TestCubicAttentionBias:
+    """Тесты CubicAttentionBias."""
+
+    def test_shape(self):
+        from models.geometry import CubicAttentionBias
+        cab = CubicAttentionBias(max_seq_len=128)
+        bias = cab(16)
+        assert bias.shape == (16, 16)
+
+    def test_self_bias_zero(self):
+        """Bias для позиции к самой себе должен быть максимальным (= 0)."""
+        from models.geometry import CubicAttentionBias
+        cab = CubicAttentionBias(max_seq_len=64)
+        bias = cab(8)
+        assert (bias.diag() == 0).all()
+
+    def test_negative_for_distant(self):
+        """Дальние позиции в кубе получают отрицательный bias."""
+        from models.geometry import CubicAttentionBias
+        cab = CubicAttentionBias(max_seq_len=64)
+        bias = cab(64)
+        # Off-diagonal entries should be <= 0
+        mask = ~torch.eye(64, dtype=torch.bool)
+        assert (bias[mask] <= 0).all()
+
+
+class TestCubicPositionalEncoding:
+    """Тесты CubicPositionalEncoding."""
+
+    def test_shape(self):
+        from models.geometry import CubicPositionalEncoding
+        cpe = CubicPositionalEncoding(d_model=64, max_seq_len=128)
+        pe = cpe(32)
+        assert pe.shape == (32, 64)
+
+    def test_periodic_structure(self):
+        """Позиции 0 и 64 должны иметь близкие 3D-компоненты."""
+        from models.geometry import CubicPositionalEncoding
+        cpe = CubicPositionalEncoding(d_model=64, max_seq_len=128)
+        pe = cpe(128)
+        # Cubic part is periodic with period 64
+        # Linear part breaks exact periodicity, but cubic similarity should be high
+        cos_sim = torch.nn.functional.cosine_similarity(
+            pe[0:1], pe[64:65], dim=-1
+        )
+        assert cos_sim.item() > 0.5, f"Expected periodicity, cos_sim={cos_sim.item()}"

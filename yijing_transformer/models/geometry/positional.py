@@ -1,7 +1,8 @@
 """
-Позиционные кодирования: RoPE, ALiBi, FourLevelPE.
+Позиционные кодирования: RoPE, ALiBi, FourLevelPE, CubicPE.
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -112,3 +113,56 @@ class FourLevelPositionalEncoding(nn.Module):
               + self.hexagram_emb(hex_idx)
               + self.seq_emb(seq_idx))
         return self.scale * pe
+
+
+class CubicPositionalEncoding(nn.Module):
+    """3D позиционное кодирование Касаткина.
+
+    Каждый токен получает координату (x, y, z) в кубе 4×4×4 вместо
+    линейной позиции. Координаты определяются через Касаткинское
+    отображение hex → Z³.
+
+    Для последовательностей длиннее 64: позиция циклически отображается
+    в куб, плюс добавляется residual линейное смещение.
+    """
+    def __init__(self, d_model: int, max_seq_len: int = 512):
+        super().__init__()
+        self.d_model = d_model
+        # 3D coordinate embeddings (4 значения на ось)
+        self.x_emb = nn.Embedding(4, d_model)
+        self.y_emb = nn.Embedding(4, d_model)
+        self.z_emb = nn.Embedding(4, d_model)
+        # Residual linear position (for sequences > 64)
+        self.linear_emb = nn.Embedding(max_seq_len, d_model)
+        # Learnable scale to start small
+        self.scale = nn.Parameter(torch.tensor(0.1))
+        # Pre-compute cubic coordinates for 64 positions
+        self._build_coordinate_cache()
+
+    def _build_coordinate_cache(self):
+        """Build mapping: position mod 64 → (x, y, z)."""
+        coords = torch.zeros(64, 3, dtype=torch.long)
+        for i in range(64):
+            # 6-bit decomposition: i = b5*32 + b4*16 + b3*8 + b2*4 + b1*2 + b0
+            bits = [(i >> bit) & 1 for bit in range(6)]
+            # Pair mapping: (b0,b1)→x, (b2,b3)→y, (b4,b5)→z
+            coords[i, 0] = bits[0] * 2 + bits[1]
+            coords[i, 1] = bits[2] * 2 + bits[3]
+            coords[i, 2] = bits[4] * 2 + bits[5]
+        self.register_buffer('cubic_coords', coords)
+
+    def forward(self, seq_len: int, device=None):
+        if device is None:
+            device = self.x_emb.weight.device
+
+        pos = torch.arange(seq_len, device=device)
+        cubic_idx = pos % 64
+        coords = self.cubic_coords[cubic_idx]  # (T, 3)
+
+        pe_3d = (self.x_emb(coords[:, 0])
+                 + self.y_emb(coords[:, 1])
+                 + self.z_emb(coords[:, 2]))  # (T, d_model)
+
+        pe_linear = self.linear_emb(pos)  # (T, d_model)
+
+        return self.scale * (pe_3d + 0.1 * pe_linear)

@@ -350,6 +350,16 @@ class YiJingConfig:
     use_structural_defect: bool = False  # Structural Defect bottleneck 16→12 (Беляев)
     curriculum_strategy: str = 'linear' # 'linear', 'geometric_first', 'triangular' (Андреев 3.4)
 
+    # v54: Anti-interference source routing
+    use_source_mixer: bool = False      # learnable per-source gates (lightweight)
+    use_source_router: bool = False     # MoE-style top-k source routing
+    source_router_top_k: int = 2        # how many sources to select per token
+    source_routing_weight: float = 0.01 # aux loss weight for load balancing
+
+    # v54: Kasatkin 3D embedding
+    use_cubic_bias: bool = False        # 3D distance-based attention bias (Касаткин)
+    use_cubic_pe: bool = False          # 3D positional encoding (x,y,z in 4×4×4 cube)
+
     # Обучение
     lr: float = 3e-4
     warmup_steps: int = 2000

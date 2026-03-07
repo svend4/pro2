@@ -43,6 +43,9 @@ from .core import (
     find_fixed_points,
     e8_collision_proof,
     generate_four_state_codebook,
+    kasatkin_embedding,
+    kasatkin_distance_matrix,
+    kasatkin_axis_projection,
 )
 
 # Quantizers
@@ -67,6 +70,7 @@ from .attention import (
     WeavingLoomArchitecture,
     BidirectionalTriangularAttention,
     CubeDiagonalAttention,
+    CubicAttentionBias,
     HeisenbergAttention,
     FlowerOfLifeGAT,
     MobiusAttentionPattern,
@@ -86,6 +90,7 @@ from .positional import (
     apply_rotary_emb,
     ALiBi,
     FourLevelPositionalEncoding,
+    CubicPositionalEncoding,
 )
 
 # Equivariant & structural layers
@@ -104,6 +109,9 @@ from .routing import (
     GateLogger,
     GeometryCurriculumScheduler,
     DynamicCurriculumController,
+    GeometricSourceRouter,
+    GeometricSourceMixer,
+    SequentialSourceCurriculum,
 )
 
 # FFN modules

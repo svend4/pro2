@@ -424,6 +424,69 @@ def e8_collision_proof(P: int = 240) -> dict:
     return result
 
 
+def kasatkin_embedding() -> torch.Tensor:
+    """Касаткинское 3D-embedding: 64 гексаграммы → (x, y, z) ∈ Z³.
+
+    Отображение 6D {-1,+1}⁶ → 3D по Касаткину:
+    - Пара (b₁, b₂) → координата x
+    - Пара (b₃, b₄) → координата y
+    - Пара (b₅, b₆) → координата z
+
+    Каждая пара битов даёт целочисленную координату:
+      (-1,-1) → 0, (-1,+1) → 1, (+1,-1) → 2, (+1,+1) → 3
+
+    Результат: 64 точки в кубе 4×4×4.
+    """
+    hexagrams = generate_hexagrams()  # (64, 6)
+
+    def pair_to_coord(b1, b2):
+        """Отображение пары {-1,+1}² → {0,1,2,3}."""
+        return int((b1 + 1) + (b2 + 1) / 2)
+
+    coords = torch.zeros(64, 3, dtype=torch.float32)
+    for i in range(64):
+        h = hexagrams[i]
+        coords[i, 0] = pair_to_coord(h[0].item(), h[1].item())
+        coords[i, 1] = pair_to_coord(h[2].item(), h[3].item())
+        coords[i, 2] = pair_to_coord(h[4].item(), h[5].item())
+
+    return coords  # (64, 3)
+
+
+def kasatkin_distance_matrix() -> torch.Tensor:
+    """Матрица евклидовых расстояний в 3D пространстве Касаткина.
+
+    distance[i][j] = ||kasatkin(hex_i) - kasatkin(hex_j)||²
+    """
+    coords = kasatkin_embedding()  # (64, 3)
+    # Pairwise squared Euclidean distance
+    diff = coords.unsqueeze(0) - coords.unsqueeze(1)  # (64, 64, 3)
+    dist_sq = (diff ** 2).sum(dim=-1)  # (64, 64)
+    return dist_sq
+
+
+def kasatkin_axis_projection(axis: str = 'diagonal') -> torch.Tensor:
+    """Проекция гексаграмм на привилегированную ось Касаткина.
+
+    Диагональ куба (1,1,1) — ось «времени» / прогресса.
+    Возвращает скалярную проекцию каждой гексаграммы на эту ось.
+    """
+    coords = kasatkin_embedding()  # (64, 3)
+    if axis == 'diagonal':
+        direction = torch.ones(3) / math.sqrt(3.0)
+    elif axis == 'x':
+        direction = torch.tensor([1.0, 0.0, 0.0])
+    elif axis == 'y':
+        direction = torch.tensor([0.0, 1.0, 0.0])
+    elif axis == 'z':
+        direction = torch.tensor([0.0, 0.0, 1.0])
+    else:
+        raise ValueError(f"Unknown axis: {axis}")
+
+    projections = (coords * direction.unsqueeze(0)).sum(dim=-1)  # (64,)
+    return projections
+
+
 def generate_four_state_codebook() -> torch.Tensor:
     """4096 состояний: 4 состояния × 6 линий = {-1, -0.5, +0.5, +1}⁶.
 

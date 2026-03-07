@@ -343,6 +343,38 @@ class MobiusAttentionPattern(nn.Module):
         return self.scale * self.mobius_bias[:seq_len, :seq_len]
 
 
+class CubicAttentionBias(nn.Module):
+    """Attention bias на основе 3D расстояний Касаткина.
+
+    bias[i][j] = -alpha * ||kasatkin(i mod 64) - kasatkin(j mod 64)||²
+
+    Позиции в кубе 4×4×4 определяют «близость» токенов:
+    - Токены в одной ячейке куба имеют bias=0
+    - Дальние в кубе получают отрицательный bias (ослабленный attention)
+    """
+    def __init__(self, max_seq_len: int = 512):
+        super().__init__()
+        self.scale = nn.Parameter(torch.tensor(0.1))
+        # Build 64×64 distance matrix
+        coords = torch.zeros(64, 3, dtype=torch.float32)
+        for i in range(64):
+            bits = [(i >> bit) & 1 for bit in range(6)]
+            coords[i, 0] = bits[0] * 2 + bits[1]
+            coords[i, 1] = bits[2] * 2 + bits[3]
+            coords[i, 2] = bits[4] * 2 + bits[5]
+        diff = coords.unsqueeze(0) - coords.unsqueeze(1)  # (64, 64, 3)
+        dist_sq = (diff ** 2).sum(dim=-1)  # (64, 64)
+        # Normalize so max distance = 1
+        dist_sq = dist_sq / dist_sq.max().clamp(min=1e-6)
+        self.register_buffer('dist_matrix', dist_sq)
+
+    def forward(self, seq_len: int) -> torch.Tensor:
+        """Returns (T, T) bias matrix."""
+        pos = torch.arange(seq_len, device=self.dist_matrix.device) % 64
+        bias = -self.scale * self.dist_matrix[pos][:, pos]  # (T, T)
+        return bias
+
+
 class PrivilegedAxisAttention(nn.Module):
     """Attention с привилегированной осью (Касаткин)."""
     def __init__(self, d_model: int):

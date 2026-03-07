@@ -58,6 +58,12 @@ from .geometry import (
     FlowerOfLifeGAT,
     StructuralDefectLayer,
     HexagramAttentionPattern,
+    # v54: Anti-interference routing
+    GeometricSourceRouter,
+    GeometricSourceMixer,
+    # v54: Kasatkin 3D embedding
+    CubicAttentionBias,
+    CubicPositionalEncoding,
 )
 
 
@@ -339,6 +345,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_cube_diagonal:
             self.cube_diag = CubeDiagonalAttention(cfg.d_model)
 
+        # v54: Kasatkin cubic attention bias (3D distance-based)
+        self.use_cubic_bias = getattr(cfg, 'use_cubic_bias', False)
+        if self.use_cubic_bias:
+            self.cubic_bias = CubicAttentionBias(max_seq_len=cfg.block_size)
+
         # v53: Heisenberg attention (Беляев 6.1) — additive enrichment
         self.use_heisenberg = getattr(cfg, 'use_heisenberg_attention', False)
         if self.use_heisenberg and not (self.use_quadrant_attention or self.use_recursive_cube or self.use_weaving_loom):
@@ -358,6 +369,33 @@ class YiJingTransformerLayer(nn.Module):
         self.use_structural_defect = getattr(cfg, 'use_structural_defect', False)
         if self.use_structural_defect:
             self.structural_defect = StructuralDefectLayer(cfg.d_model)
+
+        # v54: Geometric Source Mixer — replaces fixed coefficients with learnable gates
+        self.use_source_mixer = getattr(cfg, 'use_source_mixer', False)
+        self.use_source_router = getattr(cfg, 'use_source_router', False)
+        if self.use_source_mixer or self.use_source_router:
+            # Count how many enrichment sources are active
+            self._enrichment_sources = []
+            if self.use_heisenberg:
+                self._enrichment_sources.append('heisenberg')
+            if self.use_palace_attention:
+                self._enrichment_sources.append('palace')
+            if self.use_privileged_axis:
+                self._enrichment_sources.append('privileged_axis')
+            if self.use_flower_gat:
+                self._enrichment_sources.append('flower_gat')
+            n_sources = len(self._enrichment_sources)
+            if n_sources > 0:
+                if self.use_source_router:
+                    self.source_router = GeometricSourceRouter(
+                        cfg.d_model, n_sources,
+                        top_k=getattr(cfg, 'source_router_top_k', min(2, n_sources)),
+                    )
+                else:
+                    self.source_mixer = GeometricSourceMixer(cfg.d_model, n_sources)
+            else:
+                self.use_source_mixer = False
+                self.use_source_router = False
 
         # Квантизация к вершинам гиперкуба (bottleneck)
         # Multi-scale: layer_quant_dim overrides cfg.quant_total_dim
@@ -445,6 +483,9 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_hex_attn_pattern:
             hex_bias = self.hex_pattern(h, T)  # (B,1,T,T)
             extra_bias = hex_bias if extra_bias is None else extra_bias + hex_bias
+        if self.use_cubic_bias:
+            cub_bias = self.cubic_bias(T).unsqueeze(0).unsqueeze(0)  # (1,1,T,T)
+            extra_bias = cub_bias if extra_bias is None else extra_bias + cub_bias
 
         if self._attn_returns_cache:
             attn_out, new_kv = self.attn(h, kv_cache=kv_cache, extra_attn_bias=extra_bias)
@@ -455,19 +496,45 @@ class YiJingTransformerLayer(nn.Module):
                 bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
-        # v53: Heisenberg attention enrichment (additive)
-        if self.use_heisenberg:
-            attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
+        # v54: Geometric source mixing (replaces fixed 0.05/0.1 coefficients)
+        if self.use_source_mixer or self.use_source_router:
+            enrichments = []
+            if self.use_heisenberg:
+                enrichments.append(self.heisenberg_attn(h))
+            if self.use_palace_attention:
+                enrichments.append(self.palace_attn(h))
+            if self.use_privileged_axis:
+                axis_bias = self.privileged_axis.get_bias(h)
+                axis_w = F.softmax(axis_bias, dim=-1)
+                enrichments.append(torch.bmm(axis_w, h))
+            if self.use_flower_gat:
+                enrichments.append(self.flower_gat.enrich(h) if hasattr(self.flower_gat, 'enrich') else self.flower_gat(h) - h)
 
-        # v51: compose additional attention biases (additive post-processing)
-        if self.use_palace_attention:
-            palace_out = self.palace_attn(h)
-            attn_out = attn_out + 0.1 * palace_out
+            if enrichments:
+                if self.use_source_router:
+                    mixed = self.source_router(h, enrichments)
+                    attn_out = attn_out + mixed
+                    self._source_routing_aux = self.source_router._aux_loss
+                else:
+                    attn_out = self.source_mixer(attn_out, enrichments)
+                    self._source_routing_aux = 0.0
+            else:
+                self._source_routing_aux = 0.0
+        else:
+            self._source_routing_aux = 0.0
+            # v53: Heisenberg attention enrichment (additive)
+            if self.use_heisenberg:
+                attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
 
-        if self.use_privileged_axis:
-            axis_bias = self.privileged_axis.get_bias(h)  # (B, T, T)
-            axis_w = F.softmax(axis_bias, dim=-1)
-            attn_out = attn_out + 0.05 * torch.bmm(axis_w, h)
+            # v51: compose additional attention biases (additive post-processing)
+            if self.use_palace_attention:
+                palace_out = self.palace_attn(h)
+                attn_out = attn_out + 0.1 * palace_out
+
+            if self.use_privileged_axis:
+                axis_bias = self.privileged_axis.get_bias(h)  # (B, T, T)
+                axis_w = F.softmax(axis_bias, dim=-1)
+                attn_out = attn_out + 0.05 * torch.bmm(axis_w, h)
 
         x = x + attn_out
 
@@ -475,8 +542,8 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_dual_embedding:
             x = self.dual_emb(x)
 
-        # v53: Flower of Life GAT enrichment
-        if self.use_flower_gat:
+        # v53: Flower of Life GAT enrichment (only if not handled by source mixer)
+        if self.use_flower_gat and not (self.use_source_mixer or self.use_source_router):
             x = self.flower_gat(x)
 
         # 2. Квантизация к вершинам гиперкуба
@@ -521,10 +588,14 @@ class YiJingTransformerLayer(nn.Module):
             x = x + self.ffn(h_ffn)
             self._aux_loss = 0.0
 
-        # Aggregate v51 auxiliary losses
+        # Aggregate v51+ auxiliary losses
         if isinstance(self._antipodal_loss, torch.Tensor):
             antipodal_w = getattr(self.cfg, 'antipodal_weight', 0.01)
             self._aux_loss = self._aux_loss + antipodal_w * self._antipodal_loss
+        # v54: source routing balance loss
+        if isinstance(getattr(self, '_source_routing_aux', 0.0), torch.Tensor):
+            source_w = getattr(self.cfg, 'source_routing_weight', 0.01)
+            self._aux_loss = self._aux_loss + source_w * self._source_routing_aux
 
         return x, new_kv
 
@@ -629,11 +700,18 @@ class YiJingGPT(nn.Module):
 
         # v51: 4-уровневое позиционное кодирование Андреева
         self.use_four_level_pe = getattr(cfg, 'use_four_level_pe', False)
+        # v54: Kasatkin 3D positional encoding
+        self.use_cubic_pe = getattr(cfg, 'use_cubic_pe', False)
         if self.use_four_level_pe:
             self.four_level_pe = FourLevelPositionalEncoding(
                 cfg.d_model, max_seq_len=cfg.block_size
             )
             self.pos_emb = None  # FourLevelPE заменяет стандартный PE
+        elif self.use_cubic_pe:
+            self.cubic_pe = CubicPositionalEncoding(
+                cfg.d_model, max_seq_len=cfg.block_size
+            )
+            self.pos_emb = None  # CubicPE заменяет стандартный PE
         elif not cfg.use_rope and not getattr(cfg, 'use_alibi', False):
             self.pos_emb = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
         else:
@@ -675,6 +753,8 @@ class YiJingGPT(nn.Module):
         # Позиционное кодирование
         if self.use_four_level_pe:
             x = x + self.four_level_pe(t, device=idx.device)
+        elif self.use_cubic_pe:
+            x = x + self.cubic_pe(t, device=idx.device)
         elif self.pos_emb is not None:
             offset = 0
             if kv_cache is not None and kv_cache[0] is not None:
