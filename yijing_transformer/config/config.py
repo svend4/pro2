@@ -356,6 +356,12 @@ class YiJingConfig:
     source_router_top_k: int = 2        # how many sources to select per token
     source_routing_weight: float = 0.01 # aux loss weight for load balancing
 
+    # v58: Bridge of Modules — иерархическая медиация между источниками
+    use_bridge_of_modules: bool = False  # мост модулей (замена source_router)
+    bridge_n_heads: int = 2              # головы cross-attention в каждом мосте
+    bridge_dropout: float = 0.1          # dropout в cross-attention мостов
+    bridge_mode: str = 'full'            # 'full' (cross-attn) или 'lightweight' (bilinear)
+
     # v54: Kasatkin 3D embedding
     use_cubic_bias: bool = False        # 3D distance-based attention bias (Касаткин)
     use_cubic_pe: bool = False          # 3D positional encoding (x,y,z in 4×4×4 cube)

@@ -113,6 +113,9 @@ from .routing import (
     GeometricSourceRouter,
     GeometricSourceMixer,
     SequentialSourceCurriculum,
+    PairwiseBridge,
+    LightweightBridge,
+    BridgeOfModules,
 )
 
 # FFN modules
