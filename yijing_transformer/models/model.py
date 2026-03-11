@@ -83,6 +83,9 @@ from .geometry import (
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 
+# v63: NautilusHierarchy — иерархическое упорядочивание геометрических модулей
+from yijing_transformer.models.geometry.nautilus import NautilusHierarchy
+
 # v62: GlyphTokenizer — SOLAN-76 визуальный токенизатор для ConvergenceBridge
 from yijing_transformer.tokenizer.glyph_tokenizer import GlyphTokenizer
 
@@ -921,6 +924,19 @@ class YiJingGPT(nn.Module):
             )
             self._abriale_balance_weight = getattr(cfg, 'abriale_balance_weight', 0.01)
 
+        # v63: NautilusHierarchy — «каждый сверчок знай свой шесток»
+        self.use_nautilus = getattr(cfg, 'use_nautilus', False)
+        if self.use_nautilus:
+            chambers_str = getattr(cfg, 'nautilus_chambers', 'all')
+            enabled = None if chambers_str == 'all' else chambers_str.split(',')
+            self.nautilus = NautilusHierarchy(
+                d_model=cfg.d_model,
+                init_scale=getattr(cfg, 'nautilus_init_scale', 0.01),
+                warmup_steps=getattr(cfg, 'nautilus_warmup_steps', 2000),
+                mode=getattr(cfg, 'nautilus_mode', 'sequential'),
+                enabled_chambers=enabled,
+            )
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -1013,6 +1029,11 @@ class YiJingGPT(nn.Module):
         abriale_info = None
         if self.use_abriale:
             x, abriale_info = self.abriale(x)
+
+        # v63: NautilusHierarchy — иерархическое обогащение от мелкого к крупному
+        nautilus_info = None
+        if self.use_nautilus:
+            x, nautilus_info = self.nautilus(x)
 
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
         logits = self.head(hidden)

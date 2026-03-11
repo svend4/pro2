@@ -415,6 +415,13 @@ class YiJingConfig:
     bridged_bridge_n_heads: int = 2          # головы cross-attention в мостах (full mode)
     bridged_bridge_dropout: float = 0.1      # dropout в мостах
 
+    # v63: NautilusHierarchy — иерархическое упорядочивание геометрических модулей
+    use_nautilus: bool = False            # включить Наутилус-иерархию
+    nautilus_mode: str = 'sequential'     # 'sequential' (каскад) или 'parallel'
+    nautilus_init_scale: float = 0.01     # начальный масштаб камер
+    nautilus_warmup_steps: int = 2000     # шагов для прогрессивной активации
+    nautilus_chambers: str = 'all'        # 'all' или список через запятую
+
     # v57: Абриале — событийно-управляемые изотропные N-местные связи (Пацкин)
     use_abriale: bool = False            # Абриале-слой (событийное управление)
     abriale_d_event: int = 64            # размерность пространства событий

@@ -188,6 +188,11 @@ def train(args):
         sliding_window=getattr(args, 'sliding_window', None),
         use_convergence_bridge=use_glyph or getattr(args, 'convergence_bridge', False),
         use_glyph_tokenizer=use_glyph,
+        use_nautilus=getattr(args, 'nautilus', False),
+        nautilus_mode=getattr(args, 'nautilus_mode', 'sequential'),
+        nautilus_init_scale=getattr(args, 'nautilus_init_scale', 0.01),
+        nautilus_warmup_steps=getattr(args, 'nautilus_warmup_steps', 2000),
+        nautilus_chambers=getattr(args, 'nautilus_chambers', 'all'),
     )
 
     logger = Logger(cfg, args)
@@ -207,7 +212,8 @@ def train(args):
     print(f"Features: RoPE={cfg.use_rope}, SwiGLU={cfg.use_swiglu}, "
           f"BianGua={cfg.use_bian_gua}, MoE={cfg.use_hex_moe}, "
           f"AdaptiveTemp={cfg.adaptive_temp}, "
-          f"GlyphTokenizer={cfg.use_glyph_tokenizer}")
+          f"GlyphTokenizer={cfg.use_glyph_tokenizer}, "
+          f"Nautilus={cfg.use_nautilus}")
     print()
 
     optimizer = torch.optim.AdamW(
@@ -276,6 +282,10 @@ def train(args):
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
             )
 
+        # v63: обновляем Nautilus curriculum step
+        if hasattr(model, 'nautilus'):
+            model.nautilus.set_step(step)
+
         with autocast('cuda', enabled=use_amp, dtype=amp_dtype):
             _, loss, _ = model(xb, yb)
             loss = loss / cfg.grad_accum_steps
@@ -321,6 +331,11 @@ def train(args):
                     cb.token_abstractor.temperature.item(), 4)
                 metrics['convergence/composer_scale'] = round(
                     cb.glyph_composer.scale.item(), 4)
+
+            # v63: Nautilus hierarchy diagnostics
+            if args.model == 'yijing' and hasattr(model, 'nautilus'):
+                nautilus_stats = model.nautilus.get_nautilus_stats()
+                metrics.update(nautilus_stats)
 
             # Interlingua stats (temperature annealing, archetypes)
             if args.model == 'yijing' and hasattr(model, 'archetypal_interlingua'):
@@ -375,6 +390,14 @@ def train(args):
             else:
                 print(f"    glyph_source=learned_projection")
 
+        # v63: Nautilus итоговая диагностика
+        if hasattr(model, 'nautilus'):
+            print(f"\n  NautilusHierarchy (mode={model.nautilus.mode}):")
+            print(f"    residual_gate={model.nautilus.residual_gate.item():.4f}")
+            for name, chamber in zip(model.nautilus.chamber_names, model.nautilus.chambers):
+                s = chamber.get_stats()
+                print(f"    {name}: gate={s['gate_mean']:.4f}, scale={s['scale']:.4f}")
+
     logger.close()
     print("\nTraining complete.")
     return model
@@ -417,6 +440,17 @@ def main():
                         help='Use GlyphTokenizer (SOLAN-76) for ConvergenceBridge Q6 vertices')
     parser.add_argument('--convergence-bridge', action='store_true', default=False,
                         help='Enable ConvergenceBridge (without GlyphTokenizer uses learned projection)')
+    parser.add_argument('--nautilus', action='store_true', default=False,
+                        help='Enable NautilusHierarchy — hierarchical geometric modules')
+    parser.add_argument('--nautilus-mode', type=str, default='sequential',
+                        choices=['sequential', 'parallel'],
+                        help='Nautilus mode: sequential (cascade) or parallel (merge)')
+    parser.add_argument('--nautilus-chambers', type=str, default='all',
+                        help='Comma-separated chamber names or "all"')
+    parser.add_argument('--nautilus-init-scale', type=float, default=0.01,
+                        help='Initial scale for nautilus chambers')
+    parser.add_argument('--nautilus-warmup-steps', type=int, default=2000,
+                        help='Steps for progressive chamber activation')
     args = parser.parse_args()
     train(args)
 
