@@ -1256,7 +1256,7 @@ class ArchetypalInterlingua(nn.Module):
                 temp = self.ternary_temperature
                 encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
                 if encouragement_weight > 0:
-                    activation_loss = -self._last_raw_scores.abs().mean()
+                    activation_loss = -self._last_raw_scores.abs().clamp(max=2.0).mean()
                     loss = loss + 0.02 * encouragement_weight * activation_loss
 
         return loss
@@ -1627,7 +1627,7 @@ class BridgedInterlingua(nn.Module):
                 temp = self.ternary_temperature
                 encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
                 if encouragement_weight > 0:
-                    activation_loss = -self._last_raw_scores.abs().mean()
+                    activation_loss = -self._last_raw_scores.abs().clamp(max=2.0).mean()
                     loss = loss + 0.02 * encouragement_weight * activation_loss
 
         return loss

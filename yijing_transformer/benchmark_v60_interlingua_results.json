@@ -44,7 +44,7 @@
     "interlingua_history": [],
     "category": "architecture"
   },
-  "_last_updated": "2026-03-07 21:50:09",
+  "_last_updated": "2026-03-11 15:28:41",
   "seven_bridge": {
     "name": "seven_bridge",
     "params": 1406268,
@@ -139,131 +139,143 @@
     "name": "interlingua_ternary",
     "params": 2115608,
     "bridge_type": "ArchetypalInterlingua",
-    "final_val": 1.077329154809316,
-    "final_ppl": 2.9368252613134516,
-    "best_val": 1.077329154809316,
-    "best_ppl": 2.9368252613134516,
-    "time": 881.9588198661804,
+    "final_val": 1.0742040912310282,
+    "final_ppl": 2.9276618212774084,
+    "best_val": 1.0742040912310282,
+    "best_ppl": 2.9276618212774084,
+    "time": 687.2519083023071,
     "history": [
       {
         "step": 1,
-        "train": 5.579188823699951,
-        "val": 5.123562558492025,
-        "ppl": 167.9325748207565
+        "train": 5.579012393951416,
+        "val": 5.120476722717285,
+        "ppl": 167.41516121092837
       },
       {
         "step": 200,
-        "train": 1.1134105920791626,
-        "val": 1.1193339586257935,
-        "ppl": 3.062813563238489
+        "train": 1.1164902448654175,
+        "val": 1.1166632692019145,
+        "ppl": 3.05464465261489
       },
       {
         "step": 400,
-        "train": 1.0806267261505127,
-        "val": 1.0853611509005228,
-        "ppl": 2.960508816118136
+        "train": 1.0788204669952393,
+        "val": 1.0848745425542197,
+        "ppl": 2.9590685582680742
       },
       {
         "step": 600,
-        "train": 1.0700691938400269,
-        "val": 1.0778852423032126,
-        "ppl": 2.9384588472792936
+        "train": 1.0681488513946533,
+        "val": 1.0751011371612549,
+        "ppl": 2.93028924668371
       },
       {
         "step": 800,
-        "train": 1.094876766204834,
-        "val": 1.077329154809316,
-        "ppl": 2.9368252613134516
+        "train": 1.090407371520996,
+        "val": 1.0742040912310282,
+        "ppl": 2.9276618212774084
       }
     ],
     "interlingua_stats": {
-      "global_gate": 0.4898059070110321,
-      "scale": 0.058176469057798386,
+      "global_gate": 0.49390164017677307,
+      "scale": 0.07513566315174103,
       "trit_distribution": {
         "pos": 0.0,
-        "zero": 1.0,
-        "neg": 0.0
+        "zero": 0.0,
+        "neg": 1.0
       },
       "uncertainty_budget": 0.30000001192092896,
-      "archetype_usage_mean": 0.0,
-      "archetype_usage_std": 0.0,
-      "active_archetypes": 0,
+      "ternary_temperature": 0.6890576474687263,
+      "ternary_step": 800,
+      "archetype_usage_mean": 0.4839719235897064,
+      "archetype_usage_std": 1.4048598586668959e-06,
+      "active_archetypes": 64,
       "q6_correlation": 1.0
     },
     "interlingua_history": [
       {
         "step": 1,
-        "global_gate": 0.5,
-        "scale": 0.09999900311231613,
+        "global_gate": 0.49975037574768066,
+        "scale": 0.09899908304214478,
         "trit_distribution": {
-          "pos": 0.0,
-          "zero": 1.0,
-          "neg": 0.0
+          "pos": 0.14285714285714285,
+          "zero": 0.0,
+          "neg": 0.8571428571428571
         },
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
+        "ternary_temperature": 0.9999994448348666,
+        "ternary_step": 1,
+        "archetype_usage_mean": 0.0007251172210089862,
+        "archetype_usage_std": 3.887503208233056e-09,
         "active_archetypes": 0,
         "q6_correlation": 1.0
       },
       {
         "step": 200,
-        "global_gate": 0.490071564912796,
-        "scale": 0.059481728821992874,
+        "global_gate": 0.4941366910934448,
+        "scale": 0.07628316432237625,
         "trit_distribution": {
           "pos": 0.0,
-          "zero": 1.0,
-          "neg": 0.0
+          "zero": 0.0,
+          "neg": 1.0
         },
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.9779754323328191,
+        "ternary_step": 200,
+        "archetype_usage_mean": 0.30906927585601807,
+        "archetype_usage_std": 2.2770229861635016e-06,
+        "active_archetypes": 64,
         "q6_correlation": 1.0
       },
       {
         "step": 400,
-        "global_gate": 0.4897367060184479,
-        "scale": 0.057927802205085754,
+        "global_gate": 0.4939001798629761,
+        "scale": 0.07519088685512543,
         "trit_distribution": {
           "pos": 0.0,
-          "zero": 1.0,
-          "neg": 0.0
+          "zero": 0.0,
+          "neg": 1.0
         },
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.9140576474687263,
+        "ternary_step": 400,
+        "archetype_usage_mean": 0.4200969934463501,
+        "archetype_usage_std": 1.3407050118985353e-06,
+        "active_archetypes": 64,
         "q6_correlation": 1.0
       },
       {
         "step": 600,
-        "global_gate": 0.4897717535495758,
-        "scale": 0.05803297087550163,
+        "global_gate": 0.49383342266082764,
+        "scale": 0.07485443353652954,
         "trit_distribution": {
           "pos": 0.0,
-          "zero": 1.0,
-          "neg": 0.0
+          "zero": 0.0,
+          "neg": 1.0
         },
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.8145033635316129,
+        "ternary_step": 600,
+        "archetype_usage_mean": 0.4449944794178009,
+        "archetype_usage_std": 1.4730069324286887e-06,
+        "active_archetypes": 64,
         "q6_correlation": 1.0
       },
       {
         "step": 800,
-        "global_gate": 0.4898059070110321,
-        "scale": 0.058176469057798386,
+        "global_gate": 0.49390164017677307,
+        "scale": 0.07513566315174103,
         "trit_distribution": {
           "pos": 0.0,
-          "zero": 1.0,
-          "neg": 0.0
+          "zero": 0.0,
+          "neg": 1.0
         },
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.6890576474687263,
+        "ternary_step": 800,
+        "archetype_usage_mean": 0.4839719235897064,
+        "archetype_usage_std": 1.4048598586668959e-06,
+        "active_archetypes": 64,
         "q6_correlation": 1.0
       }
     ],
