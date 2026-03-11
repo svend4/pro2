@@ -266,6 +266,9 @@ def train_and_eval(cfg, name, train_data, val_data,
                 extra = (f" [{cls}] gate={gate:.3f} active={active}"
                          f" trits=[+{trit.get('pos',0):.2f}/0:{trit.get('zero',0):.2f}/-{trit.get('neg',0):.2f}]"
                          f" q6={q6_corr:.3f}")
+                # Temperature annealing stats
+                if 'ternary_temperature' in il_stats:
+                    extra += f" temp={il_stats['ternary_temperature']:.3f}"
                 # BridgedInterlingua-specific stats
                 if 'n_bridges' in il_stats:
                     extra += f" bridges={il_stats['n_bridges']}"

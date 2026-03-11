@@ -972,11 +972,15 @@ class ArchetypalInterlingua(nn.Module):
         use_ternary: использовать тернарную квантизацию {-1,0,+1}
         uncertainty_budget: бюджет неопределённости [0, 1] для тернарного режима
         n_heads: число голов readout cross-attention
+        ternary_warmup_steps: шагов temperature annealing (1.0 → min_temp)
+        ternary_min_temp: минимальная температура после annealing
     """
     def __init__(self, d_model: int, n_sources: int,
                  n_archetypes: int = 64, d_bottleneck: int = 0,
                  use_ternary: bool = True, uncertainty_budget: float = 0.3,
-                 n_heads: int = 4):
+                 n_heads: int = 4,
+                 ternary_warmup_steps: int = 2000,
+                 ternary_min_temp: float = 0.1):
         super().__init__()
         self.d_model = d_model
         self.n_sources = n_sources
@@ -1038,8 +1042,8 @@ class ArchetypalInterlingua(nn.Module):
         # Начинаем с мягких тритов (temp=1.0), постепенно хардим (temp→0.1)
         # Это обеспечивает gradient flow на ранних этапах обучения
         if use_ternary:
-            self.ternary_warmup_steps = 2000
-            self.ternary_min_temp = 0.1
+            self.ternary_warmup_steps = ternary_warmup_steps
+            self.ternary_min_temp = ternary_min_temp
             self.register_buffer('_ternary_step', torch.tensor(0, dtype=torch.long))
 
         # Статистика
@@ -1339,7 +1343,9 @@ class BridgedInterlingua(nn.Module):
                  n_archetypes: int = 64, bridge_mode: str = 'lightweight',
                  use_ternary: bool = True, uncertainty_budget: float = 0.3,
                  n_heads: int = 4, bridge_n_heads: int = 2,
-                 bridge_dropout: float = 0.1):
+                 bridge_dropout: float = 0.1,
+                 ternary_warmup_steps: int = 2000,
+                 ternary_min_temp: float = 0.1):
         super().__init__()
         self.d_model = d_model
         self.n_sources = n_sources
@@ -1419,8 +1425,8 @@ class BridgedInterlingua(nn.Module):
 
         # --- Temperature annealing для тернарной квантизации ---
         if use_ternary:
-            self.ternary_warmup_steps = 2000
-            self.ternary_min_temp = 0.1
+            self.ternary_warmup_steps = ternary_warmup_steps
+            self.ternary_min_temp = ternary_min_temp
             self.register_buffer('_ternary_step', torch.tensor(0, dtype=torch.long))
 
         # Статистика
