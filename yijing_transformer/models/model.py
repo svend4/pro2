@@ -69,6 +69,8 @@ from .geometry import (
     SourceSpecializer,
     # v60: Archetypal Interlingua
     ArchetypalInterlingua,
+    # v61: BridgedInterlingua (двойная прослойка)
+    BridgedInterlingua,
     # v54: Kasatkin 3D embedding
     CubicAttentionBias,
     CubicPositionalEncoding,
@@ -407,9 +409,11 @@ class YiJingTransformerLayer(nn.Module):
         self.use_adaptive_bridge = getattr(cfg, 'use_adaptive_bridge', False)
         self.use_source_specialization = getattr(cfg, 'use_source_specialization', False)
         self.use_archetypal_interlingua = getattr(cfg, 'use_archetypal_interlingua', False)
+        self.use_bridged_interlingua = getattr(cfg, 'use_bridged_interlingua', False)
         if (self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules
                 or self.use_abriale_bridge or self.use_adaptive_bridge
-                or self.use_source_specialization or self.use_archetypal_interlingua):
+                or self.use_source_specialization or self.use_archetypal_interlingua
+                or self.use_bridged_interlingua):
             # Count how many enrichment sources are active
             # v58: expanded to cover all 6 mathematical source groups
             self._enrichment_sources = []
@@ -429,7 +433,20 @@ class YiJingTransformerLayer(nn.Module):
                 self._enrichment_sources.append('dual_embedding')
             n_sources = len(self._enrichment_sources)
             if n_sources > 0:
-                if self.use_archetypal_interlingua:
+                if self.use_bridged_interlingua:
+                    # v61: BridgedInterlingua — двойная прослойка (Bridge → Archetype)
+                    self.archetypal_interlingua = BridgedInterlingua(
+                        cfg.d_model, n_sources,
+                        n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
+                        bridge_mode=getattr(cfg, 'bridged_bridge_mode', 'lightweight'),
+                        use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
+                        uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
+                        n_heads=getattr(cfg, 'interlingua_n_heads', 4),
+                        bridge_n_heads=getattr(cfg, 'bridged_bridge_n_heads', 2),
+                        bridge_dropout=getattr(cfg, 'bridged_bridge_dropout', 0.1),
+                    )
+                    self.use_archetypal_interlingua = True  # reuse forward path
+                elif self.use_archetypal_interlingua:
                     # v60: Archetypal Interlingua — hub-and-spoke посредник
                     self.archetypal_interlingua = ArchetypalInterlingua(
                         cfg.d_model, n_sources,

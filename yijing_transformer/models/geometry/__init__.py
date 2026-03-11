@@ -120,6 +120,7 @@ from .routing import (
     AdaptiveBridgeOfModules,
     SourceSpecializer,
     ArchetypalInterlingua,
+    BridgedInterlingua,
 )
 
 # FFN modules

@@ -408,6 +408,12 @@ class YiJingConfig:
     interlingua_uncertainty: float = 0.3     # бюджет неопределённости [0,1]
     interlingua_n_heads: int = 4             # головы cross-attention в readout
 
+    # v61: BridgedInterlingua — двойная прослойка (Module→Bridge→Archetype→Core)
+    use_bridged_interlingua: bool = False   # гибрид мостов + архетипов
+    bridged_bridge_mode: str = 'lightweight'  # 'lightweight' или 'full' для мостов
+    bridged_bridge_n_heads: int = 2          # головы cross-attention в мостах (full mode)
+    bridged_bridge_dropout: float = 0.1      # dropout в мостах
+
     # v57: Абриале — событийно-управляемые изотропные N-местные связи (Пацкин)
     use_abriale: bool = False            # Абриале-слой (событийное управление)
     abriale_d_event: int = 64            # размерность пространства событий
