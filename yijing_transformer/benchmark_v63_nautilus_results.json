@@ -1,0 +1,1295 @@
+{
+  "vanilla": {
+    "name": "vanilla",
+    "params": 838964,
+    "module_type": "none",
+    "final_val": 1.078171968460083,
+    "final_ppl": 2.9393015010913675,
+    "best_val": 1.078171968460083,
+    "best_ppl": 2.9393015010913675,
+    "time": 113.72326755523682,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.591929912567139,
+        "val": 5.179356543223063,
+        "ppl": 177.5685165601929
+      },
+      {
+        "step": 200,
+        "train": 1.118896245956421,
+        "val": 1.1081478675206502,
+        "ppl": 3.028743562011194
+      },
+      {
+        "step": 400,
+        "train": 1.0955513715744019,
+        "val": 1.0821664929389954,
+        "ppl": 2.9510660942228
+      },
+      {
+        "step": 600,
+        "train": 1.0806151628494263,
+        "val": 1.08086097240448,
+        "ppl": 2.94721593061875
+      },
+      {
+        "step": 800,
+        "train": 1.0879169702529907,
+        "val": 1.078171968460083,
+        "ppl": 2.9393015010913675
+      }
+    ],
+    "nautilus_stats": null,
+    "nautilus_history": []
+  },
+  "_last_updated": "2026-03-11 19:36:12",
+  "all_flat": {
+    "name": "all_flat",
+    "params": 1406268,
+    "module_type": "BridgeOfModules",
+    "final_val": 0.45815702378749845,
+    "final_ppl": 1.5811572628716086,
+    "best_val": 0.45815702378749845,
+    "best_ppl": 1.5811572628716086,
+    "time": 575.9981586933136,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.23772668838501,
+        "val": 4.8760478337605795,
+        "ppl": 131.11146427733834
+      },
+      {
+        "step": 200,
+        "train": 1.069102168083191,
+        "val": 1.0862768054008485,
+        "ppl": 2.96322086079734
+      },
+      {
+        "step": 400,
+        "train": 0.8443729281425476,
+        "val": 0.8238584538300832,
+        "ppl": 2.2792773793068184
+      },
+      {
+        "step": 600,
+        "train": 0.6587629318237305,
+        "val": 0.6124952614307404,
+        "ppl": 1.8450294906017584
+      },
+      {
+        "step": 800,
+        "train": 0.5032601952552795,
+        "val": 0.45815702378749845,
+        "ppl": 1.5811572628716086
+      }
+    ],
+    "nautilus_stats": null,
+    "nautilus_history": []
+  },
+  "lean_only": {
+    "name": "lean_only",
+    "params": 1167672,
+    "module_type": "none",
+    "final_val": 0.7489892661571502,
+    "final_ppl": 2.1148613740318547,
+    "best_val": 0.7489892661571502,
+    "best_ppl": 2.1148613740318547,
+    "time": 157.9663200378418,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.556509017944336,
+        "val": 5.044478766123453,
+        "ppl": 155.16340169556824
+      },
+      {
+        "step": 200,
+        "train": 1.1266226768493652,
+        "val": 1.1059742212295531,
+        "ppl": 3.0221672946298073
+      },
+      {
+        "step": 400,
+        "train": 0.9555928111076355,
+        "val": 0.9619669159253438,
+        "ppl": 2.61683851613393
+      },
+      {
+        "step": 600,
+        "train": 0.8204266428947449,
+        "val": 0.7966625352700551,
+        "ppl": 2.2181256451449247
+      },
+      {
+        "step": 800,
+        "train": 0.7717900276184082,
+        "val": 0.7489892661571502,
+        "ppl": 2.1148613740318547
+      }
+    ],
+    "nautilus_stats": null,
+    "nautilus_history": []
+  },
+  "nautilus_seq_all": {
+    "name": "nautilus_seq_all",
+    "params": 1270732,
+    "module_type": "Nautilus(sequential,7ch)",
+    "final_val": 0.7369131286938985,
+    "final_ppl": 2.0894756068765483,
+    "best_val": 0.7369131286938985,
+    "best_ppl": 2.0894756068765483,
+    "time": 595.5499448776245,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.127654075622559,
+        "val": 4.767369238535563,
+        "ppl": 117.60943225939695
+      },
+      {
+        "step": 200,
+        "train": 1.0666805505752563,
+        "val": 1.0518630623817444,
+        "ppl": 2.8629800628983078
+      },
+      {
+        "step": 400,
+        "train": 0.904352605342865,
+        "val": 0.904628207286199,
+        "ppl": 2.47101304760565
+      },
+      {
+        "step": 600,
+        "train": 0.7728103399276733,
+        "val": 0.786615663766861,
+        "ppl": 2.195951996227271
+      },
+      {
+        "step": 800,
+        "train": 0.7439199090003967,
+        "val": 0.7369131286938985,
+        "ppl": 2.0894756068765483
+      }
+    ],
+    "nautilus_stats": {
+      "cube_diagonal": {
+        "gate": 0.5849,
+        "scale": 0.0216
+      },
+      "privileged_axis": {
+        "gate": 0.8207,
+        "scale": 0.0609
+      },
+      "dual_embedding": {
+        "gate": 0.2778,
+        "scale": 0.0026
+      },
+      "d4_equivariant": {
+        "gate": 0.3992,
+        "scale": 0.001
+      },
+      "palace": {
+        "gate": 0.5796,
+        "scale": 0.0224
+      },
+      "heisenberg": {
+        "gate": 0.3222,
+        "scale": 0.0266
+      },
+      "flower_gat": {
+        "gate": 0.166,
+        "scale": 0.0062
+      },
+      "residual_gate": 0.16134637594223022,
+      "mode": "sequential"
+    },
+    "nautilus_history": [
+      {
+        "step": 1,
+        "nautilus/cube_diagonal/gate": 0.515,
+        "nautilus/cube_diagonal/scale": 0.011,
+        "nautilus/privileged_axis/gate": 0.5,
+        "nautilus/privileged_axis/scale": 0.01,
+        "nautilus/dual_embedding/gate": 0.5,
+        "nautilus/dual_embedding/scale": 0.01,
+        "nautilus/d4_equivariant/gate": 0.5,
+        "nautilus/d4_equivariant/scale": 0.01,
+        "nautilus/palace/gate": 0.5,
+        "nautilus/palace/scale": 0.01,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.101,
+        "nautilus/cube_diagonal/curriculum": 0.003,
+        "nautilus/privileged_axis/curriculum": 0.0,
+        "nautilus/dual_embedding/curriculum": 0.0,
+        "nautilus/d4_equivariant/curriculum": 0.0,
+        "nautilus/palace/curriculum": 0.0,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 200,
+        "nautilus/cube_diagonal/gate": 0.663,
+        "nautilus/cube_diagonal/scale": 0.0282,
+        "nautilus/privileged_axis/gate": 0.7896,
+        "nautilus/privileged_axis/scale": 0.0528,
+        "nautilus/dual_embedding/gate": 0.2577,
+        "nautilus/dual_embedding/scale": 0.0023,
+        "nautilus/d4_equivariant/gate": 0.3935,
+        "nautilus/d4_equivariant/scale": -0.0002,
+        "nautilus/palace/gate": 0.5496,
+        "nautilus/palace/scale": 0.025,
+        "nautilus/heisenberg/gate": 0.3436,
+        "nautilus/heisenberg/scale": 0.0196,
+        "nautilus/flower_gat/gate": 0.258,
+        "nautilus/flower_gat/scale": 0.0244,
+        "nautilus/residual_gate": 0.153,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 400,
+        "nautilus/cube_diagonal/gate": 0.6319,
+        "nautilus/cube_diagonal/scale": 0.025,
+        "nautilus/privileged_axis/gate": 0.8025,
+        "nautilus/privileged_axis/scale": 0.0563,
+        "nautilus/dual_embedding/gate": 0.2702,
+        "nautilus/dual_embedding/scale": 0.0026,
+        "nautilus/d4_equivariant/gate": 0.3964,
+        "nautilus/d4_equivariant/scale": 0.0021,
+        "nautilus/palace/gate": 0.5857,
+        "nautilus/palace/scale": 0.0248,
+        "nautilus/heisenberg/gate": 0.3187,
+        "nautilus/heisenberg/scale": 0.024,
+        "nautilus/flower_gat/gate": 0.1656,
+        "nautilus/flower_gat/scale": 0.0063,
+        "nautilus/residual_gate": 0.1665,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 600,
+        "nautilus/cube_diagonal/gate": 0.6033,
+        "nautilus/cube_diagonal/scale": 0.0228,
+        "nautilus/privileged_axis/gate": 0.8155,
+        "nautilus/privileged_axis/scale": 0.0598,
+        "nautilus/dual_embedding/gate": 0.277,
+        "nautilus/dual_embedding/scale": 0.0023,
+        "nautilus/d4_equivariant/gate": 0.3977,
+        "nautilus/d4_equivariant/scale": 0.0013,
+        "nautilus/palace/gate": 0.5808,
+        "nautilus/palace/scale": 0.0228,
+        "nautilus/heisenberg/gate": 0.3221,
+        "nautilus/heisenberg/scale": 0.0263,
+        "nautilus/flower_gat/gate": 0.1662,
+        "nautilus/flower_gat/scale": 0.0057,
+        "nautilus/residual_gate": 0.1637,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 800,
+        "nautilus/cube_diagonal/gate": 0.5849,
+        "nautilus/cube_diagonal/scale": 0.0216,
+        "nautilus/privileged_axis/gate": 0.8207,
+        "nautilus/privileged_axis/scale": 0.0609,
+        "nautilus/dual_embedding/gate": 0.2778,
+        "nautilus/dual_embedding/scale": 0.0026,
+        "nautilus/d4_equivariant/gate": 0.3992,
+        "nautilus/d4_equivariant/scale": 0.001,
+        "nautilus/palace/gate": 0.5796,
+        "nautilus/palace/scale": 0.0224,
+        "nautilus/heisenberg/gate": 0.3222,
+        "nautilus/heisenberg/scale": 0.0266,
+        "nautilus/flower_gat/gate": 0.166,
+        "nautilus/flower_gat/scale": 0.0062,
+        "nautilus/residual_gate": 0.1613,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      }
+    ]
+  },
+  "nautilus_par_all": {
+    "name": "nautilus_par_all",
+    "params": 1385420,
+    "module_type": "Nautilus(parallel,7ch)",
+    "final_val": 0.5878184775511424,
+    "final_ppl": 1.800057263679092,
+    "best_val": 0.5878184775511424,
+    "best_ppl": 1.800057263679092,
+    "time": 599.0044703483582,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.194998264312744,
+        "val": 4.836782360076905,
+        "ppl": 126.06307287499607
+      },
+      {
+        "step": 200,
+        "train": 1.0676661729812622,
+        "val": 1.062052051226298,
+        "ppl": 2.8923000516853747
+      },
+      {
+        "step": 400,
+        "train": 0.909207820892334,
+        "val": 0.8759404480457306,
+        "ppl": 2.401132372715555
+      },
+      {
+        "step": 600,
+        "train": 0.720197319984436,
+        "val": 0.6790410141150157,
+        "ppl": 1.971985718698689
+      },
+      {
+        "step": 800,
+        "train": 0.6389601826667786,
+        "val": 0.5878184775511424,
+        "ppl": 1.800057263679092
+      }
+    ],
+    "nautilus_stats": {
+      "cube_diagonal": {
+        "gate": 0.8768,
+        "scale": 0.0607
+      },
+      "privileged_axis": {
+        "gate": 0.2282,
+        "scale": 0.0038
+      },
+      "dual_embedding": {
+        "gate": 0.3558,
+        "scale": -0.0001
+      },
+      "d4_equivariant": {
+        "gate": 0.4164,
+        "scale": 0.0008
+      },
+      "palace": {
+        "gate": 0.2118,
+        "scale": 0.0051
+      },
+      "heisenberg": {
+        "gate": 0.2173,
+        "scale": 0.013
+      },
+      "flower_gat": {
+        "gate": 0.2567,
+        "scale": 0.0139
+      },
+      "residual_gate": 0.1378767043352127,
+      "mode": "parallel"
+    },
+    "nautilus_history": [
+      {
+        "step": 1,
+        "nautilus/cube_diagonal/gate": 0.4803,
+        "nautilus/cube_diagonal/scale": 0.009,
+        "nautilus/privileged_axis/gate": 0.5,
+        "nautilus/privileged_axis/scale": 0.01,
+        "nautilus/dual_embedding/gate": 0.5,
+        "nautilus/dual_embedding/scale": 0.01,
+        "nautilus/d4_equivariant/gate": 0.5,
+        "nautilus/d4_equivariant/scale": 0.01,
+        "nautilus/palace/gate": 0.5,
+        "nautilus/palace/scale": 0.01,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.099,
+        "nautilus/cube_diagonal/curriculum": 0.003,
+        "nautilus/privileged_axis/curriculum": 0.0,
+        "nautilus/dual_embedding/curriculum": 0.0,
+        "nautilus/d4_equivariant/curriculum": 0.0,
+        "nautilus/palace/curriculum": 0.0,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 200,
+        "nautilus/cube_diagonal/gate": 0.8978,
+        "nautilus/cube_diagonal/scale": 0.0612,
+        "nautilus/privileged_axis/gate": 0.2339,
+        "nautilus/privileged_axis/scale": 0.001,
+        "nautilus/dual_embedding/gate": 0.3383,
+        "nautilus/dual_embedding/scale": -0.0004,
+        "nautilus/d4_equivariant/gate": 0.4022,
+        "nautilus/d4_equivariant/scale": 0.0011,
+        "nautilus/palace/gate": 0.1953,
+        "nautilus/palace/scale": 0.002,
+        "nautilus/heisenberg/gate": 0.2048,
+        "nautilus/heisenberg/scale": 0.0069,
+        "nautilus/flower_gat/gate": 0.3311,
+        "nautilus/flower_gat/scale": 0.0273,
+        "nautilus/residual_gate": 0.149,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 400,
+        "nautilus/cube_diagonal/gate": 0.887,
+        "nautilus/cube_diagonal/scale": 0.0624,
+        "nautilus/privileged_axis/gate": 0.2343,
+        "nautilus/privileged_axis/scale": -0.0001,
+        "nautilus/dual_embedding/gate": 0.3507,
+        "nautilus/dual_embedding/scale": -0.0006,
+        "nautilus/d4_equivariant/gate": 0.4109,
+        "nautilus/d4_equivariant/scale": 0.0019,
+        "nautilus/palace/gate": 0.2048,
+        "nautilus/palace/scale": 0.0022,
+        "nautilus/heisenberg/gate": 0.2086,
+        "nautilus/heisenberg/scale": 0.0064,
+        "nautilus/flower_gat/gate": 0.2458,
+        "nautilus/flower_gat/scale": 0.0152,
+        "nautilus/residual_gate": 0.1515,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 600,
+        "nautilus/cube_diagonal/gate": 0.8745,
+        "nautilus/cube_diagonal/scale": 0.0619,
+        "nautilus/privileged_axis/gate": 0.2339,
+        "nautilus/privileged_axis/scale": 0.0011,
+        "nautilus/dual_embedding/gate": 0.3555,
+        "nautilus/dual_embedding/scale": -0.0004,
+        "nautilus/d4_equivariant/gate": 0.4154,
+        "nautilus/d4_equivariant/scale": 0.0012,
+        "nautilus/palace/gate": 0.212,
+        "nautilus/palace/scale": 0.0035,
+        "nautilus/heisenberg/gate": 0.2146,
+        "nautilus/heisenberg/scale": 0.0083,
+        "nautilus/flower_gat/gate": 0.2546,
+        "nautilus/flower_gat/scale": 0.0129,
+        "nautilus/residual_gate": 0.1409,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 800,
+        "nautilus/cube_diagonal/gate": 0.8768,
+        "nautilus/cube_diagonal/scale": 0.0607,
+        "nautilus/privileged_axis/gate": 0.2282,
+        "nautilus/privileged_axis/scale": 0.0038,
+        "nautilus/dual_embedding/gate": 0.3558,
+        "nautilus/dual_embedding/scale": -0.0001,
+        "nautilus/d4_equivariant/gate": 0.4164,
+        "nautilus/d4_equivariant/scale": 0.0008,
+        "nautilus/palace/gate": 0.2118,
+        "nautilus/palace/scale": 0.0051,
+        "nautilus/heisenberg/gate": 0.2173,
+        "nautilus/heisenberg/scale": 0.013,
+        "nautilus/flower_gat/gate": 0.2567,
+        "nautilus/flower_gat/scale": 0.0139,
+        "nautilus/residual_gate": 0.1379,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      }
+    ]
+  },
+  "nautilus_seq_5": {
+    "name": "nautilus_seq_5",
+    "params": 1269699,
+    "module_type": "Nautilus(sequential,5ch)",
+    "final_val": 0.7760560989379883,
+    "final_ppl": 2.1728856981295097,
+    "best_val": 0.7760560989379883,
+    "best_ppl": 2.1728856981295097,
+    "time": 596.8141264915466,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.164914608001709,
+        "val": 4.783241860071818,
+        "ppl": 119.49109623139995
+      },
+      {
+        "step": 200,
+        "train": 1.0840837955474854,
+        "val": 1.0827065706253052,
+        "ppl": 2.9526603296378515
+      },
+      {
+        "step": 400,
+        "train": 0.9067355394363403,
+        "val": 0.9147388875484467,
+        "ppl": 2.496123397905187
+      },
+      {
+        "step": 600,
+        "train": 0.8341935276985168,
+        "val": 0.809005339940389,
+        "ppl": 2.2456731939982024
+      },
+      {
+        "step": 800,
+        "train": 0.8015790581703186,
+        "val": 0.7760560989379883,
+        "ppl": 2.1728856981295097
+      }
+    ],
+    "nautilus_stats": {
+      "dual_embedding": {
+        "gate": 0.6824,
+        "scale": 0.0312
+      },
+      "d4_equivariant": {
+        "gate": 0.3973,
+        "scale": 0.0212
+      },
+      "palace": {
+        "gate": 0.2614,
+        "scale": 0.0086
+      },
+      "heisenberg": {
+        "gate": 0.2013,
+        "scale": 0.0109
+      },
+      "flower_gat": {
+        "gate": 0.1514,
+        "scale": 0.0059
+      },
+      "residual_gate": 0.01565640978515148,
+      "mode": "sequential"
+    },
+    "nautilus_history": [
+      {
+        "step": 1,
+        "nautilus/dual_embedding/gate": 0.489,
+        "nautilus/dual_embedding/scale": 0.021,
+        "nautilus/d4_equivariant/gate": 0.5,
+        "nautilus/d4_equivariant/scale": 0.01,
+        "nautilus/palace/gate": 0.5,
+        "nautilus/palace/scale": 0.01,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.1009,
+        "nautilus/dual_embedding/curriculum": 0.0015,
+        "nautilus/d4_equivariant/curriculum": 0.0,
+        "nautilus/palace/curriculum": 0.0,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 200,
+        "nautilus/dual_embedding/gate": 0.6962,
+        "nautilus/dual_embedding/scale": 0.0308,
+        "nautilus/d4_equivariant/gate": 0.4049,
+        "nautilus/d4_equivariant/scale": 0.0219,
+        "nautilus/palace/gate": 0.2859,
+        "nautilus/palace/scale": 0.0121,
+        "nautilus/heisenberg/gate": 0.2003,
+        "nautilus/heisenberg/scale": 0.0027,
+        "nautilus/flower_gat/gate": 0.1967,
+        "nautilus/flower_gat/scale": 0.011,
+        "nautilus/residual_gate": 0.0078,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 400,
+        "nautilus/dual_embedding/gate": 0.6865,
+        "nautilus/dual_embedding/scale": 0.0312,
+        "nautilus/d4_equivariant/gate": 0.4046,
+        "nautilus/d4_equivariant/scale": 0.022,
+        "nautilus/palace/gate": 0.2938,
+        "nautilus/palace/scale": 0.0128,
+        "nautilus/heisenberg/gate": 0.1867,
+        "nautilus/heisenberg/scale": 0.0064,
+        "nautilus/flower_gat/gate": 0.1658,
+        "nautilus/flower_gat/scale": 0.0031,
+        "nautilus/residual_gate": 0.0137,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 600,
+        "nautilus/dual_embedding/gate": 0.6853,
+        "nautilus/dual_embedding/scale": 0.0313,
+        "nautilus/d4_equivariant/gate": 0.3985,
+        "nautilus/d4_equivariant/scale": 0.0211,
+        "nautilus/palace/gate": 0.2691,
+        "nautilus/palace/scale": 0.0101,
+        "nautilus/heisenberg/gate": 0.1953,
+        "nautilus/heisenberg/scale": 0.0098,
+        "nautilus/flower_gat/gate": 0.1485,
+        "nautilus/flower_gat/scale": 0.0041,
+        "nautilus/residual_gate": 0.0148,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 800,
+        "nautilus/dual_embedding/gate": 0.6824,
+        "nautilus/dual_embedding/scale": 0.0312,
+        "nautilus/d4_equivariant/gate": 0.3973,
+        "nautilus/d4_equivariant/scale": 0.0212,
+        "nautilus/palace/gate": 0.2614,
+        "nautilus/palace/scale": 0.0086,
+        "nautilus/heisenberg/gate": 0.2013,
+        "nautilus/heisenberg/scale": 0.0109,
+        "nautilus/flower_gat/gate": 0.1514,
+        "nautilus/flower_gat/scale": 0.0059,
+        "nautilus/residual_gate": 0.0157,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      }
+    ]
+  },
+  "nautilus_seq_lean": {
+    "name": "nautilus_seq_lean",
+    "params": 1250622,
+    "module_type": "Nautilus(sequential,2ch)",
+    "final_val": 0.5436664084593456,
+    "final_ppl": 1.7223099921242893,
+    "best_val": 0.5436664084593456,
+    "best_ppl": 1.7223099921242893,
+    "time": 174.47603487968445,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.527083873748779,
+        "val": 5.111223649978638,
+        "ppl": 165.87320148124482
+      },
+      {
+        "step": 200,
+        "train": 1.1102447509765625,
+        "val": 1.0983382741610208,
+        "ppl": 2.999178069094372
+      },
+      {
+        "step": 400,
+        "train": 0.9320646524429321,
+        "val": 0.8942203183968862,
+        "ppl": 2.445428390449212
+      },
+      {
+        "step": 600,
+        "train": 0.7058760523796082,
+        "val": 0.6726484159628551,
+        "ppl": 1.9594198136204797
+      },
+      {
+        "step": 800,
+        "train": 0.6165551543235779,
+        "val": 0.5436664084593456,
+        "ppl": 1.7223099921242893
+      }
+    ],
+    "nautilus_stats": {
+      "heisenberg": {
+        "gate": 0.6665,
+        "scale": 0.0415
+      },
+      "flower_gat": {
+        "gate": 0.3922,
+        "scale": 0.0342
+      },
+      "residual_gate": 0.1595727801322937,
+      "mode": "sequential"
+    },
+    "nautilus_history": [
+      {
+        "step": 1,
+        "nautilus/heisenberg/gate": 0.4803,
+        "nautilus/heisenberg/scale": 0.036,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.101,
+        "nautilus/heisenberg/curriculum": 0.001,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 200,
+        "nautilus/heisenberg/gate": 0.7072,
+        "nautilus/heisenberg/scale": 0.044,
+        "nautilus/flower_gat/gate": 0.3516,
+        "nautilus/flower_gat/scale": 0.0303,
+        "nautilus/residual_gate": 0.1587,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 400,
+        "nautilus/heisenberg/gate": 0.6935,
+        "nautilus/heisenberg/scale": 0.0446,
+        "nautilus/flower_gat/gate": 0.3689,
+        "nautilus/flower_gat/scale": 0.0317,
+        "nautilus/residual_gate": 0.1737,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 600,
+        "nautilus/heisenberg/gate": 0.6781,
+        "nautilus/heisenberg/scale": 0.0436,
+        "nautilus/flower_gat/gate": 0.3777,
+        "nautilus/flower_gat/scale": 0.032,
+        "nautilus/residual_gate": 0.1662,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 800,
+        "nautilus/heisenberg/gate": 0.6665,
+        "nautilus/heisenberg/scale": 0.0415,
+        "nautilus/flower_gat/gate": 0.3922,
+        "nautilus/flower_gat/scale": 0.0342,
+        "nautilus/residual_gate": 0.1596,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      }
+    ]
+  },
+  "nautilus_seq_mid": {
+    "name": "nautilus_seq_mid",
+    "params": 1267228,
+    "module_type": "Nautilus(sequential,4ch)",
+    "final_val": 0.8333229084809621,
+    "final_ppl": 2.3009519036838846,
+    "best_val": 0.8333229084809621,
+    "best_ppl": 2.3009519036838846,
+    "time": 564.3547849655151,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.103586196899414,
+        "val": 4.739366738001506,
+        "ppl": 114.36175778930911
+      },
+      {
+        "step": 200,
+        "train": 1.1120232343673706,
+        "val": 1.0993977069854737,
+        "ppl": 3.0023571805172944
+      },
+      {
+        "step": 400,
+        "train": 0.9605844616889954,
+        "val": 0.9659072240193685,
+        "ppl": 2.627170007381853
+      },
+      {
+        "step": 600,
+        "train": 0.8684508204460144,
+        "val": 0.8573778967062632,
+        "ppl": 2.3569723590391747
+      },
+      {
+        "step": 800,
+        "train": 0.8272700309753418,
+        "val": 0.8333229084809621,
+        "ppl": 2.3009519036838846
+      }
+    ],
+    "nautilus_stats": {
+      "d4_equivariant": {
+        "gate": 0.7185,
+        "scale": 0.0628
+      },
+      "palace": {
+        "gate": 0.24,
+        "scale": 0.0104
+      },
+      "heisenberg": {
+        "gate": 0.2546,
+        "scale": 0.0115
+      },
+      "flower_gat": {
+        "gate": 0.189,
+        "scale": 0.0108
+      },
+      "residual_gate": 0.020457573235034943,
+      "mode": "sequential"
+    },
+    "nautilus_history": [
+      {
+        "step": 1,
+        "nautilus/d4_equivariant/gate": 0.4984,
+        "nautilus/d4_equivariant/scale": 0.024,
+        "nautilus/palace/gate": 0.5,
+        "nautilus/palace/scale": 0.01,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.0991,
+        "nautilus/d4_equivariant/curriculum": 0.001,
+        "nautilus/palace/curriculum": 0.0,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 200,
+        "nautilus/d4_equivariant/gate": 0.7513,
+        "nautilus/d4_equivariant/scale": 0.06,
+        "nautilus/palace/gate": 0.2371,
+        "nautilus/palace/scale": 0.0117,
+        "nautilus/heisenberg/gate": 0.1853,
+        "nautilus/heisenberg/scale": 0.0051,
+        "nautilus/flower_gat/gate": 0.1999,
+        "nautilus/flower_gat/scale": 0.0105,
+        "nautilus/residual_gate": 0.0149,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 400,
+        "nautilus/d4_equivariant/gate": 0.7326,
+        "nautilus/d4_equivariant/scale": 0.0621,
+        "nautilus/palace/gate": 0.2582,
+        "nautilus/palace/scale": 0.0127,
+        "nautilus/heisenberg/gate": 0.205,
+        "nautilus/heisenberg/scale": 0.0081,
+        "nautilus/flower_gat/gate": 0.1807,
+        "nautilus/flower_gat/scale": 0.0054,
+        "nautilus/residual_gate": 0.0185,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 600,
+        "nautilus/d4_equivariant/gate": 0.7242,
+        "nautilus/d4_equivariant/scale": 0.0618,
+        "nautilus/palace/gate": 0.2404,
+        "nautilus/palace/scale": 0.0112,
+        "nautilus/heisenberg/gate": 0.2387,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.184,
+        "nautilus/flower_gat/scale": 0.0081,
+        "nautilus/residual_gate": 0.0195,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 800,
+        "nautilus/d4_equivariant/gate": 0.7185,
+        "nautilus/d4_equivariant/scale": 0.0628,
+        "nautilus/palace/gate": 0.24,
+        "nautilus/palace/scale": 0.0104,
+        "nautilus/heisenberg/gate": 0.2546,
+        "nautilus/heisenberg/scale": 0.0115,
+        "nautilus/flower_gat/gate": 0.189,
+        "nautilus/flower_gat/scale": 0.0108,
+        "nautilus/residual_gate": 0.0205,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      }
+    ]
+  },
+  "nautilus_seq_warmup": {
+    "name": "nautilus_seq_warmup",
+    "params": 1270732,
+    "module_type": "Nautilus(sequential,7ch)",
+    "final_val": 0.8427150209744771,
+    "final_ppl": 2.322664506802251,
+    "best_val": 0.8427150209744771,
+    "best_ppl": 2.322664506802251,
+    "time": 546.9102191925049,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.1361260414123535,
+        "val": 4.769439665476481,
+        "ppl": 117.85318624678975
+      },
+      {
+        "step": 200,
+        "train": 1.2365590333938599,
+        "val": 1.1941469470659891,
+        "ppl": 3.3007408625095063
+      },
+      {
+        "step": 400,
+        "train": 0.9763555526733398,
+        "val": 0.980259503920873,
+        "ppl": 2.665147768494239
+      },
+      {
+        "step": 600,
+        "train": 0.879133939743042,
+        "val": 0.8733862638473511,
+        "ppl": 2.3950072640088274
+      },
+      {
+        "step": 800,
+        "train": 0.8337019681930542,
+        "val": 0.8427150209744771,
+        "ppl": 2.322664506802251
+      }
+    ],
+    "nautilus_stats": {
+      "cube_diagonal": {
+        "gate": 0.257,
+        "scale": -0.0096
+      },
+      "privileged_axis": {
+        "gate": 0.3067,
+        "scale": -0.0056
+      },
+      "dual_embedding": {
+        "gate": 0.141,
+        "scale": 0.0051
+      },
+      "d4_equivariant": {
+        "gate": 0.363,
+        "scale": 0.0116
+      },
+      "palace": {
+        "gate": 0.4037,
+        "scale": 0.0196
+      },
+      "heisenberg": {
+        "gate": 0.2873,
+        "scale": 0.0043
+      },
+      "flower_gat": {
+        "gate": 0.3448,
+        "scale": 0.0318
+      },
+      "residual_gate": 0.012320159003138542,
+      "mode": "sequential"
+    },
+    "nautilus_history": [
+      {
+        "step": 1,
+        "nautilus/cube_diagonal/gate": 0.5148,
+        "nautilus/cube_diagonal/scale": 0.011,
+        "nautilus/privileged_axis/gate": 0.5,
+        "nautilus/privileged_axis/scale": 0.01,
+        "nautilus/dual_embedding/gate": 0.5,
+        "nautilus/dual_embedding/scale": 0.01,
+        "nautilus/d4_equivariant/gate": 0.5,
+        "nautilus/d4_equivariant/scale": 0.01,
+        "nautilus/palace/gate": 0.5,
+        "nautilus/palace/scale": 0.01,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.101,
+        "nautilus/cube_diagonal/curriculum": 0.0003,
+        "nautilus/privileged_axis/curriculum": 0.0,
+        "nautilus/dual_embedding/curriculum": 0.0,
+        "nautilus/d4_equivariant/curriculum": 0.0,
+        "nautilus/palace/curriculum": 0.0,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 200,
+        "nautilus/cube_diagonal/gate": 0.2041,
+        "nautilus/cube_diagonal/scale": -0.0066,
+        "nautilus/privileged_axis/gate": 0.3116,
+        "nautilus/privileged_axis/scale": 0.0013,
+        "nautilus/dual_embedding/gate": 0.3568,
+        "nautilus/dual_embedding/scale": 0.007,
+        "nautilus/d4_equivariant/gate": 0.5,
+        "nautilus/d4_equivariant/scale": 0.01,
+        "nautilus/palace/gate": 0.5,
+        "nautilus/palace/scale": 0.01,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.055,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 0.25,
+        "nautilus/d4_equivariant/curriculum": 0.0,
+        "nautilus/palace/curriculum": 0.0,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 400,
+        "nautilus/cube_diagonal/gate": 0.2353,
+        "nautilus/cube_diagonal/scale": -0.0076,
+        "nautilus/privileged_axis/gate": 0.2798,
+        "nautilus/privileged_axis/scale": -0.0037,
+        "nautilus/dual_embedding/gate": 0.1281,
+        "nautilus/dual_embedding/scale": 0.0044,
+        "nautilus/d4_equivariant/gate": 0.3534,
+        "nautilus/d4_equivariant/scale": 0.0096,
+        "nautilus/palace/gate": 0.3947,
+        "nautilus/palace/scale": 0.016,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.0352,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 0.75,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 600,
+        "nautilus/cube_diagonal/gate": 0.2545,
+        "nautilus/cube_diagonal/scale": -0.0099,
+        "nautilus/privileged_axis/gate": 0.3091,
+        "nautilus/privileged_axis/scale": -0.006,
+        "nautilus/dual_embedding/gate": 0.138,
+        "nautilus/dual_embedding/scale": 0.005,
+        "nautilus/d4_equivariant/gate": 0.3591,
+        "nautilus/d4_equivariant/scale": 0.0108,
+        "nautilus/palace/gate": 0.3992,
+        "nautilus/palace/scale": 0.0187,
+        "nautilus/heisenberg/gate": 0.2853,
+        "nautilus/heisenberg/scale": 0.004,
+        "nautilus/flower_gat/gate": 0.3534,
+        "nautilus/flower_gat/scale": 0.0323,
+        "nautilus/residual_gate": 0.0146,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 800,
+        "nautilus/cube_diagonal/gate": 0.257,
+        "nautilus/cube_diagonal/scale": -0.0096,
+        "nautilus/privileged_axis/gate": 0.3067,
+        "nautilus/privileged_axis/scale": -0.0056,
+        "nautilus/dual_embedding/gate": 0.141,
+        "nautilus/dual_embedding/scale": 0.0051,
+        "nautilus/d4_equivariant/gate": 0.363,
+        "nautilus/d4_equivariant/scale": 0.0116,
+        "nautilus/palace/gate": 0.4037,
+        "nautilus/palace/scale": 0.0196,
+        "nautilus/heisenberg/gate": 0.2873,
+        "nautilus/heisenberg/scale": 0.0043,
+        "nautilus/flower_gat/gate": 0.3448,
+        "nautilus/flower_gat/scale": 0.0318,
+        "nautilus/residual_gate": 0.0123,
+        "nautilus/cube_diagonal/curriculum": 1.0,
+        "nautilus/privileged_axis/curriculum": 1.0,
+        "nautilus/dual_embedding/curriculum": 1.0,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      }
+    ]
+  },
+  "nautilus_par_mid": {
+    "name": "nautilus_par_mid",
+    "params": 1332764,
+    "module_type": "Nautilus(parallel,4ch)",
+    "final_val": 0.8278129518032074,
+    "final_ppl": 2.288308622330338,
+    "best_val": 0.8278129518032074,
+    "best_ppl": 2.288308622330338,
+    "time": 563.7102608680725,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.145144939422607,
+        "val": 4.815589189529419,
+        "ppl": 123.41950837425577
+      },
+      {
+        "step": 200,
+        "train": 1.0945637226104736,
+        "val": 1.087188978989919,
+        "ppl": 2.965925065769814
+      },
+      {
+        "step": 400,
+        "train": 0.9672972559928894,
+        "val": 0.9595912039279938,
+        "ppl": 2.610629040359597
+      },
+      {
+        "step": 600,
+        "train": 0.8658044338226318,
+        "val": 0.8612363417943318,
+        "ppl": 2.3660841748767356
+      },
+      {
+        "step": 800,
+        "train": 0.8592454791069031,
+        "val": 0.8278129518032074,
+        "ppl": 2.288308622330338
+      }
+    ],
+    "nautilus_stats": {
+      "d4_equivariant": {
+        "gate": 0.6228,
+        "scale": 0.0394
+      },
+      "palace": {
+        "gate": 0.1557,
+        "scale": 0.0168
+      },
+      "heisenberg": {
+        "gate": 0.178,
+        "scale": 0.0123
+      },
+      "flower_gat": {
+        "gate": 0.1668,
+        "scale": 0.0011
+      },
+      "residual_gate": 0.02544473111629486,
+      "mode": "parallel"
+    },
+    "nautilus_history": [
+      {
+        "step": 1,
+        "nautilus/d4_equivariant/gate": 0.4655,
+        "nautilus/d4_equivariant/scale": 0.0248,
+        "nautilus/palace/gate": 0.5,
+        "nautilus/palace/scale": 0.01,
+        "nautilus/heisenberg/gate": 0.5,
+        "nautilus/heisenberg/scale": 0.01,
+        "nautilus/flower_gat/gate": 0.5,
+        "nautilus/flower_gat/scale": 0.01,
+        "nautilus/residual_gate": 0.0999,
+        "nautilus/d4_equivariant/curriculum": 0.001,
+        "nautilus/palace/curriculum": 0.0,
+        "nautilus/heisenberg/curriculum": 0.0,
+        "nautilus/flower_gat/curriculum": 0.0
+      },
+      {
+        "step": 200,
+        "nautilus/d4_equivariant/gate": 0.6468,
+        "nautilus/d4_equivariant/scale": 0.0403,
+        "nautilus/palace/gate": 0.1531,
+        "nautilus/palace/scale": 0.0167,
+        "nautilus/heisenberg/gate": 0.1751,
+        "nautilus/heisenberg/scale": 0.009,
+        "nautilus/flower_gat/gate": 0.1698,
+        "nautilus/flower_gat/scale": 0.0086,
+        "nautilus/residual_gate": 0.0173,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 400,
+        "nautilus/d4_equivariant/gate": 0.6335,
+        "nautilus/d4_equivariant/scale": 0.0401,
+        "nautilus/palace/gate": 0.1493,
+        "nautilus/palace/scale": 0.0158,
+        "nautilus/heisenberg/gate": 0.1695,
+        "nautilus/heisenberg/scale": 0.0087,
+        "nautilus/flower_gat/gate": 0.1606,
+        "nautilus/flower_gat/scale": 0.0013,
+        "nautilus/residual_gate": 0.0208,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 600,
+        "nautilus/d4_equivariant/gate": 0.6242,
+        "nautilus/d4_equivariant/scale": 0.0395,
+        "nautilus/palace/gate": 0.1523,
+        "nautilus/palace/scale": 0.0165,
+        "nautilus/heisenberg/gate": 0.1737,
+        "nautilus/heisenberg/scale": 0.0112,
+        "nautilus/flower_gat/gate": 0.1645,
+        "nautilus/flower_gat/scale": 0.001,
+        "nautilus/residual_gate": 0.0243,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      },
+      {
+        "step": 800,
+        "nautilus/d4_equivariant/gate": 0.6228,
+        "nautilus/d4_equivariant/scale": 0.0394,
+        "nautilus/palace/gate": 0.1557,
+        "nautilus/palace/scale": 0.0168,
+        "nautilus/heisenberg/gate": 0.178,
+        "nautilus/heisenberg/scale": 0.0123,
+        "nautilus/flower_gat/gate": 0.1668,
+        "nautilus/flower_gat/scale": 0.0011,
+        "nautilus/residual_gate": 0.0254,
+        "nautilus/d4_equivariant/curriculum": 1.0,
+        "nautilus/palace/curriculum": 1.0,
+        "nautilus/heisenberg/curriculum": 1.0,
+        "nautilus/flower_gat/curriculum": 1.0
+      }
+    ]
+  }
+}
