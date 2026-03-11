@@ -368,6 +368,7 @@ class YiJingConfig:
 
     # v55: Convergence Bridge — гибридная иерархия глифов ↔ токенов
     use_convergence_bridge: bool = False  # конвергентный мост глиф↔токен
+    use_glyph_tokenizer: bool = False     # использовать GlyphTokenizer (SOLAN-76) вместо learned tok_to_q6
     convergence_n_clusters: int = 64      # число кластеров (64 = гексаграммы)
     convergence_window_size: int = 4      # окно для GlyphComposer
     convergence_stride: int = 2           # шаг окна
