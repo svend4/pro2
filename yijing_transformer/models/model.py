@@ -82,6 +82,21 @@ from .geometry import (
 )
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
+from yijing_transformer.tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
+
+
+def _build_glyph_q6_table() -> torch.Tensor:
+    """Build (256, 6) lookup: byte → Q6 vertex from GlyphTokenizer.
+
+    76 SOLAN chars get their geometric Q6 coords {-1,+1}^6.
+    Remaining bytes get zeros (no prior).
+    """
+    table = torch.zeros(256, 6)
+    for ch, bits in _SOLAN_MAP.items():
+        byte_val = ord(ch)
+        if byte_val < 256:
+            table[byte_val] = torch.tensor(_bits_to_vertex(bits), dtype=torch.float32)
+    return table
 
 # v62: GlyphTokenizer — SOLAN-76 визуальный токенизатор для ConvergenceBridge
 from yijing_transformer.tokenizer.glyph_tokenizer import GlyphTokenizer
@@ -888,6 +903,8 @@ class YiJingGPT(nn.Module):
                 n_compose_layers=getattr(cfg, 'convergence_compose_layers', 1),
                 n_heads=getattr(cfg, 'convergence_n_heads', 4),
             )
+            # Проекция token embeddings → Q6 вершины (learned)
+            self.tok_to_q6 = nn.Linear(cfg.d_model, 6, bias=False)
             if self.use_glyph_tokenizer:
                 # v62: Q6 lookup table из GlyphTokenizer (SOLAN-76)
                 # Каждый token_id → фиксированная Q6 вершина {-1,+1}^6
@@ -896,6 +913,14 @@ class YiJingGPT(nn.Module):
             else:
                 # Fallback: learned projection embedding → Q6
                 self.tok_to_q6 = nn.Linear(cfg.d_model, 6, bias=False)
+
+            # v63: Geometric prior — SOLAN Q6 lookup + learnable gate
+            self.use_glyph_prior = getattr(cfg, 'use_glyph_prior', False)
+            if self.use_glyph_prior:
+                # (256, 6) fixed table: byte → Q6 vertex from GlyphTokenizer
+                self.register_buffer('glyph_q6_table', _build_glyph_q6_table())
+                # Learnable gate: 0 = only learned, 1 = only prior
+                self.glyph_prior_gate = nn.Parameter(torch.tensor(0.5))
 
         # v56: Matrix Grammar — 2D матричная грамматика (Atamiri/Аймара)
         self.use_matrix_grammar = getattr(cfg, 'use_matrix_grammar', False)
@@ -996,6 +1021,22 @@ class YiJingGPT(nn.Module):
         # v55/v62: Convergence Bridge — обогащение через гибридную иерархию
         convergence_info = None
         if self.use_convergence_bridge:
+            # Learned projection: embeddings → soft Q6
+            learned_q6 = torch.tanh(self.tok_to_q6(x))  # (B, T, 6)
+
+            if self.use_glyph_prior:
+                # v63: Blend with geometric prior from GlyphTokenizer
+                # idx has byte values 0-255 → lookup fixed Q6 table
+                prior_q6 = self.glyph_q6_table[idx]  # (B, T, 6), values in {-1,0,+1}
+                # Has-prior mask: non-zero rows = SOLAN chars with known geometry
+                has_prior = (prior_q6.abs().sum(dim=-1, keepdim=True) > 0).float()
+                # Gate blends learned ↔ prior (only where prior exists)
+                gate = torch.sigmoid(self.glyph_prior_gate)
+                glyph_vertices = learned_q6 * (1 - gate * has_prior) + prior_q6 * gate * has_prior
+            else:
+                glyph_vertices = learned_q6
+
+            x, convergence_info = self.convergence_bridge(x, glyph_vertices)
             if glyph_vertices is not None:
                 # Внешние Q6 вершины (переданы из training loop)
                 gv = glyph_vertices

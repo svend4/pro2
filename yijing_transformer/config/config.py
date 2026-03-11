@@ -375,6 +375,9 @@ class YiJingConfig:
     convergence_compose_layers: int = 1   # слои self-attention в GlyphComposer
     convergence_n_heads: int = 4          # головы cross-attention в ConvergenceLayer
 
+    # v63: Geometric prior — SOLAN Q6 таблица как индуктивный bias
+    use_glyph_prior: bool = False         # blend learned Q6 с фиксированным SOLAN lookup
+
     # v56: Ternary Quantizer — трёхзначная логика {-1,0,+1} (Лукасевич/Аймара/变爻)
     use_ternary_quantizer: bool = False   # использовать тернарный квантизатор
     ternary_mode: str = 'factored'        # 'full' (729), 'factored' (2×27), 'sparse'
