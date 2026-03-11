@@ -11,6 +11,8 @@ v61 Benchmark: BridgedInterlingua (двойная прослойка) vs v58 Bri
   H2: BridgedInterlingua сохраняет семантику лучше v58 (архетипы дают единый язык)
   H3: Тернарное голосование по bridge-выходам точнее (меньше шума после медиации)
   H4: Двойная прослойка не хуже одинарных по скорости (O(N) для обоих слоёв)
+  H5: Paired bit (строительная логика) лучше обычных тритов (нет STE-ловушки)
+  H6: Paired bit активирует больше архетипов (градиент течёт через оба бита)
 
 Использование:
   python benchmark_v61_bridged_interlingua.py --group all
@@ -158,6 +160,26 @@ CONFIGS = {
         interlingua_n_archetypes=64,
         interlingua_n_heads=4,
     ),
+    # v62: Строительная логика — трит из пары битов
+    'bridged_paired_bit': dict(
+        **ALL_SOURCES,
+        use_bridged_interlingua=True,
+        bridged_bridge_mode='lightweight',
+        interlingua_use_ternary=True,
+        interlingua_use_paired_bit=True,
+        interlingua_uncertainty=0.3,
+        interlingua_n_archetypes=64,
+        interlingua_n_heads=4,
+    ),
+    'v60_paired_bit': dict(
+        **ALL_SOURCES,
+        use_archetypal_interlingua=True,
+        interlingua_use_ternary=True,
+        interlingua_use_paired_bit=True,
+        interlingua_uncertainty=0.3,
+        interlingua_n_archetypes=64,
+        interlingua_n_heads=4,
+    ),
 }
 
 CONFIG_ORDER = [
@@ -165,6 +187,7 @@ CONFIG_ORDER = [
     'v60_interlingua',
     'bridged_lightweight', 'bridged_full',
     'bridged_no_ternary', 'bridged_high_uncertainty',
+    'bridged_paired_bit', 'v60_paired_bit',
 ]
 
 
@@ -266,6 +289,10 @@ def train_and_eval(cfg, name, train_data, val_data,
                 extra = (f" [{cls}] gate={gate:.3f} active={active}"
                          f" trits=[+{trit.get('pos',0):.2f}/0:{trit.get('zero',0):.2f}/-{trit.get('neg',0):.2f}]"
                          f" q6={q6_corr:.3f}")
+                # Paired bit direction stats (весна/осень)
+                dir_stats = il_stats.get('direction_stats')
+                if dir_stats and il_stats.get('paired_bit'):
+                    extra += f" dir=[↑{dir_stats.get('spring',0):.2f}/↓{dir_stats.get('autumn',0):.2f}]"
                 # Temperature annealing stats
                 if 'ternary_temperature' in il_stats:
                     extra += f" temp={il_stats['ternary_temperature']:.3f}"
@@ -382,8 +409,8 @@ def print_summary():
                   and results[n].get('interlingua_stats')]
     if il_configs:
         print(f"\n  Interlingua / BridgedInterlingua Diagnostics:")
-        print(f"  {'Config':<28} {'Class':<22} {'Gate':>6} {'Active':>8} {'Q6':>6} {'Trits(+/0/-)':>16}")
-        print("  " + "-" * 92)
+        print(f"  {'Config':<28} {'Class':<22} {'Gate':>6} {'Active':>8} {'Q6':>6} {'Trits(+/0/-)':>16} {'Dir(↑/↓)':>12}")
+        print("  " + "-" * 104)
         for name in il_configs:
             r = results[name]
             il = r.get('interlingua_stats', {})
@@ -393,7 +420,11 @@ def print_summary():
             q6 = il.get('q6_correlation', 0)
             trit = il.get('trit_distribution', {})
             trit_str = f"{trit.get('pos',0):.2f}/{trit.get('zero',0):.2f}/{trit.get('neg',0):.2f}"
-            print(f"  {name:<28} {cls:<22} {gate:>6.3f} {str(active):>8} {q6:>6.3f} {trit_str:>16}")
+            dir_str = ""
+            if il.get('paired_bit'):
+                ds = il.get('direction_stats', {})
+                dir_str = f"{ds.get('spring',0):.2f}/{ds.get('autumn',0):.2f}"
+            print(f"  {name:<28} {cls:<22} {gate:>6.3f} {str(active):>8} {q6:>6.3f} {trit_str:>16} {dir_str:>12}")
 
     # Hypothesis testing
     print(f"\n  Hypothesis Testing:")
@@ -418,6 +449,19 @@ def print_summary():
         overhead = (bridged_lw_time / v60_time - 1) * 100
         print(f"  H4 (speed OK):        {'CONFIRMED' if overhead < 30 else 'REJECTED'}"
               f"  (overhead: {overhead:+.1f}%)")
+
+    # H5: Paired bit (строительная логика) лучше обычных тритов
+    bridged_pb = results.get('bridged_paired_bit', {}).get('best_ppl')
+    if bridged_lw is not None and bridged_pb is not None:
+        print(f"  H5 (paired_bit > ternary): {'CONFIRMED' if bridged_pb < bridged_lw else 'REJECTED'}"
+              f"  ({bridged_pb:.2f} vs {bridged_lw:.2f})")
+
+    # H6: Paired bit активирует больше архетипов (нет STE-ловушки)
+    bridged_lw_active = results.get('bridged_lightweight', {}).get('interlingua_stats', {}).get('active_archetypes')
+    bridged_pb_active = results.get('bridged_paired_bit', {}).get('interlingua_stats', {}).get('active_archetypes')
+    if bridged_lw_active is not None and bridged_pb_active is not None:
+        print(f"  H6 (more active archetypes): {'CONFIRMED' if bridged_pb_active > bridged_lw_active else 'REJECTED'}"
+              f"  ({bridged_pb_active} vs {bridged_lw_active})")
 
     done = sum(1 for n in CONFIG_ORDER if n in results)
     total = len(CONFIG_ORDER)
@@ -446,7 +490,8 @@ def main():
             names = ['vanilla', 'v58_bridge_lightweight', 'v58_bridge_full', 'v60_interlingua']
         elif args.group == 'bridged':
             names = ['bridged_lightweight', 'bridged_full',
-                     'bridged_no_ternary', 'bridged_high_uncertainty']
+                     'bridged_no_ternary', 'bridged_high_uncertainty',
+                     'bridged_paired_bit', 'v60_paired_bit']
         else:  # all
             names = CONFIG_ORDER
 
