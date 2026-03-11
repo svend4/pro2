@@ -141,6 +141,13 @@ from .convergence import (
     MatrixGrammar,
 )
 
+# Nautilus Hierarchy: иерархическое упорядочивание геометрических модулей
+from .nautilus import (
+    NautilusChamber,
+    NautilusHierarchy,
+    NautilusScheduler,
+)
+
 # Core: ternary hypercube
 from .core import (
     generate_ternary_hypercube,
