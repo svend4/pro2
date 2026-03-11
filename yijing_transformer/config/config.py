@@ -386,6 +386,34 @@ class YiJingConfig:
     matrix_grammar_cols: int = 8          # столбцы (семантические слоты)
     matrix_grammar_heads: int = 4         # головы axial attention
 
+    # v59: AbrialeBridge — гибрид Abriale + Bridge (событийная медиация)
+    use_abriale_bridge: bool = False      # AbrialeBridge вместо BridgeOfModules
+    abriale_bridge_d_event: int = 64      # размерность событий в AbrialeBridge
+    abriale_bridge_n_rules: int = 64      # число правил Абриале в bridge
+    abriale_bridge_arity: int = 2         # арность N-местных связей (2 или 3)
+
+    # v59: Adaptive Bridge — адаптивная глубина bridge
+    use_adaptive_bridge: bool = False     # адаптивная глубина bridge
+    adaptive_bridge_max_levels: int = 0   # макс. уровней (0 = полное дерево)
+
+    # v59: Source specialization — доменная специализация источников
+    use_source_specialization: bool = False  # специализация источников по доменам
+    n_domains: int = 4                       # число доменов для специализации
+
+    # v60: Archetypal Interlingua — hub-and-spoke посредник (Atamiri/Aymara siwi)
+    use_archetypal_interlingua: bool = False  # интерлингва вместо мостов
+    interlingua_n_archetypes: int = 64       # число архетипов (64 = гексаграммы)
+    interlingua_d_bottleneck: int = 0        # bottleneck в кодировщиках (0 = d//4)
+    interlingua_use_ternary: bool = True     # тернарная квантизация {-1,0,+1}
+    interlingua_uncertainty: float = 0.3     # бюджет неопределённости [0,1]
+    interlingua_n_heads: int = 4             # головы cross-attention в readout
+
+    # v61: BridgedInterlingua — двойная прослойка (Module→Bridge→Archetype→Core)
+    use_bridged_interlingua: bool = False   # гибрид мостов + архетипов
+    bridged_bridge_mode: str = 'lightweight'  # 'lightweight' или 'full' для мостов
+    bridged_bridge_n_heads: int = 2          # головы cross-attention в мостах (full mode)
+    bridged_bridge_dropout: float = 0.1      # dropout в мостах
+
     # v57: Абриале — событийно-управляемые изотропные N-местные связи (Пацкин)
     use_abriale: bool = False            # Абриале-слой (событийное управление)
     abriale_d_event: int = 64            # размерность пространства событий

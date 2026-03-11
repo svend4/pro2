@@ -1,0 +1,1052 @@
+{
+  "vanilla": {
+    "name": "vanilla",
+    "params": 838964,
+    "bridge_type": "none",
+    "final_val": 1.0782447576522827,
+    "final_ppl": 2.9395154582600536,
+    "best_val": 1.0782447576522827,
+    "best_ppl": 2.9395154582600536,
+    "time": 107.97374033927917,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.591929912567139,
+        "val": 5.179356559117635,
+        "ppl": 177.56851938256847
+      },
+      {
+        "step": 200,
+        "train": 1.1241354942321777,
+        "val": 1.1091314991315206,
+        "ppl": 3.031724195602398
+      },
+      {
+        "step": 400,
+        "train": 1.095763921737671,
+        "val": 1.0821788708368938,
+        "ppl": 2.9511026224436767
+      },
+      {
+        "step": 600,
+        "train": 1.0802198648452759,
+        "val": 1.0810184955596924,
+        "ppl": 2.94768022193859
+      },
+      {
+        "step": 800,
+        "train": 1.0877835750579834,
+        "val": 1.0782447576522827,
+        "ppl": 2.9395154582600536
+      }
+    ],
+    "interlingua_stats": {},
+    "interlingua_history": [],
+    "category": "architecture"
+  },
+  "_last_updated": "2026-03-07 21:50:09",
+  "seven_bridge": {
+    "name": "seven_bridge",
+    "params": 1406268,
+    "bridge_type": "BridgeOfModules",
+    "final_val": 0.29962550004323324,
+    "final_ppl": 1.349353380158105,
+    "best_val": 0.29962550004323324,
+    "best_ppl": 1.349353380158105,
+    "time": 775.3738889694214,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.23772668838501,
+        "val": 4.8760478337605795,
+        "ppl": 131.11146427733834
+      },
+      {
+        "step": 200,
+        "train": 1.0607783794403076,
+        "val": 1.0857790907224019,
+        "ppl": 2.9617463892429474
+      },
+      {
+        "step": 400,
+        "train": 0.837048351764679,
+        "val": 0.8254073222478231,
+        "ppl": 2.2828104154526376
+      },
+      {
+        "step": 600,
+        "train": 0.5407893061637878,
+        "val": 0.48058457175890607,
+        "ppl": 1.617019389828338
+      },
+      {
+        "step": 800,
+        "train": 0.3436976969242096,
+        "val": 0.29962550004323324,
+        "ppl": 1.349353380158105
+      }
+    ],
+    "interlingua_stats": {},
+    "interlingua_history": [],
+    "category": "architecture"
+  },
+  "abriale_bridge": {
+    "name": "abriale_bridge",
+    "params": 1937736,
+    "bridge_type": "AbrialeBridgeMediator",
+    "final_val": 0.34472309847672783,
+    "final_ppl": 1.41159899163484,
+    "best_val": 0.34472309847672783,
+    "best_ppl": 1.41159899163484,
+    "time": 923.6008973121643,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.280826568603516,
+        "val": 4.91295313835144,
+        "ppl": 136.04056840520857
+      },
+      {
+        "step": 200,
+        "train": 1.0985280275344849,
+        "val": 1.101690916220347,
+        "ppl": 3.009250114178891
+      },
+      {
+        "step": 400,
+        "train": 0.9197344183921814,
+        "val": 0.887703518072764,
+        "ppl": 2.429543836371601
+      },
+      {
+        "step": 600,
+        "train": 0.5978797674179077,
+        "val": 0.5556778172651927,
+        "ppl": 1.7431221026943406
+      },
+      {
+        "step": 800,
+        "train": 0.40106263756752014,
+        "val": 0.34472309847672783,
+        "ppl": 1.41159899163484
+      }
+    ],
+    "interlingua_stats": {},
+    "interlingua_history": [],
+    "category": "architecture"
+  },
+  "interlingua_ternary": {
+    "name": "interlingua_ternary",
+    "params": 2115608,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.077329154809316,
+    "final_ppl": 2.9368252613134516,
+    "best_val": 1.077329154809316,
+    "best_ppl": 2.9368252613134516,
+    "time": 881.9588198661804,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.579188823699951,
+        "val": 5.123562558492025,
+        "ppl": 167.9325748207565
+      },
+      {
+        "step": 200,
+        "train": 1.1134105920791626,
+        "val": 1.1193339586257935,
+        "ppl": 3.062813563238489
+      },
+      {
+        "step": 400,
+        "train": 1.0806267261505127,
+        "val": 1.0853611509005228,
+        "ppl": 2.960508816118136
+      },
+      {
+        "step": 600,
+        "train": 1.0700691938400269,
+        "val": 1.0778852423032126,
+        "ppl": 2.9384588472792936
+      },
+      {
+        "step": 800,
+        "train": 1.094876766204834,
+        "val": 1.077329154809316,
+        "ppl": 2.9368252613134516
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4898059070110321,
+      "scale": 0.058176469057798386,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.30000001192092896,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "q6_correlation": 1.0
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 200,
+        "global_gate": 0.490071564912796,
+        "scale": 0.059481728821992874,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4897367060184479,
+        "scale": 0.057927802205085754,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4897717535495758,
+        "scale": 0.05803297087550163,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4898059070110321,
+        "scale": 0.058176469057798386,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      }
+    ],
+    "category": "architecture"
+  },
+  "interlingua_binary": {
+    "name": "interlingua_binary",
+    "params": 2115088,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.0774751464525858,
+    "final_ppl": 2.9372540445579705,
+    "best_val": 1.0774296204249063,
+    "best_ppl": 2.9371203260928946,
+    "time": 848.4910745620728,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.633445739746094,
+        "val": 5.0655349890391035,
+        "ppl": 158.4651965435341
+      },
+      {
+        "step": 200,
+        "train": 1.1136306524276733,
+        "val": 1.1193438053131104,
+        "ppl": 3.0628437219544375
+      },
+      {
+        "step": 400,
+        "train": 1.089518666267395,
+        "val": 1.08835924466451,
+        "ppl": 2.9693980178096178
+      },
+      {
+        "step": 600,
+        "train": 1.08017098903656,
+        "val": 1.0774296204249063,
+        "ppl": 2.9371203260928946
+      },
+      {
+        "step": 800,
+        "train": 1.086463212966919,
+        "val": 1.0774751464525858,
+        "ppl": 2.9372540445579705
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4881010353565216,
+      "scale": 0.04966112598776817,
+      "trit_distribution": {
+        "pos": 0.33,
+        "zero": 0.33,
+        "neg": 0.33
+      },
+      "q6_correlation": 1.0
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.499750018119812,
+        "scale": 0.0989990085363388,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 200,
+        "global_gate": 0.4887317717075348,
+        "scale": 0.05276882275938988,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 400,
+        "global_gate": 0.48808515071868896,
+        "scale": 0.04963976517319679,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 600,
+        "global_gate": 0.48809802532196045,
+        "scale": 0.049655672162771225,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4881010353565216,
+        "scale": 0.04966112598776817,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "q6_correlation": 1.0
+      }
+    ],
+    "category": "architecture"
+  },
+  "interlingua_full_ternary": {
+    "name": "interlingua_full_ternary",
+    "params": 2115608,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.0773202141125997,
+    "final_ppl": 2.93679900416686,
+    "best_val": 1.0773202141125997,
+    "best_ppl": 2.93679900416686,
+    "time": 868.3894784450531,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.579179763793945,
+        "val": 5.123553498586019,
+        "ppl": 167.9310533743054
+      },
+      {
+        "step": 200,
+        "train": 1.1134016513824463,
+        "val": 1.1193250179290772,
+        "ppl": 3.062786179673736
+      },
+      {
+        "step": 400,
+        "train": 1.0806177854537964,
+        "val": 1.0853522102038065,
+        "ppl": 2.9604823472250104
+      },
+      {
+        "step": 600,
+        "train": 1.0700602531433105,
+        "val": 1.0778763016064963,
+        "ppl": 2.938432575527371
+      },
+      {
+        "step": 800,
+        "train": 1.0948678255081177,
+        "val": 1.0773202141125997,
+        "ppl": 2.93679900416686
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4898059070110321,
+      "scale": 0.058176469057798386,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.800000011920929,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "q6_correlation": 1.0
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.800000011920929,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 200,
+        "global_gate": 0.490071564912796,
+        "scale": 0.059481728821992874,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.800000011920929,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4897367060184479,
+        "scale": 0.057927802205085754,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.800000011920929,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4897717535495758,
+        "scale": 0.05803297087550163,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.800000011920929,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4898059070110321,
+        "scale": 0.058176469057798386,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.800000011920929,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      }
+    ],
+    "category": "architecture"
+  },
+  "interlingua_32_archetypes": {
+    "name": "interlingua_32_archetypes",
+    "params": 2099224,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.078905498981476,
+    "final_ppl": 2.9414583594179895,
+    "best_val": 1.078905498981476,
+    "best_ppl": 2.9414583594179895,
+    "time": 854.6007590293884,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.565091133117676,
+        "val": 5.075885899861654,
+        "ppl": 160.11397411524405
+      },
+      {
+        "step": 200,
+        "train": 1.117366075515747,
+        "val": 1.1216472109158835,
+        "ppl": 3.06990682481648
+      },
+      {
+        "step": 400,
+        "train": 1.0565342903137207,
+        "val": 1.0838952660560608,
+        "ppl": 2.956172230356909
+      },
+      {
+        "step": 600,
+        "train": 1.0878976583480835,
+        "val": 1.081247075398763,
+        "ppl": 2.948354079221513
+      },
+      {
+        "step": 800,
+        "train": 1.0724180936813354,
+        "val": 1.078905498981476,
+        "ppl": 2.9414583594179895
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4891483783721924,
+      "scale": 0.05514393374323845,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.30000001192092896,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "q6_correlation": 0.8541666865348816
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 0.8541666865348816
+      },
+      {
+        "step": 200,
+        "global_gate": 0.4895484745502472,
+        "scale": 0.05696728080511093,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 0.8541666865348816
+      },
+      {
+        "step": 400,
+        "global_gate": 0.48929542303085327,
+        "scale": 0.055841658264398575,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 0.8541666865348816
+      },
+      {
+        "step": 600,
+        "global_gate": 0.48913440108299255,
+        "scale": 0.055088769644498825,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 0.8541666865348816
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4891483783721924,
+        "scale": 0.05514393374323845,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 0.8541666865348816
+      }
+    ],
+    "category": "ablation"
+  },
+  "interlingua_128_archetypes": {
+    "name": "interlingua_128_archetypes",
+    "params": 2148376,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.0754611015319824,
+    "final_ppl": 2.931344236276383,
+    "best_val": 1.0754611015319824,
+    "best_ppl": 2.931344236276383,
+    "time": 899.6464691162109,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.59702205657959,
+        "val": 5.081687355041504,
+        "ppl": 161.04556784650327
+      },
+      {
+        "step": 200,
+        "train": 1.1183375120162964,
+        "val": 1.107518994808197,
+        "ppl": 3.026839466611599
+      },
+      {
+        "step": 400,
+        "train": 1.0771615505218506,
+        "val": 1.0855627099672953,
+        "ppl": 2.961105593653226
+      },
+      {
+        "step": 600,
+        "train": 1.086610198020935,
+        "val": 1.0782514095306397,
+        "ppl": 2.9395350116243435
+      },
+      {
+        "step": 800,
+        "train": 1.0867950916290283,
+        "val": 1.0754611015319824,
+        "ppl": 2.931344236276383
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4861038625240326,
+      "scale": 0.04195357486605644,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.30000001192092896,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "q6_correlation": 1.0
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 200,
+        "global_gate": 0.4867386817932129,
+        "scale": 0.04505813121795654,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4861661195755005,
+        "scale": 0.042302291840314865,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4860970079898834,
+        "scale": 0.041929394006729126,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4861038625240326,
+        "scale": 0.04195357486605644,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      }
+    ],
+    "category": "ablation"
+  },
+  "interlingua_2heads": {
+    "name": "interlingua_2heads",
+    "params": 2115608,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.077329154809316,
+    "final_ppl": 2.9368252613134516,
+    "best_val": 1.077329154809316,
+    "best_ppl": 2.9368252613134516,
+    "time": 865.4055333137512,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.579188823699951,
+        "val": 5.123562558492025,
+        "ppl": 167.9325748207565
+      },
+      {
+        "step": 200,
+        "train": 1.1134105920791626,
+        "val": 1.1193339586257935,
+        "ppl": 3.062813563238489
+      },
+      {
+        "step": 400,
+        "train": 1.0806267261505127,
+        "val": 1.0853611509005228,
+        "ppl": 2.960508816118136
+      },
+      {
+        "step": 600,
+        "train": 1.0700691938400269,
+        "val": 1.0778852423032126,
+        "ppl": 2.9384588472792936
+      },
+      {
+        "step": 800,
+        "train": 1.094876766204834,
+        "val": 1.077329154809316,
+        "ppl": 2.9368252613134516
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4898059070110321,
+      "scale": 0.058176469057798386,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.30000001192092896,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "q6_correlation": 1.0
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 200,
+        "global_gate": 0.490071564912796,
+        "scale": 0.059481728821992874,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4897367060184479,
+        "scale": 0.057927802205085754,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4897717535495758,
+        "scale": 0.05803297087550163,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4898059070110321,
+        "scale": 0.058176469057798386,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      }
+    ],
+    "category": "ablation"
+  },
+  "interlingua_uncertainty_0": {
+    "name": "interlingua_uncertainty_0",
+    "params": 2115608,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.0773389299710592,
+    "final_ppl": 2.936853969395705,
+    "best_val": 1.0773389299710592,
+    "best_ppl": 2.936853969395705,
+    "time": 865.7956681251526,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.579198360443115,
+        "val": 5.123572095235189,
+        "ppl": 167.93417635822817
+      },
+      {
+        "step": 200,
+        "train": 1.1134203672409058,
+        "val": 1.1193437337875367,
+        "ppl": 3.062843502882791
+      },
+      {
+        "step": 400,
+        "train": 1.0806365013122559,
+        "val": 1.085370926062266,
+        "ppl": 2.9605377557121
+      },
+      {
+        "step": 600,
+        "train": 1.07007896900177,
+        "val": 1.0778950174649558,
+        "ppl": 2.9384875713301923
+      },
+      {
+        "step": 800,
+        "train": 1.0948865413665771,
+        "val": 1.0773389299710592,
+        "ppl": 2.936853969395705
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4898059070110321,
+      "scale": 0.058176469057798386,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.009999998845160007,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "q6_correlation": 1.0
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.009999998845160007,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 200,
+        "global_gate": 0.490071564912796,
+        "scale": 0.059481728821992874,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.009999998845160007,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4897367060184479,
+        "scale": 0.057927802205085754,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.009999998845160007,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4897717535495758,
+        "scale": 0.05803297087550163,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.009999998845160007,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4898059070110321,
+        "scale": 0.058176469057798386,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.009999998845160007,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0
+      }
+    ],
+    "category": "ablation"
+  }
+}

@@ -1,0 +1,1214 @@
+{
+  "vanilla": {
+    "name": "vanilla",
+    "params": 838964,
+    "bridge_type": "none",
+    "final_val": 1.0782447576522827,
+    "final_ppl": 2.9395154582600536,
+    "best_val": 1.0782447576522827,
+    "best_ppl": 2.9395154582600536,
+    "time": 144.2240493297577,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.591929912567139,
+        "val": 5.179356559117635,
+        "ppl": 177.56851938256847
+      },
+      {
+        "step": 200,
+        "train": 1.1241354942321777,
+        "val": 1.1091314991315206,
+        "ppl": 3.031724195602398
+      },
+      {
+        "step": 400,
+        "train": 1.095763921737671,
+        "val": 1.0821788708368938,
+        "ppl": 2.9511026224436767
+      },
+      {
+        "step": 600,
+        "train": 1.0802198648452759,
+        "val": 1.0810184955596924,
+        "ppl": 2.94768022193859
+      },
+      {
+        "step": 800,
+        "train": 1.0877835750579834,
+        "val": 1.0782447576522827,
+        "ppl": 2.9395154582600536
+      }
+    ],
+    "interlingua_stats": {},
+    "interlingua_history": []
+  },
+  "_last_updated": "2026-03-11 08:57:07",
+  "v58_bridge_lightweight": {
+    "name": "v58_bridge_lightweight",
+    "params": 1406268,
+    "bridge_type": "BridgeOfModules",
+    "final_val": 0.29962550004323324,
+    "final_ppl": 1.349353380158105,
+    "best_val": 0.29962550004323324,
+    "best_ppl": 1.349353380158105,
+    "time": 945.021201133728,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.23772668838501,
+        "val": 4.8760478337605795,
+        "ppl": 131.11146427733834
+      },
+      {
+        "step": 200,
+        "train": 1.0607783794403076,
+        "val": 1.0857790907224019,
+        "ppl": 2.9617463892429474
+      },
+      {
+        "step": 400,
+        "train": 0.837048351764679,
+        "val": 0.8254073222478231,
+        "ppl": 2.2828104154526376
+      },
+      {
+        "step": 600,
+        "train": 0.5407893061637878,
+        "val": 0.48058457175890607,
+        "ppl": 1.617019389828338
+      },
+      {
+        "step": 800,
+        "train": 0.3436976969242096,
+        "val": 0.29962550004323324,
+        "ppl": 1.349353380158105
+      }
+    ],
+    "interlingua_stats": {},
+    "interlingua_history": []
+  },
+  "v58_bridge_full": {
+    "name": "v58_bridge_full",
+    "params": 5168676,
+    "bridge_type": "BridgeOfModules",
+    "final_val": 0.9818869372208913,
+    "final_ppl": 2.6694886500116395,
+    "best_val": 0.9818869372208913,
+    "best_ppl": 2.6694886500116395,
+    "time": 1582.7193987369537,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.466562271118164,
+        "val": 4.99639523824056,
+        "ppl": 147.87912812754467
+      },
+      {
+        "step": 200,
+        "train": 1.153043270111084,
+        "val": 1.129708961645762,
+        "ppl": 3.0947556764451085
+      },
+      {
+        "step": 400,
+        "train": 1.076067566871643,
+        "val": 1.0571236848831176,
+        "ppl": 2.878080805065189
+      },
+      {
+        "step": 600,
+        "train": 1.0076905488967896,
+        "val": 1.0088816364606221,
+        "ppl": 2.742532151320537
+      },
+      {
+        "step": 800,
+        "train": 0.9831452369689941,
+        "val": 0.9818869372208913,
+        "ppl": 2.6694886500116395
+      }
+    ],
+    "interlingua_stats": {},
+    "interlingua_history": []
+  },
+  "v60_interlingua": {
+    "name": "v60_interlingua",
+    "params": 2115608,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.077329154809316,
+    "final_ppl": 2.9368252613134516,
+    "best_val": 1.077329154809316,
+    "best_ppl": 2.9368252613134516,
+    "time": 1092.8858902454376,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.579188823699951,
+        "val": 5.123562558492025,
+        "ppl": 167.9325748207565
+      },
+      {
+        "step": 200,
+        "train": 1.1134105920791626,
+        "val": 1.1193339586257935,
+        "ppl": 3.062813563238489
+      },
+      {
+        "step": 400,
+        "train": 1.0806267261505127,
+        "val": 1.0853611509005228,
+        "ppl": 2.960508816118136
+      },
+      {
+        "step": 600,
+        "train": 1.0700691938400269,
+        "val": 1.0778852423032126,
+        "ppl": 2.9384588472792936
+      },
+      {
+        "step": 800,
+        "train": 1.094876766204834,
+        "val": 1.077329154809316,
+        "ppl": 2.9368252613134516
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4898059070110321,
+      "scale": 0.058176469057798386,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.30000001192092896,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "q6_correlation": 1.0,
+      "class": "ArchetypalInterlingua"
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 200,
+        "global_gate": 0.490071564912796,
+        "scale": 0.059481728821992874,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4897367060184479,
+        "scale": 0.057927802205085754,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4897717535495758,
+        "scale": 0.05803297087550163,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4898059070110321,
+        "scale": 0.058176469057798386,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      }
+    ]
+  },
+  "bridged_lightweight": {
+    "name": "bridged_lightweight",
+    "params": 2195888,
+    "bridge_type": "BridgedInterlingua",
+    "final_val": 1.075067893664042,
+    "final_ppl": 2.930191835240463,
+    "best_val": 1.075067893664042,
+    "best_ppl": 2.930191835240463,
+    "time": 1085.6084043979645,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.612514495849609,
+        "val": 5.108562326431274,
+        "ppl": 165.43234611385301
+      },
+      {
+        "step": 200,
+        "train": 1.1144715547561646,
+        "val": 1.1190371751785277,
+        "ppl": 3.06190470574446
+      },
+      {
+        "step": 400,
+        "train": 1.084489345550537,
+        "val": 1.087606910864512,
+        "ppl": 2.9671648794532364
+      },
+      {
+        "step": 600,
+        "train": 1.081024169921875,
+        "val": 1.078501856327057,
+        "ppl": 2.940271300947764
+      },
+      {
+        "step": 800,
+        "train": 1.0911704301834106,
+        "val": 1.075067893664042,
+        "ppl": 2.930191835240463
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4885150194168091,
+      "scale": 0.05154256895184517,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "n_bridges": 3,
+      "n_bridge_outputs": 4,
+      "bridge_mode": "lightweight",
+      "uncertainty_budget": 0.30000001192092896,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "bridge_scales": [
+        {
+          "pair": 0,
+          "scale": 0.09960115700960159
+        },
+        {
+          "pair": 1,
+          "scale": 0.09960115700960159
+        },
+        {
+          "pair": 2,
+          "scale": 0.09960115700960159
+        }
+      ],
+      "q6_correlation": 1.0,
+      "class": "BridgedInterlingua"
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09999900311231613
+          },
+          {
+            "pair": 1,
+            "scale": 0.09999900311231613
+          },
+          {
+            "pair": 2,
+            "scale": 0.09999900311231613
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 200,
+        "global_gate": 0.48935800790786743,
+        "scale": 0.055623799562454224,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09981019049882889
+          },
+          {
+            "pair": 1,
+            "scale": 0.09981019049882889
+          },
+          {
+            "pair": 2,
+            "scale": 0.09981019049882889
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4885982275009155,
+        "scale": 0.05197708681225777,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09967338293790817
+          },
+          {
+            "pair": 1,
+            "scale": 0.09967338293790817
+          },
+          {
+            "pair": 2,
+            "scale": 0.09967338293790817
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4885311722755432,
+        "scale": 0.05162937566637993,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.0996110811829567
+          },
+          {
+            "pair": 1,
+            "scale": 0.0996110811829567
+          },
+          {
+            "pair": 2,
+            "scale": 0.0996110811829567
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4885150194168091,
+        "scale": 0.05154256895184517,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09960115700960159
+          },
+          {
+            "pair": 1,
+            "scale": 0.09960115700960159
+          },
+          {
+            "pair": 2,
+            "scale": 0.09960115700960159
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      }
+    ]
+  },
+  "bridged_full": {
+    "name": "bridged_full",
+    "params": 4077092,
+    "bridge_type": "BridgedInterlingua",
+    "final_val": 1.0747976342837016,
+    "final_ppl": 2.9294000304119523,
+    "best_val": 1.0744552691777547,
+    "best_ppl": 2.9283972777237395,
+    "time": 1394.1080243587494,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.496530532836914,
+        "val": 5.013262430826823,
+        "ppl": 150.3945886017405
+      },
+      {
+        "step": 200,
+        "train": 1.1454795598983765,
+        "val": 1.1137022415796916,
+        "ppl": 3.0456131432954883
+      },
+      {
+        "step": 400,
+        "train": 1.1089221239089966,
+        "val": 1.0853221853574118,
+        "ppl": 2.960393460531692
+      },
+      {
+        "step": 600,
+        "train": 1.1016793251037598,
+        "val": 1.0744552691777547,
+        "ppl": 2.9283972777237395
+      },
+      {
+        "step": 800,
+        "train": 1.0755573511123657,
+        "val": 1.0747976342837016,
+        "ppl": 2.9294000304119523
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.48745062947273254,
+      "scale": 0.04756943881511688,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "n_bridges": 3,
+      "n_bridge_outputs": 4,
+      "bridge_mode": "full",
+      "uncertainty_budget": 0.30000001192092896,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "bridge_scales": [
+        {
+          "pair": 0,
+          "scale": 0.09960115700960159
+        },
+        {
+          "pair": 1,
+          "scale": 0.09960115700960159
+        },
+        {
+          "pair": 2,
+          "scale": 0.09960115700960159
+        }
+      ],
+      "q6_correlation": 1.0,
+      "class": "BridgedInterlingua"
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "full",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09999900311231613
+          },
+          {
+            "pair": 1,
+            "scale": 0.09999900311231613
+          },
+          {
+            "pair": 2,
+            "scale": 0.09999900311231613
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 200,
+        "global_gate": 0.48825353384017944,
+        "scale": 0.051136795431375504,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "full",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09981019049882889
+          },
+          {
+            "pair": 1,
+            "scale": 0.09981019049882889
+          },
+          {
+            "pair": 2,
+            "scale": 0.09981019049882889
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4872472286224365,
+        "scale": 0.046668022871017456,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "full",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09967338293790817
+          },
+          {
+            "pair": 1,
+            "scale": 0.09967338293790817
+          },
+          {
+            "pair": 2,
+            "scale": 0.09967338293790817
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 600,
+        "global_gate": 0.48739781975746155,
+        "scale": 0.047335248440504074,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "full",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.0996110811829567
+          },
+          {
+            "pair": 1,
+            "scale": 0.0996110811829567
+          },
+          {
+            "pair": 2,
+            "scale": 0.0996110811829567
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 800,
+        "global_gate": 0.48745062947273254,
+        "scale": 0.04756943881511688,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "full",
+        "uncertainty_budget": 0.30000001192092896,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09960115700960159
+          },
+          {
+            "pair": 1,
+            "scale": 0.09960115700960159
+          },
+          {
+            "pair": 2,
+            "scale": 0.09960115700960159
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      }
+    ]
+  },
+  "bridged_no_ternary": {
+    "name": "bridged_no_ternary",
+    "params": 2195368,
+    "bridge_type": "BridgedInterlingua",
+    "final_val": 1.0758362968762716,
+    "final_ppl": 2.93244426933708,
+    "best_val": 1.073956314722697,
+    "best_ppl": 2.9269365053155965,
+    "time": 1061.2292413711548,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.582950592041016,
+        "val": 5.097864007949829,
+        "ppl": 163.67193171545082
+      },
+      {
+        "step": 200,
+        "train": 1.1401422023773193,
+        "val": 1.1145468354225159,
+        "ppl": 3.0481865359867766
+      },
+      {
+        "step": 400,
+        "train": 1.086982250213623,
+        "val": 1.0849463979403178,
+        "ppl": 2.9592811909211285
+      },
+      {
+        "step": 600,
+        "train": 1.1007418632507324,
+        "val": 1.073956314722697,
+        "ppl": 2.9269365053155965
+      },
+      {
+        "step": 800,
+        "train": 1.0679285526275635,
+        "val": 1.0758362968762716,
+        "ppl": 2.93244426933708
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.49066436290740967,
+      "scale": 0.06059635803103447,
+      "trit_distribution": {
+        "pos": 0.33,
+        "zero": 0.33,
+        "neg": 0.33
+      },
+      "n_bridges": 3,
+      "n_bridge_outputs": 4,
+      "bridge_mode": "lightweight",
+      "bridge_scales": [
+        {
+          "pair": 0,
+          "scale": 0.09518853574991226
+        },
+        {
+          "pair": 1,
+          "scale": 0.10038544982671738
+        },
+        {
+          "pair": 2,
+          "scale": 0.10314644873142242
+        }
+      ],
+      "q6_correlation": 1.0,
+      "class": "BridgedInterlingua"
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.500249981880188,
+        "scale": 0.10099899768829346,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09900059551000595
+          },
+          {
+            "pair": 1,
+            "scale": 0.09900490939617157
+          },
+          {
+            "pair": 2,
+            "scale": 0.10099748522043228
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 200,
+        "global_gate": 0.4913497567176819,
+        "scale": 0.06398973613977432,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09541932493448257
+          },
+          {
+            "pair": 1,
+            "scale": 0.10059203207492828
+          },
+          {
+            "pair": 2,
+            "scale": 0.10326671600341797
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4906660318374634,
+        "scale": 0.06065597012639046,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09524421393871307
+          },
+          {
+            "pair": 1,
+            "scale": 0.10045667737722397
+          },
+          {
+            "pair": 2,
+            "scale": 0.10320337861776352
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 600,
+        "global_gate": 0.490644633769989,
+        "scale": 0.06051155924797058,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.095197394490242
+          },
+          {
+            "pair": 1,
+            "scale": 0.10039740800857544
+          },
+          {
+            "pair": 2,
+            "scale": 0.10314517468214035
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 800,
+        "global_gate": 0.49066436290740967,
+        "scale": 0.06059635803103447,
+        "trit_distribution": {
+          "pos": 0.33,
+          "zero": 0.33,
+          "neg": 0.33
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09518853574991226
+          },
+          {
+            "pair": 1,
+            "scale": 0.10038544982671738
+          },
+          {
+            "pair": 2,
+            "scale": 0.10314644873142242
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      }
+    ]
+  },
+  "bridged_high_uncertainty": {
+    "name": "bridged_high_uncertainty",
+    "params": 2195888,
+    "bridge_type": "BridgedInterlingua",
+    "final_val": 1.0750599066416422,
+    "final_ppl": 2.9301684318261008,
+    "best_val": 1.0750599066416422,
+    "best_ppl": 2.9301684318261008,
+    "time": 1076.0455203056335,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.61250638961792,
+        "val": 5.108554220199585,
+        "ppl": 165.4310050863618
+      },
+      {
+        "step": 200,
+        "train": 1.1144635677337646,
+        "val": 1.1190291881561278,
+        "ppl": 3.0618802503406517
+      },
+      {
+        "step": 400,
+        "train": 1.0844813585281372,
+        "val": 1.0875989238421122,
+        "ppl": 2.967141180735521
+      },
+      {
+        "step": 600,
+        "train": 1.081016182899475,
+        "val": 1.078493869304657,
+        "ppl": 2.940247817028805
+      },
+      {
+        "step": 800,
+        "train": 1.0911624431610107,
+        "val": 1.0750599066416422,
+        "ppl": 2.9301684318261008
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4885150194168091,
+      "scale": 0.05154256895184517,
+      "trit_distribution": {
+        "pos": 0.0,
+        "zero": 1.0,
+        "neg": 0.0
+      },
+      "n_bridges": 3,
+      "n_bridge_outputs": 4,
+      "bridge_mode": "lightweight",
+      "uncertainty_budget": 0.699999988079071,
+      "archetype_usage_mean": 0.0,
+      "archetype_usage_std": 0.0,
+      "active_archetypes": 0,
+      "bridge_scales": [
+        {
+          "pair": 0,
+          "scale": 0.09960115700960159
+        },
+        {
+          "pair": 1,
+          "scale": 0.09960115700960159
+        },
+        {
+          "pair": 2,
+          "scale": 0.09960115700960159
+        }
+      ],
+      "q6_correlation": 1.0,
+      "class": "BridgedInterlingua"
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.5,
+        "scale": 0.09999900311231613,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.699999988079071,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09999900311231613
+          },
+          {
+            "pair": 1,
+            "scale": 0.09999900311231613
+          },
+          {
+            "pair": 2,
+            "scale": 0.09999900311231613
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 200,
+        "global_gate": 0.48935800790786743,
+        "scale": 0.055623799562454224,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.699999988079071,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09981019049882889
+          },
+          {
+            "pair": 1,
+            "scale": 0.09981019049882889
+          },
+          {
+            "pair": 2,
+            "scale": 0.09981019049882889
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4885982275009155,
+        "scale": 0.05197708681225777,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.699999988079071,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09967338293790817
+          },
+          {
+            "pair": 1,
+            "scale": 0.09967338293790817
+          },
+          {
+            "pair": 2,
+            "scale": 0.09967338293790817
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 600,
+        "global_gate": 0.4885311722755432,
+        "scale": 0.05162937566637993,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.699999988079071,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.0996110811829567
+          },
+          {
+            "pair": 1,
+            "scale": 0.0996110811829567
+          },
+          {
+            "pair": 2,
+            "scale": 0.0996110811829567
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4885150194168091,
+        "scale": 0.05154256895184517,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 1.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.699999988079071,
+        "archetype_usage_mean": 0.0,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 0,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09960115700960159
+          },
+          {
+            "pair": 1,
+            "scale": 0.09960115700960159
+          },
+          {
+            "pair": 2,
+            "scale": 0.09960115700960159
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      }
+    ]
+  }
+}

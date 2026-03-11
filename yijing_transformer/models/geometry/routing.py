@@ -570,6 +570,1109 @@ class BridgeOfModules(nn.Module):
         return stats
 
 
+class AbrialeBridgeMediator(nn.Module):
+    """Абриале-мост: событийно-управляемая медиация между уровнями bridge.
+
+    Комбинирует BridgeOfModules (иерархическая cross-attention медиация)
+    с AbrialeLayer (событийно-управляемые N-местные связи):
+
+    1. Иерархический bridge строит дерево согласования источников
+    2. AbrialeLayer на каждом уровне генерирует «события» из медиированных
+       представлений и активизирует правила для дополнительной модуляции
+    3. N-местные связи позволяют учитывать тройки/четвёрки источников,
+       а не только пары
+
+    Это v59 гибрид — объединяет лучшее из v57 (Abriale) и v58 (Bridge).
+
+    Args:
+        d_model: размерность модели
+        n_sources: число геометрических источников
+        n_heads: число голов cross-attention
+        dropout: dropout
+        bridge_mode: 'full' или 'lightweight'
+        d_event: размерность пространства событий Абриале
+        n_rules: число правил в банке
+        arity: арность N-местных связей (2 или 3)
+    """
+    def __init__(self, d_model: int, n_sources: int, n_heads: int = 2,
+                 dropout: float = 0.1, bridge_mode: str = 'lightweight',
+                 d_event: int = 64, n_rules: int = 64, arity: int = 2):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+
+        # --- Bridge tree (как в BridgeOfModules) ---
+        self.bridge_mode = bridge_mode
+
+        def make_bridge():
+            if bridge_mode == 'lightweight':
+                return LightweightBridge(d_model)
+            return PairwiseBridge(d_model, n_heads, dropout)
+
+        self.bridge_tree = nn.ModuleList()
+        self.tree_structure = []
+
+        remaining = n_sources
+        level = 0
+        while remaining > 1:
+            n_pairs = remaining // 2
+            has_odd = (remaining % 2 == 1)
+            bridges = nn.ModuleList([make_bridge() for _ in range(n_pairs)])
+            self.bridge_tree.append(bridges)
+            self.tree_structure.append((n_pairs, has_odd))
+            remaining = n_pairs + (1 if has_odd else 0)
+            level += 1
+
+        # --- Abriale компонент на финальном уровне ---
+        # EventGenerator: медиированный сигнал → событие
+        from .abriale import EventGenerator, RuleBank, TransactionGate, IsotropicAttention
+        self.iso_attn = IsotropicAttention(d_model, n_heads=n_heads, arity=arity, dropout=dropout)
+        self.event_gen = EventGenerator(d_model, d_event=d_event)
+        self.rule_bank = RuleBank(d_event=d_event, d_model=d_model, n_rules=n_rules)
+        self.transaction = TransactionGate(d_model, d_event=d_event)
+        self.abriale_norm = nn.LayerNorm(d_model)
+        self.abriale_scale = nn.Parameter(torch.tensor(0.05))
+
+        # --- Global gate и norms ---
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        self.source_norms = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(n_sources)])
+        self._last_global_gate = 0.5
+        self._last_abriale_commit = 0.0
+
+    def forward(self, x: torch.Tensor, source_outputs: list) -> torch.Tensor:
+        assert len(source_outputs) == self.n_sources
+
+        # Нормализуем источники
+        current_level = [self.source_norms[i](src) for i, src in enumerate(source_outputs)]
+
+        # Иерархическая медиация (bridge tree)
+        for bridges, (n_pairs, has_odd) in zip(self.bridge_tree, self.tree_structure):
+            next_level = []
+            for p in range(n_pairs):
+                mediated = bridges[p](current_level[2*p], current_level[2*p+1])
+                next_level.append(mediated)
+            if has_odd:
+                next_level.append(current_level[-1])
+            current_level = next_level
+
+        bridge_output = current_level[0]
+
+        # Abriale модуляция: событийно-управляемая коррекция bridge output
+        h = self.abriale_norm(bridge_output)
+        iso_out, _ = self.iso_attn(h)
+        enriched = h + iso_out
+        events, event_types = self.event_gen(enriched)
+        actions, hit_weights = self.rule_bank(events, enriched)
+        committed = self.transaction(enriched, actions, event_types)
+        bridge_output = bridge_output + self.abriale_scale * committed
+
+        # Сохраняем для диагностики и aux loss
+        self._last_hit_weights = hit_weights
+        with torch.no_grad():
+            self._last_abriale_commit = (committed.abs().mean() / (actions.abs().mean() + 1e-10)).item()
+
+        # Global gate
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * bridge_output
+
+    def get_bridge_stats(self) -> dict:
+        stats = {
+            'global_gate': self._last_global_gate,
+            'abriale_commit_rate': self._last_abriale_commit,
+            'abriale_scale': self.abriale_scale.item(),
+            'n_levels': len(self.bridge_tree),
+            'bridge_scales': [],
+        }
+        for level_idx, bridges in enumerate(self.bridge_tree):
+            for bridge_idx, bridge in enumerate(bridges):
+                stats['bridge_scales'].append({
+                    'level': level_idx, 'pair': bridge_idx,
+                    'scale': bridge.scale.item(),
+                })
+        return stats
+
+    def get_abriale_aux_loss(self) -> torch.Tensor:
+        """Aux loss для балансировки правил Абриале."""
+        if hasattr(self, '_last_hit_weights'):
+            hw = self._last_hit_weights
+            avg_usage = hw.mean(dim=(0, 1))
+            target = 1.0 / hw.shape[-1]
+            return ((avg_usage - target) ** 2).sum() * hw.shape[-1]
+        return torch.tensor(0.0)
+
+
+class AdaptiveBridgeOfModules(nn.Module):
+    """Bridge of Modules с адаптивной глубиной.
+
+    Вместо фиксированного числа уровней bridge, глубина определяется
+    динамически на основе сложности входа:
+
+    1. Complexity estimator оценивает «сложность» набора источников
+       (дисперсия, попарное расхождение, энтропия)
+    2. На основе сложности выбирается число уровней mediation:
+       - Простой вход (источники согласованы) → 1 уровень (быстро)
+       - Сложный вход (источники конфликтуют) → полное дерево (тщательно)
+    3. Экономия вычислений на простых примерах
+
+    Args:
+        d_model: размерность модели
+        n_sources: число источников
+        n_heads: число голов cross-attention
+        dropout: dropout
+        bridge_mode: 'full' или 'lightweight'
+        max_levels: максимальное число уровней (None = полное дерево)
+    """
+    def __init__(self, d_model: int, n_sources: int, n_heads: int = 2,
+                 dropout: float = 0.1, bridge_mode: str = 'lightweight',
+                 max_levels: int = 0):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+        self.bridge_mode = bridge_mode
+
+        def make_bridge():
+            if bridge_mode == 'lightweight':
+                return LightweightBridge(d_model)
+            return PairwiseBridge(d_model, n_heads, dropout)
+
+        # Строим полное дерево
+        self.bridge_tree = nn.ModuleList()
+        self.tree_structure = []
+        remaining = n_sources
+        while remaining > 1:
+            n_pairs = remaining // 2
+            has_odd = (remaining % 2 == 1)
+            bridges = nn.ModuleList([make_bridge() for _ in range(n_pairs)])
+            self.bridge_tree.append(bridges)
+            self.tree_structure.append((n_pairs, has_odd))
+            remaining = n_pairs + (1 if has_odd else 0)
+
+        self.total_levels = len(self.bridge_tree)
+        self.max_levels = max_levels if max_levels > 0 else self.total_levels
+
+        # Complexity estimator: оценивает сколько уровней нужно
+        # Вход: попарные расхождения источников → скаляр [0, 1]
+        self.complexity_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 4),
+            nn.SiLU(),
+            nn.Linear(d_model // 4, 1),
+            nn.Sigmoid(),
+        )
+
+        # Per-level reduction: промежуточные average pools для ранней остановки
+        self.level_reducers = nn.ModuleList([
+            nn.Linear(d_model, d_model, bias=False)
+            for _ in range(self.total_levels)
+        ])
+
+        # Global gate
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        self.source_norms = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(n_sources)])
+
+        # Stats
+        self._last_global_gate = 0.5
+        self._last_complexity = 0.5
+        self._last_active_levels = self.total_levels
+
+    def _estimate_complexity(self, source_outputs: list) -> torch.Tensor:
+        """Оценка сложности: насколько источники расходятся.
+
+        Высокая дисперсия между источниками → высокая сложность → больше уровней.
+        """
+        # Средний вектор всех источников
+        stacked = torch.stack(source_outputs, dim=0)  # (N, B, T, C)
+        mean_src = stacked.mean(dim=0)  # (B, T, C)
+
+        # Дисперсия между источниками
+        variance = ((stacked - mean_src.unsqueeze(0)) ** 2).mean(dim=(0, 2))  # (B, C)
+        # → скаляр сложности [0, 1]
+        complexity = self.complexity_proj(variance)  # (B, 1)
+        return complexity.squeeze(-1)  # (B,)
+
+    def forward(self, x: torch.Tensor, source_outputs: list) -> torch.Tensor:
+        assert len(source_outputs) == self.n_sources
+
+        # Нормализуем
+        current_level = [self.source_norms[i](src) for i, src in enumerate(source_outputs)]
+
+        # Оценка сложности
+        complexity = self._estimate_complexity(current_level)  # (B,)
+        with torch.no_grad():
+            self._last_complexity = complexity.mean().item()
+
+        # Определяем число активных уровней
+        # complexity ∈ [0, 1] → n_levels ∈ [1, max_levels]
+        n_active = max(1, int(round(self._last_complexity * self.max_levels)))
+        n_active = min(n_active, self.total_levels)
+        with torch.no_grad():
+            self._last_active_levels = n_active
+
+        # Иерархическая медиация до n_active уровней
+        for lvl in range(n_active):
+            bridges = self.bridge_tree[lvl]
+            n_pairs, has_odd = self.tree_structure[lvl]
+            next_level = []
+            for p in range(n_pairs):
+                mediated = bridges[p](current_level[2*p], current_level[2*p+1])
+                next_level.append(mediated)
+            if has_odd:
+                next_level.append(current_level[-1])
+            current_level = next_level
+
+        # Если остановились рано, суммируем оставшиеся элементы
+        if len(current_level) > 1:
+            bridge_output = sum(current_level) / len(current_level)
+        else:
+            bridge_output = current_level[0]
+
+        # Global gate
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * bridge_output
+
+    def get_bridge_stats(self) -> dict:
+        stats = {
+            'global_gate': self._last_global_gate,
+            'complexity': self._last_complexity,
+            'active_levels': self._last_active_levels,
+            'total_levels': self.total_levels,
+            'bridge_scales': [],
+        }
+        for level_idx, bridges in enumerate(self.bridge_tree):
+            for bridge_idx, bridge in enumerate(bridges):
+                stats['bridge_scales'].append({
+                    'level': level_idx, 'pair': bridge_idx,
+                    'scale': bridge.scale.item(),
+                })
+        return stats
+
+
+class SourceSpecializer(nn.Module):
+    """Доменная специализация источников.
+
+    Каждый из N источников получает soft domain assignment:
+    - Оценщик домена определяет, к какому домену принадлежит текущий вход
+    - Каждый источник имеет learnable domain affinity (какие домены ему «близки»)
+    - Источники автоматически специализируются на разных доменах
+
+    Это позволяет разным источникам отвечать за разные типы данных:
+    например, HeisenbergAttention → числовые паттерны,
+    PalaceAttention → синтаксические структуры, и т.д.
+
+    Args:
+        d_model: размерность модели
+        n_sources: число источников
+        n_domains: число доменов
+    """
+    def __init__(self, d_model: int, n_sources: int, n_domains: int = 4):
+        super().__init__()
+        self.n_sources = n_sources
+        self.n_domains = n_domains
+
+        # Domain detector: определяет домен входа
+        self.domain_proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 4),
+            nn.SiLU(),
+            nn.Linear(d_model // 4, n_domains),
+        )
+
+        # Per-source domain affinity: (n_sources, n_domains)
+        # Инициализируем как identity-like → каждый источник предпочитает свой домен
+        init = torch.zeros(n_sources, n_domains)
+        for i in range(min(n_sources, n_domains)):
+            init[i, i] = 1.0
+        self.domain_affinity = nn.Parameter(init)
+
+        # Per-source scale
+        self.source_scales = nn.Parameter(torch.full((n_sources,), 0.1))
+
+        # Stats
+        self._last_domain_probs = None
+        self._last_source_weights = None
+
+    def forward(self, x: torch.Tensor, source_outputs: list) -> torch.Tensor:
+        """
+        Args:
+            x: (B, T, C) — базовый выход
+            source_outputs: list of N tensors (B, T, C)
+        Returns:
+            enriched: x + специализированная комбинация источников
+        """
+        B, T, C = x.shape
+        n = len(source_outputs)
+
+        # Определяем домен: mean-pool → domain logits
+        x_mean = x.mean(dim=1)  # (B, C)
+        domain_logits = self.domain_proj(x_mean)  # (B, n_domains)
+        domain_probs = F.softmax(domain_logits, dim=-1)  # (B, n_domains)
+
+        # Source weights: domain_probs × domain_affinity^T → (B, n_sources)
+        affinity = F.softmax(self.domain_affinity, dim=-1)  # (n_sources, n_domains)
+        source_weights = torch.matmul(domain_probs, affinity.T)  # (B, n_sources)
+        source_weights = source_weights * self.source_scales.abs().unsqueeze(0)
+
+        with torch.no_grad():
+            self._last_domain_probs = domain_probs.mean(dim=0).tolist()
+            self._last_source_weights = source_weights.mean(dim=0).tolist()
+
+        # Взвешенная комбинация
+        result = x
+        for i, src in enumerate(source_outputs):
+            w = source_weights[:, i].unsqueeze(1).unsqueeze(2)  # (B, 1, 1)
+            result = result + w * src
+
+        return result
+
+    def get_specialization_stats(self) -> dict:
+        stats = {}
+        if self._last_domain_probs is not None:
+            stats['domain_probs'] = self._last_domain_probs
+            stats['source_weights'] = self._last_source_weights
+            # Domain affinity matrix
+            affinity = F.softmax(self.domain_affinity, dim=-1)
+            stats['affinity'] = affinity.detach().tolist()
+        return stats
+
+
+class ArchetypalInterlingua(nn.Module):
+    """Архетипальная Интерлингва: hub-and-spoke посредник для N модулей.
+
+    Вместо дерева попарных мостов (BridgeOfModules) — единое промежуточное
+    представление из 64 архетипов, через которое проходят все источники.
+
+    Архитектура (по аналогии с Atamiri Гусмана де Рохаса):
+    1. Фаза 1 — КОДИРОВАНИЕ: каждый модуль проецирует свой выход
+       в архетипальное пространство (64 × d_model) через bottleneck
+    2. Фаза 2 — АГРЕГАЦИЯ: вклады всех модулей агрегируются
+       в единое архетипальное представление с тернарной квантизацией
+       {-1, 0, +1} (кольцо Aymara siwi)
+    3. Фаза 3 — ДЕКОДИРОВАНИЕ: архетипальное представление
+       проецируется обратно в пространство токенов через readout
+
+    Преимущества:
+    - O(N) вместо O(N log N) — полный параллелизм кодировщиков
+    - Масштабируемость: добавление модуля = +1 кодировщик
+    - Интерпретируемость: 64 архетипа × 3 состояния = «язык» системы
+    - Тернарная логика: модуль может голосовать «за» (+1), «против» (-1),
+      или «воздержаться» (0 = 变爻 = ina аймара)
+
+    Теоретическое обоснование: archetypal-interlingua-theory.md,
+    Теоремы 16–19.
+
+    Args:
+        d_model: размерность модели
+        n_sources: число геометрических источников (модулей)
+        n_archetypes: число архетипов (64 = гексаграммы Q6)
+        d_bottleneck: размерность bottleneck в кодировщиках
+        use_ternary: использовать тернарную квантизацию {-1,0,+1}
+        uncertainty_budget: бюджет неопределённости [0, 1] для тернарного режима
+        n_heads: число голов readout cross-attention
+        ternary_warmup_steps: шагов temperature annealing (1.0 → min_temp)
+        ternary_min_temp: минимальная температура после annealing
+    """
+    def __init__(self, d_model: int, n_sources: int,
+                 n_archetypes: int = 64, d_bottleneck: int = 0,
+                 use_ternary: bool = True, uncertainty_budget: float = 0.3,
+                 n_heads: int = 4,
+                 ternary_warmup_steps: int = 2000,
+                 ternary_min_temp: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+        self.n_archetypes = n_archetypes
+        self.use_ternary = use_ternary
+        d_bn = d_bottleneck or max(d_model // 4, 16)
+
+        # --- Фаза 1: Кодировщики (по одному на источник) ---
+        # Каждый кодировщик проецирует (B, T, d_model) → (B, n_archetypes, d_model)
+        self.encoders = nn.ModuleList()
+        self.source_norms = nn.ModuleList()
+        for _ in range(n_sources):
+            self.source_norms.append(nn.LayerNorm(d_model))
+            self.encoders.append(nn.Sequential(
+                nn.Linear(d_model, d_bn, bias=False),
+                nn.SiLU(),
+                nn.Linear(d_bn, d_model, bias=False),
+            ))
+
+        # Архетипальные якоря (learnable queries для cross-attention)
+        self.archetype_queries = nn.Parameter(
+            torch.randn(n_archetypes, d_model) * 0.02
+        )
+
+        # Cross-attention: архетипы attend к каждому источнику
+        self.encode_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+        self.encode_norm = nn.LayerNorm(d_model)
+
+        # --- Фаза 2: Тернарная агрегация ---
+        if use_ternary:
+            # Тернарный scoring: каждый модуль → {-1, 0, +1} на каждый архетип
+            self.trit_proj = nn.Linear(d_model, 1, bias=True)
+            nn.init.zeros_(self.trit_proj.bias)
+            # Learnable uncertainty budget
+            self.log_uncertainty = nn.Parameter(
+                torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
+            )
+
+        # Агрегационная проекция: объединяет N вкладов
+        self.aggregate_proj = nn.Linear(d_model, d_model, bias=False)
+        self.aggregate_norm = nn.LayerNorm(d_model)
+
+        # --- Фаза 3: Декодирование (readout) ---
+        # Cross-attention: токены attend к архетипам
+        self.readout_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+        self.readout_norm = nn.LayerNorm(d_model)
+        self.readout_proj = nn.Linear(d_model, d_model, bias=False)
+
+        # Global gate: возможность отключить интерлингву
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        # Learnable scale
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+        # --- Temperature annealing для тернарной квантизации ---
+        # Начинаем с мягких тритов (temp=1.0), постепенно хардим (temp→0.1)
+        # Это обеспечивает gradient flow на ранних этапах обучения
+        if use_ternary:
+            self.ternary_warmup_steps = ternary_warmup_steps
+            self.ternary_min_temp = ternary_min_temp
+            self.register_buffer('_ternary_step', torch.tensor(0, dtype=torch.long))
+
+        # Статистика
+        self._last_global_gate = 0.5
+        self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
+        self._last_raw_scores = None  # для activation loss
+        self._last_archetype_usage = None
+
+        # Q6 якоря для корреляционного анализа
+        self._init_q6_anchors()
+
+    def _init_q6_anchors(self):
+        """Инициализирует Q6 координаты 64 архетипов = 64 гексаграммы."""
+        anchors = []
+        for i in range(min(self.n_archetypes, 64)):
+            vertex = tuple(2 * ((i >> (5 - b)) & 1) - 1 for b in range(6))
+            anchors.append(vertex)
+        # Дополняем если n_archetypes > 64
+        while len(anchors) < self.n_archetypes:
+            anchors.append(tuple(0.0 for _ in range(6)))
+        self.register_buffer(
+            'q6_anchors',
+            torch.tensor(anchors, dtype=torch.float32)
+        )
+
+    @property
+    def uncertainty_budget(self) -> torch.Tensor:
+        if self.use_ternary:
+            return torch.sigmoid(self.log_uncertainty)
+        return torch.tensor(0.0)
+
+    def _encode_source(self, source_output: torch.Tensor,
+                       encoder: nn.Module, norm: nn.Module) -> torch.Tensor:
+        """Кодирует один источник в архетипальное пространство.
+
+        Args:
+            source_output: (B, T, d_model) — выход модуля-источника
+            encoder: bottleneck encoder для этого источника
+            norm: LayerNorm для этого источника
+
+        Returns:
+            contribution: (B, n_archetypes, d_model) — вклад в архетипы
+        """
+        B = source_output.shape[0]
+        h = norm(source_output)
+        h = encoder(h)  # (B, T, d_model) — bottleneck transformation
+
+        # Cross-attention: архетипальные queries attend к трансформированному источнику
+        queries = self.archetype_queries.unsqueeze(0).expand(B, -1, -1)  # (B, 64, d_model)
+        contribution, _ = self.encode_attn(
+            query=queries, key=h, value=h
+        )  # (B, n_archetypes, d_model)
+
+        return contribution
+
+    @property
+    def ternary_temperature(self) -> float:
+        """Текущая температура тернарной квантизации.
+
+        Анилируется от 1.0 (мягкие триты, полный gradient flow)
+        до ternary_min_temp (жёсткие триты) за ternary_warmup_steps шагов.
+        """
+        if not self.use_ternary:
+            return 1.0
+        step = self._ternary_step.item()
+        progress = min(step / max(self.ternary_warmup_steps, 1), 1.0)
+        # cosine annealing: плавный переход
+        temp = self.ternary_min_temp + (1.0 - self.ternary_min_temp) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        return temp
+
+    def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+        """Тернарная квантизация вклада: {-1, 0, +1} per archetype.
+
+        С temperature annealing: на ранних шагах обучения используются мягкие
+        триты (tanh(scores/T) с большим T), обеспечивая gradient flow.
+        По мере обучения T → 0.1, триты становятся жёсткими.
+
+        Args:
+            contribution: (B, n_archetypes, d_model)
+
+        Returns:
+            trit_scores: (B, n_archetypes) — мягкие или жёсткие триты
+        """
+        scores = self.trit_proj(contribution).squeeze(-1)  # (B, n_archetypes)
+
+        # Сохраняем raw scores для activation loss
+        self._last_raw_scores = scores
+
+        temp = self.ternary_temperature
+
+        if temp > 0.15:
+            # Тёплая фаза: мягкие триты, градиент течёт напрямую
+            # tanh(scores / temp) ≈ непрерывная аппроксимация ternary
+            trit_scores = torch.tanh(scores / temp)
+        else:
+            # Холодная фаза: жёсткие триты с STE
+            raw = torch.tanh(scores)
+            threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
+
+            hard = torch.zeros_like(raw)
+            hard[raw > threshold] = 1.0
+            hard[raw < -threshold] = -1.0
+            trit_scores = raw + (hard - raw).detach()
+
+        return trit_scores
+
+    def forward(self, x: torch.Tensor,
+                source_outputs: list) -> torch.Tensor:
+        """Forward pass Архетипальной Интерлингвы.
+
+        Args:
+            x: (B, T, C) — базовый выход (identity path)
+            source_outputs: list of N tensors (B, T, C)
+
+        Returns:
+            enriched: (B, T, C) — x + interlingua_contribution
+        """
+        assert len(source_outputs) == self.n_sources
+        B, T, C = x.shape
+
+        # === Фаза 1: Кодирование (параллельно для каждого модуля) ===
+        contributions = []
+        trit_scores_list = []
+        for i, src in enumerate(source_outputs):
+            contrib = self._encode_source(src, self.encoders[i], self.source_norms[i])
+            contributions.append(contrib)  # (B, n_archetypes, d_model)
+
+            if self.use_ternary:
+                trits = self._ternary_quantize(contrib)  # (B, n_archetypes)
+                trit_scores_list.append(trits)
+
+        # === Фаза 2: Агрегация ===
+        if self.use_ternary and trit_scores_list:
+            # Инкремент шага для temperature annealing (только в training)
+            if self.training:
+                self._ternary_step += 1
+
+            # Тернарное голосование: суммируем триты всех модулей
+            trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)  # (B, n_archetypes)
+            consensus = torch.tanh(trit_sum / max(self.n_sources, 1))  # (B, n_archetypes)
+
+            # Epsilon leak: гарантирует gradient flow к encoders даже при consensus≈0
+            weights = (consensus.abs() + 0.01).unsqueeze(-1)  # (B, n_archetypes, 1)
+
+            # Средний вклад, взвешенный консенсусом
+            stacked = torch.stack(contributions, dim=0)  # (N, B, archetypes, d_model)
+            mean_contrib = stacked.mean(dim=0)  # (B, archetypes, d_model)
+            aggregated = mean_contrib * weights  # (B, archetypes, d_model)
+
+            # Статистика тритов
+            with torch.no_grad():
+                all_trits = torch.stack(trit_scores_list, dim=0)  # (N, B, archetypes)
+                hard_trits = all_trits.sign()
+                total = hard_trits.numel()
+                self._last_trit_distribution = {
+                    'pos': (hard_trits > 0).float().sum().item() / total,
+                    'zero': (hard_trits == 0).float().sum().item() / total,
+                    'neg': (hard_trits < 0).float().sum().item() / total,
+                }
+                self._last_archetype_usage = consensus.abs().mean(dim=0).detach()
+        else:
+            # Без тернарной квантизации: простое среднее
+            stacked = torch.stack(contributions, dim=0)
+            aggregated = stacked.mean(dim=0)  # (B, n_archetypes, d_model)
+
+        # Проекция агрегированного представления
+        aggregated = self.aggregate_norm(self.aggregate_proj(aggregated))
+
+        # === Фаза 3: Декодирование (readout) ===
+        # Токены attend к архетипам: "какие архетипы релевантны мне?"
+        readout, _ = self.readout_attn(
+            query=x, key=aggregated, value=aggregated
+        )  # (B, T, d_model)
+        readout = self.readout_proj(self.readout_norm(readout))
+
+        # Global gate + scale
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * self.scale * readout
+
+    def get_interlingua_loss(self) -> torch.Tensor:
+        """Вспомогательный loss для обучения интерлингвы.
+
+        Три компонента:
+        1. Archetype balance: все архетипы используются примерно одинаково
+        2. Uncertainty penalty: штраф за несоответствие тритового баланса бюджету
+        3. Activation encouragement: толкает trit_proj scores от нуля
+           (обеспечивает gradient flow через trit_proj на ранних этапах)
+        """
+        loss = torch.tensor(0.0, device=self.archetype_queries.device)
+
+        if self._last_archetype_usage is not None:
+            usage = self._last_archetype_usage
+            target = usage.mean()
+            balance_loss = ((usage - target) ** 2).mean()
+            loss = loss + 0.1 * balance_loss
+
+        if self.use_ternary:
+            zero_frac = self._last_trit_distribution.get('zero', 0.33)
+            target_frac = self.uncertainty_budget.item()
+            uncertainty_loss = (zero_frac - target_frac) ** 2
+            loss = loss + 0.05 * uncertainty_loss
+
+            # Activation encouragement: штрафует scores ≈ 0
+            # Gradient течёт напрямую через trit_proj (не detached!)
+            # Сила убывает по мере annealing (когда scores уже большие, не нужен)
+            if self._last_raw_scores is not None:
+                temp = self.ternary_temperature
+                encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
+                if encouragement_weight > 0:
+                    activation_loss = -self._last_raw_scores.abs().mean()
+                    loss = loss + 0.02 * encouragement_weight * activation_loss
+
+        return loss
+
+    def get_interlingua_stats(self) -> dict:
+        """Статистика для мониторинга."""
+        stats = {
+            'global_gate': self._last_global_gate,
+            'scale': self.scale.item(),
+            'trit_distribution': self._last_trit_distribution,
+        }
+        if self.use_ternary:
+            stats['uncertainty_budget'] = self.uncertainty_budget.item()
+            stats['ternary_temperature'] = self.ternary_temperature
+            stats['ternary_step'] = self._ternary_step.item()
+        if self._last_archetype_usage is not None:
+            usage = self._last_archetype_usage
+            stats['archetype_usage_mean'] = usage.mean().item()
+            stats['archetype_usage_std'] = usage.std().item()
+            stats['active_archetypes'] = (usage > 0.1).sum().item()
+        return stats
+
+    def archetype_q6_correlation(self) -> torch.Tensor:
+        """Измеряет корреляцию между выученными архетипами и гексаграммами Q6.
+
+        Аналог TokenAbstractor.cluster_hexagram_correlation().
+        """
+        if self.d_model < 6:
+            return torch.tensor(0.0, device=self.archetype_queries.device)
+
+        # Берём первые 6 компонент archetype_queries
+        q6_proj = self.archetype_queries[:, :6]  # (64, 6)
+        q6_binary = q6_proj.sign()
+
+        # Сходство с Q6 якорями
+        dots = torch.matmul(q6_binary, self.q6_anchors[:64].T)  # (64, 64)
+        max_sim = dots.max(dim=1).values  # (64,)
+        correlation = max_sim.mean() / 6.0  # [0, 1]
+
+        return correlation
+
+
+class BridgedInterlingua(nn.Module):
+    """Двойная прослойка: Module → Bridge → 64 Archetype → Core (v61).
+
+    Гибрид BridgeOfModules (v58) и ArchetypalInterlingua (v60):
+    1. Фаза 1 — МОСТОВАЯ МЕДИАЦИЯ: попарные мосты снимают деструктивную
+       интерференцию между несовместимыми модулями. Результат: K медиированных
+       сигналов (K ≤ N, где N — число модулей).
+    2. Фаза 2 — АРХЕТИПАЛЬНОЕ КОДИРОВАНИЕ: медиированные сигналы проецируются
+       в пространство 64 архетипов через per-bridge-output encoders.
+    3. Фаза 3 — ТЕРНАРНАЯ АГРЕГАЦИЯ: консенсусное голосование {-1, 0, +1}
+       по архетипам (как в v60).
+    4. Фаза 4 — ДЕКОДИРОВАНИЕ: readout cross-attention из токенов к архетипам.
+
+    Преимущества над v58 (только мосты):
+    - Единое архетипальное представление вместо сжатия дерева в 1 вектор
+    - Тернарная семантика: каждый мост-выход голосует за/против/воздержался
+
+    Преимущества над v60 (только интерлингва):
+    - Мосты предварительно снимают интерференцию между модулями
+    - Архетипы получают уже «очищенные» сигналы
+    - Лучшая обработка конфликтующих источников
+
+    Сложность: O(N) для мостов (1 уровень) + O(K) для архетипов = O(N).
+
+    Методология сочетания мостов и архетипов:
+    - Мосты используют lightweight режим (bilinear) для скорости
+    - Один уровень мостов (без дерева) — пары, не иерархия
+    - Нечётный источник проходит напрямую в архетипальный слой
+    - Архетипальный слой видит K = ceil(N/2) медиированных входов
+
+    Args:
+        d_model: размерность модели
+        n_sources: число геометрических источников (модулей)
+        n_archetypes: число архетипов (64 = гексаграммы)
+        bridge_mode: 'full' (cross-attention) или 'lightweight' (bilinear)
+        use_ternary: использовать тернарную квантизацию
+        uncertainty_budget: бюджет неопределённости для тернарного режима
+        n_heads: число голов cross-attention
+        bridge_n_heads: число голов в мостах (для full mode)
+    """
+    def __init__(self, d_model: int, n_sources: int,
+                 n_archetypes: int = 64, bridge_mode: str = 'lightweight',
+                 use_ternary: bool = True, uncertainty_budget: float = 0.3,
+                 n_heads: int = 4, bridge_n_heads: int = 2,
+                 bridge_dropout: float = 0.1,
+                 ternary_warmup_steps: int = 2000,
+                 ternary_min_temp: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+        self.n_archetypes = n_archetypes
+        self.use_ternary = use_ternary
+        self.bridge_mode = bridge_mode
+
+        # --- Фаза 1: Мостовая медиация (один уровень) ---
+        # Пары модулей соединяются через мосты
+        self.n_pairs = n_sources // 2
+        self.has_odd = (n_sources % 2 == 1)
+        self.n_bridge_outputs = self.n_pairs + (1 if self.has_odd else 0)
+
+        self.source_norms = nn.ModuleList([
+            nn.LayerNorm(d_model) for _ in range(n_sources)
+        ])
+
+        self.bridges = nn.ModuleList()
+        for _ in range(self.n_pairs):
+            if bridge_mode == 'lightweight':
+                self.bridges.append(LightweightBridge(d_model))
+            else:
+                self.bridges.append(PairwiseBridge(d_model, bridge_n_heads, bridge_dropout))
+
+        # Нечётный источник: отдельная проекция для выравнивания
+        if self.has_odd:
+            self.odd_proj = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, d_model, bias=False),
+                nn.SiLU(),
+            )
+
+        # --- Фаза 2: Архетипальное кодирование (по одному на bridge-выход) ---
+        d_bn = max(d_model // 4, 16)
+        self.bridge_encoders = nn.ModuleList()
+        self.bridge_enc_norms = nn.ModuleList()
+        for _ in range(self.n_bridge_outputs):
+            self.bridge_enc_norms.append(nn.LayerNorm(d_model))
+            self.bridge_encoders.append(nn.Sequential(
+                nn.Linear(d_model, d_bn, bias=False),
+                nn.SiLU(),
+                nn.Linear(d_bn, d_model, bias=False),
+            ))
+
+        # Архетипальные якоря
+        self.archetype_queries = nn.Parameter(
+            torch.randn(n_archetypes, d_model) * 0.02
+        )
+
+        # Cross-attention: архетипы attend к bridge-выходам
+        self.encode_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+        self.encode_norm = nn.LayerNorm(d_model)
+
+        # --- Фаза 3: Тернарная агрегация ---
+        if use_ternary:
+            self.trit_proj = nn.Linear(d_model, 1, bias=True)
+            nn.init.zeros_(self.trit_proj.bias)
+            self.log_uncertainty = nn.Parameter(
+                torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
+            )
+
+        self.aggregate_proj = nn.Linear(d_model, d_model, bias=False)
+        self.aggregate_norm = nn.LayerNorm(d_model)
+
+        # --- Фаза 4: Декодирование ---
+        self.readout_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+        self.readout_norm = nn.LayerNorm(d_model)
+        self.readout_proj = nn.Linear(d_model, d_model, bias=False)
+
+        # Гейты и масштаб
+        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+        # --- Temperature annealing для тернарной квантизации ---
+        if use_ternary:
+            self.ternary_warmup_steps = ternary_warmup_steps
+            self.ternary_min_temp = ternary_min_temp
+            self.register_buffer('_ternary_step', torch.tensor(0, dtype=torch.long))
+
+        # Статистика
+        self._last_global_gate = 0.5
+        self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
+        self._last_archetype_usage = None
+        self._last_bridge_compatibility = []
+        self._last_raw_scores = None
+
+        # Q6 якоря
+        self._init_q6_anchors()
+
+    def _init_q6_anchors(self):
+        """Инициализирует Q6 координаты 64 архетипов."""
+        anchors = []
+        for i in range(min(self.n_archetypes, 64)):
+            vertex = tuple(2 * ((i >> (5 - b)) & 1) - 1 for b in range(6))
+            anchors.append(vertex)
+        while len(anchors) < self.n_archetypes:
+            anchors.append(tuple(0.0 for _ in range(6)))
+        self.register_buffer(
+            'q6_anchors',
+            torch.tensor(anchors, dtype=torch.float32)
+        )
+
+    @property
+    def uncertainty_budget(self) -> torch.Tensor:
+        if self.use_ternary:
+            return torch.sigmoid(self.log_uncertainty)
+        return torch.tensor(0.0)
+
+    def _bridge_phase(self, source_outputs: list) -> list:
+        """Фаза 1: мостовая медиация — попарное соединение модулей.
+
+        Args:
+            source_outputs: list of N tensors (B, T, d_model)
+
+        Returns:
+            bridge_outputs: list of K tensors (B, T, d_model), K = ceil(N/2)
+        """
+        # Нормализуем источники
+        normed = [self.source_norms[i](src) for i, src in enumerate(source_outputs)]
+
+        bridge_outputs = []
+        for p in range(self.n_pairs):
+            a = normed[2 * p]
+            b = normed[2 * p + 1]
+            mediated = self.bridges[p](a, b)
+            bridge_outputs.append(mediated)
+
+        # Нечётный источник
+        if self.has_odd:
+            bridge_outputs.append(self.odd_proj(normed[-1]))
+
+        return bridge_outputs
+
+    def _encode_bridge_output(self, bridge_out: torch.Tensor,
+                               encoder: nn.Module, norm: nn.Module) -> torch.Tensor:
+        """Кодирует один bridge-выход в архетипальное пространство.
+
+        Args:
+            bridge_out: (B, T, d_model) — выход моста
+            encoder: bottleneck encoder
+            norm: LayerNorm
+
+        Returns:
+            contribution: (B, n_archetypes, d_model)
+        """
+        B = bridge_out.shape[0]
+        h = norm(bridge_out)
+        h = encoder(h)
+
+        queries = self.archetype_queries.unsqueeze(0).expand(B, -1, -1)
+        contribution, _ = self.encode_attn(query=queries, key=h, value=h)
+        return contribution
+
+    @property
+    def ternary_temperature(self) -> float:
+        """Текущая температура тернарной квантизации (cosine annealing)."""
+        if not self.use_ternary:
+            return 1.0
+        step = self._ternary_step.item()
+        progress = min(step / max(self.ternary_warmup_steps, 1), 1.0)
+        temp = self.ternary_min_temp + (1.0 - self.ternary_min_temp) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        return temp
+
+    def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+        """Тернарная квантизация с temperature annealing."""
+        scores = self.trit_proj(contribution).squeeze(-1)
+        self._last_raw_scores = scores
+
+        temp = self.ternary_temperature
+
+        if temp > 0.15:
+            trit_scores = torch.tanh(scores / temp)
+        else:
+            raw = torch.tanh(scores)
+            threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
+            hard = torch.zeros_like(raw)
+            hard[raw > threshold] = 1.0
+            hard[raw < -threshold] = -1.0
+            trit_scores = raw + (hard - raw).detach()
+
+        return trit_scores
+
+    def forward(self, x: torch.Tensor,
+                source_outputs: list) -> torch.Tensor:
+        """Forward pass двойной прослойки.
+
+        Поток: source_outputs → bridges → encoders → archetypes → readout → x
+
+        Args:
+            x: (B, T, C) — базовый выход (identity path)
+            source_outputs: list of N tensors (B, T, C)
+
+        Returns:
+            enriched: (B, T, C) — x + двойная прослойка contribution
+        """
+        assert len(source_outputs) == self.n_sources
+        B, T, C = x.shape
+
+        # === Фаза 1: Мостовая медиация ===
+        bridge_outputs = self._bridge_phase(source_outputs)
+        # bridge_outputs: K элементов, каждый (B, T, d_model)
+
+        # === Фаза 2: Архетипальное кодирование ===
+        contributions = []
+        trit_scores_list = []
+        for i, b_out in enumerate(bridge_outputs):
+            contrib = self._encode_bridge_output(
+                b_out, self.bridge_encoders[i], self.bridge_enc_norms[i]
+            )
+            contributions.append(contrib)
+
+            if self.use_ternary:
+                trits = self._ternary_quantize(contrib)
+                trit_scores_list.append(trits)
+
+        # === Фаза 3: Тернарная агрегация ===
+        if self.use_ternary and trit_scores_list:
+            if self.training:
+                self._ternary_step += 1
+
+            trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)
+            consensus = torch.tanh(trit_sum / max(self.n_bridge_outputs, 1))
+            weights = (consensus.abs() + 0.01).unsqueeze(-1)
+
+            stacked = torch.stack(contributions, dim=0)
+            mean_contrib = stacked.mean(dim=0)
+            aggregated = mean_contrib * weights
+
+            with torch.no_grad():
+                all_trits = torch.stack(trit_scores_list, dim=0)
+                hard_trits = all_trits.sign()
+                total = hard_trits.numel()
+                self._last_trit_distribution = {
+                    'pos': (hard_trits > 0).float().sum().item() / total,
+                    'zero': (hard_trits == 0).float().sum().item() / total,
+                    'neg': (hard_trits < 0).float().sum().item() / total,
+                }
+                self._last_archetype_usage = consensus.abs().mean(dim=0).detach()
+        else:
+            stacked = torch.stack(contributions, dim=0)
+            aggregated = stacked.mean(dim=0)
+
+        aggregated = self.aggregate_norm(self.aggregate_proj(aggregated))
+
+        # === Фаза 4: Декодирование (readout) ===
+        readout, _ = self.readout_attn(
+            query=x, key=aggregated, value=aggregated
+        )
+        readout = self.readout_proj(self.readout_norm(readout))
+
+        gate = torch.sigmoid(self.global_gate)
+        with torch.no_grad():
+            self._last_global_gate = gate.item()
+
+        return x + gate * self.scale * readout
+
+    def get_interlingua_loss(self) -> torch.Tensor:
+        """Вспомогательный loss (совместим с ArchetypalInterlingua API)."""
+        loss = torch.tensor(0.0, device=self.archetype_queries.device)
+
+        if self._last_archetype_usage is not None:
+            usage = self._last_archetype_usage
+            target = usage.mean()
+            balance_loss = ((usage - target) ** 2).mean()
+            loss = loss + 0.1 * balance_loss
+
+        if self.use_ternary:
+            zero_frac = self._last_trit_distribution.get('zero', 0.33)
+            target_frac = self.uncertainty_budget.item()
+            uncertainty_loss = (zero_frac - target_frac) ** 2
+            loss = loss + 0.05 * uncertainty_loss
+
+            # Activation encouragement: штрафует scores ≈ 0
+            if self._last_raw_scores is not None:
+                temp = self.ternary_temperature
+                encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
+                if encouragement_weight > 0:
+                    activation_loss = -self._last_raw_scores.abs().mean()
+                    loss = loss + 0.02 * encouragement_weight * activation_loss
+
+        return loss
+
+    def get_interlingua_stats(self) -> dict:
+        """Статистика для мониторинга."""
+        stats = {
+            'global_gate': self._last_global_gate,
+            'scale': self.scale.item(),
+            'trit_distribution': self._last_trit_distribution,
+            'n_bridges': self.n_pairs,
+            'n_bridge_outputs': self.n_bridge_outputs,
+            'bridge_mode': self.bridge_mode,
+        }
+        if self.use_ternary:
+            stats['uncertainty_budget'] = self.uncertainty_budget.item()
+            stats['ternary_temperature'] = self.ternary_temperature
+            stats['ternary_step'] = self._ternary_step.item()
+        if self._last_archetype_usage is not None:
+            usage = self._last_archetype_usage
+            stats['archetype_usage_mean'] = usage.mean().item()
+            stats['archetype_usage_std'] = usage.std().item()
+            stats['active_archetypes'] = (usage > 0.1).sum().item()
+        # Статистика мостов
+        bridge_scales = []
+        for i, bridge in enumerate(self.bridges):
+            bridge_scales.append({
+                'pair': i,
+                'scale': bridge.scale.item(),
+            })
+        stats['bridge_scales'] = bridge_scales
+        return stats
+
+    def archetype_q6_correlation(self) -> torch.Tensor:
+        """Корреляция архетипов с гексаграммами Q6."""
+        if self.d_model < 6:
+            return torch.tensor(0.0, device=self.archetype_queries.device)
+        q6_proj = self.archetype_queries[:, :6]
+        q6_binary = q6_proj.sign()
+        dots = torch.matmul(q6_binary, self.q6_anchors[:64].T)
+        max_sim = dots.max(dim=1).values
+        correlation = max_sim.mean() / 6.0
+        return correlation
+
+
 class DynamicCurriculumController:
     """Dynamic curriculum: адаптирует стратегию на основе гейтов."""
     def __init__(self, base_strength: float = 0.1, adapt_rate: float = 0.01):

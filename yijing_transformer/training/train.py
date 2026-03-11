@@ -305,6 +305,21 @@ def train(args):
                     for k, v in info.items():
                         if isinstance(v, (int, float)):
                             metrics[f'{layer_name}/{k}'] = v
+            # Interlingua stats (temperature annealing, archetypes)
+            if args.model == 'yijing' and hasattr(model, 'archetypal_interlingua'):
+                il = model.archetypal_interlingua
+                il_stats = il.get_interlingua_stats()
+                metrics['interlingua/global_gate'] = il_stats['global_gate']
+                metrics['interlingua/scale'] = il_stats['scale']
+                trit = il_stats.get('trit_distribution', {})
+                metrics['interlingua/trit_pos'] = trit.get('pos', 0)
+                metrics['interlingua/trit_zero'] = trit.get('zero', 0)
+                metrics['interlingua/trit_neg'] = trit.get('neg', 0)
+                if 'ternary_temperature' in il_stats:
+                    metrics['interlingua/ternary_temperature'] = il_stats['ternary_temperature']
+                if 'active_archetypes' in il_stats:
+                    metrics['interlingua/active_archetypes'] = il_stats['active_archetypes']
+                    metrics['interlingua/usage_mean'] = il_stats['archetype_usage_mean']
             logger.log(metrics, step)
 
         if step % cfg.save_every == 0:

@@ -63,6 +63,14 @@ from .geometry import (
     GeometricSourceMixer,
     # v58: Bridge of Modules
     BridgeOfModules,
+    # v59: AbrialeBridge + AdaptiveBridge + SourceSpecializer
+    AbrialeBridgeMediator,
+    AdaptiveBridgeOfModules,
+    SourceSpecializer,
+    # v60: Archetypal Interlingua
+    ArchetypalInterlingua,
+    # v61: BridgedInterlingua (двойная прослойка)
+    BridgedInterlingua,
     # v54: Kasatkin 3D embedding
     CubicAttentionBias,
     CubicPositionalEncoding,
@@ -397,7 +405,15 @@ class YiJingTransformerLayer(nn.Module):
         self.use_source_mixer = getattr(cfg, 'use_source_mixer', False)
         self.use_source_router = getattr(cfg, 'use_source_router', False)
         self.use_bridge_of_modules = getattr(cfg, 'use_bridge_of_modules', False)
-        if self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules:
+        self.use_abriale_bridge = getattr(cfg, 'use_abriale_bridge', False)
+        self.use_adaptive_bridge = getattr(cfg, 'use_adaptive_bridge', False)
+        self.use_source_specialization = getattr(cfg, 'use_source_specialization', False)
+        self.use_archetypal_interlingua = getattr(cfg, 'use_archetypal_interlingua', False)
+        self.use_bridged_interlingua = getattr(cfg, 'use_bridged_interlingua', False)
+        if (self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules
+                or self.use_abriale_bridge or self.use_adaptive_bridge
+                or self.use_source_specialization or self.use_archetypal_interlingua
+                or self.use_bridged_interlingua):
             # Count how many enrichment sources are active
             # v58: expanded to cover all 6 mathematical source groups
             self._enrichment_sources = []
@@ -417,13 +433,64 @@ class YiJingTransformerLayer(nn.Module):
                 self._enrichment_sources.append('dual_embedding')
             n_sources = len(self._enrichment_sources)
             if n_sources > 0:
-                if self.use_bridge_of_modules:
+                if self.use_bridged_interlingua:
+                    # v61: BridgedInterlingua — двойная прослойка (Bridge → Archetype)
+                    self.archetypal_interlingua = BridgedInterlingua(
+                        cfg.d_model, n_sources,
+                        n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
+                        bridge_mode=getattr(cfg, 'bridged_bridge_mode', 'lightweight'),
+                        use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
+                        uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
+                        n_heads=getattr(cfg, 'interlingua_n_heads', 4),
+                        bridge_n_heads=getattr(cfg, 'bridged_bridge_n_heads', 2),
+                        bridge_dropout=getattr(cfg, 'bridged_bridge_dropout', 0.1),
+                    )
+                    self.use_archetypal_interlingua = True  # reuse forward path
+                elif self.use_archetypal_interlingua:
+                    # v60: Archetypal Interlingua — hub-and-spoke посредник
+                    self.archetypal_interlingua = ArchetypalInterlingua(
+                        cfg.d_model, n_sources,
+                        n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
+                        d_bottleneck=getattr(cfg, 'interlingua_d_bottleneck', 0),
+                        use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
+                        uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
+                        n_heads=getattr(cfg, 'interlingua_n_heads', 4),
+                    )
+                elif self.use_abriale_bridge:
+                    # v59: AbrialeBridge — гибрид Abriale + Bridge
+                    self.bridge_of_modules = AbrialeBridgeMediator(
+                        cfg.d_model, n_sources,
+                        n_heads=getattr(cfg, 'bridge_n_heads', 2),
+                        dropout=getattr(cfg, 'bridge_dropout', 0.1),
+                        bridge_mode=getattr(cfg, 'bridge_mode', 'lightweight'),
+                        d_event=getattr(cfg, 'abriale_bridge_d_event', 64),
+                        n_rules=getattr(cfg, 'abriale_bridge_n_rules', 64),
+                        arity=getattr(cfg, 'abriale_bridge_arity', 2),
+                    )
+                    self.use_bridge_of_modules = True  # reuse forward path
+                elif self.use_adaptive_bridge:
+                    # v59: Adaptive Bridge — адаптивная глубина
+                    self.bridge_of_modules = AdaptiveBridgeOfModules(
+                        cfg.d_model, n_sources,
+                        n_heads=getattr(cfg, 'bridge_n_heads', 2),
+                        dropout=getattr(cfg, 'bridge_dropout', 0.1),
+                        bridge_mode=getattr(cfg, 'bridge_mode', 'lightweight'),
+                        max_levels=getattr(cfg, 'adaptive_bridge_max_levels', 0),
+                    )
+                    self.use_bridge_of_modules = True  # reuse forward path
+                elif self.use_bridge_of_modules:
                     # v58: Bridge of Modules — иерархическая cross-attention медиация
                     self.bridge_of_modules = BridgeOfModules(
                         cfg.d_model, n_sources,
                         n_heads=getattr(cfg, 'bridge_n_heads', 2),
                         dropout=getattr(cfg, 'bridge_dropout', 0.1),
                         bridge_mode=getattr(cfg, 'bridge_mode', 'full'),
+                    )
+                elif self.use_source_specialization:
+                    # v59: Source Specialization — доменная специализация
+                    self.source_specializer = SourceSpecializer(
+                        cfg.d_model, n_sources,
+                        n_domains=getattr(cfg, 'n_domains', 4),
                     )
                 elif self.use_source_router:
                     self.source_router = GeometricSourceRouter(
@@ -436,6 +503,9 @@ class YiJingTransformerLayer(nn.Module):
                 self.use_source_mixer = False
                 self.use_source_router = False
                 self.use_bridge_of_modules = False
+                self.use_abriale_bridge = False
+                self.use_adaptive_bridge = False
+                self.use_source_specialization = False
 
         # Квантизация к вершинам гиперкуба (bottleneck)
         # Multi-scale: layer_quant_dim overrides cfg.quant_total_dim
@@ -536,9 +606,11 @@ class YiJingTransformerLayer(nn.Module):
                 bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
-        # v54/v58: Geometric source mixing (replaces fixed 0.05/0.1 coefficients)
-        # v54/v58: Geometric source mixing (replaces fixed coefficients)
-        if self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules:
+        # v54/v58/v59: Geometric source mixing (replaces fixed coefficients)
+        _has_routing = (self.use_source_mixer or self.use_source_router
+                        or self.use_bridge_of_modules or self.use_source_specialization
+                        or self.use_archetypal_interlingua)
+        if _has_routing:
             enrichments = []
             if self.use_heisenberg:
                 enrichments.append(self.heisenberg_attn(h))
@@ -561,9 +633,21 @@ class YiJingTransformerLayer(nn.Module):
                 enrichments.append(self.dual_emb(h) - h)  # delta only
 
             if enrichments:
-                if self.use_bridge_of_modules:
-                    # v58: Bridge of Modules — иерархическая медиация
+                if self.use_archetypal_interlingua:
+                    # v60: Archetypal Interlingua — hub-and-spoke посредник
+                    attn_out = self.archetypal_interlingua(attn_out, enrichments)
+                    self._source_routing_aux = 0.01 * self.archetypal_interlingua.get_interlingua_loss()
+                elif self.use_bridge_of_modules:
+                    # v58/v59: Bridge of Modules / AbrialeBridge / AdaptiveBridge
                     attn_out = self.bridge_of_modules(attn_out, enrichments)
+                    # v59: AbrialeBridge has additional aux loss
+                    if hasattr(self.bridge_of_modules, 'get_abriale_aux_loss'):
+                        self._source_routing_aux = 0.01 * self.bridge_of_modules.get_abriale_aux_loss()
+                    else:
+                        self._source_routing_aux = 0.0
+                elif self.use_source_specialization:
+                    # v59: Source Specialization
+                    attn_out = self.source_specializer(attn_out, enrichments)
                     self._source_routing_aux = 0.0
                 elif self.use_source_router:
                     mixed = self.source_router(h, enrichments)
@@ -593,12 +677,11 @@ class YiJingTransformerLayer(nn.Module):
         x = x + attn_out
 
         # v51: Dual Embedding enrichment (skip if handled by bridge/router)
-        _routed = self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules
-        if self.use_dual_embedding and not _routed:
+        if self.use_dual_embedding and not _has_routing:
             x = self.dual_emb(x)
 
         # v53: Flower of Life GAT enrichment (only if not handled by source mixer/bridge)
-        if self.use_flower_gat and not (self.use_source_mixer or self.use_source_router or self.use_bridge_of_modules):
+        if self.use_flower_gat and not _has_routing:
             x = self.flower_gat(x)
 
         # 2. Квантизация к вершинам гиперкуба
@@ -620,7 +703,7 @@ class YiJingTransformerLayer(nn.Module):
             x = self.bian_gua(x)
 
         # 4. D₄-эквивариантный слой (skip if handled by bridge/router)
-        if self.use_d4_equivariant and not _routed:
+        if self.use_d4_equivariant and not _has_routing:
             x = self.d4_layer(x)
 
         # v53: Structural Defect bottleneck (geometric compression)
