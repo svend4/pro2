@@ -180,6 +180,28 @@ CONFIGS = {
         interlingua_n_archetypes=64,
         interlingua_n_heads=4,
     ),
+    # v63: Geometric prior — SOLAN Q6 lookup table as inductive bias
+    'v63_convergence_learned': dict(
+        **ALL_SOURCES,
+        use_convergence_bridge=True,
+        use_glyph_prior=False,
+    ),
+    'v63_convergence_glyph_prior': dict(
+        **ALL_SOURCES,
+        use_convergence_bridge=True,
+        use_glyph_prior=True,
+    ),
+    'v63_prior_plus_interlingua': dict(
+        **ALL_SOURCES,
+        use_convergence_bridge=True,
+        use_glyph_prior=True,
+        use_archetypal_interlingua=True,
+        interlingua_use_ternary=True,
+        interlingua_use_paired_bit=True,
+        interlingua_uncertainty=0.3,
+        interlingua_n_archetypes=64,
+        interlingua_n_heads=4,
+    ),
 }
 
 CONFIG_ORDER = [
@@ -188,6 +210,8 @@ CONFIG_ORDER = [
     'bridged_lightweight', 'bridged_full',
     'bridged_no_ternary', 'bridged_high_uncertainty',
     'bridged_paired_bit', 'v60_paired_bit',
+    'v63_convergence_learned', 'v63_convergence_glyph_prior',
+    'v63_prior_plus_interlingua',
 ]
 
 
