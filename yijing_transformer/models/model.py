@@ -83,6 +83,9 @@ from .geometry import (
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 
+# v62: GlyphTokenizer — SOLAN-76 визуальный токенизатор для ConvergenceBridge
+from yijing_transformer.tokenizer.glyph_tokenizer import GlyphTokenizer
+
 
 def build_quantizer(cfg):
     """Фабрика квантизаторов по конфигурации."""
@@ -875,6 +878,7 @@ class YiJingGPT(nn.Module):
 
         # v55: Convergence Bridge — гибридная иерархия глифов ↔ токенов
         self.use_convergence_bridge = getattr(cfg, 'use_convergence_bridge', False)
+        self.use_glyph_tokenizer = getattr(cfg, 'use_glyph_tokenizer', False)
         if self.use_convergence_bridge:
             self.convergence_bridge = ConvergenceBridge(
                 d_model=cfg.d_model,
@@ -884,9 +888,14 @@ class YiJingGPT(nn.Module):
                 n_compose_layers=getattr(cfg, 'convergence_compose_layers', 1),
                 n_heads=getattr(cfg, 'convergence_n_heads', 4),
             )
-            # Проекция token ids → Q6 вершины (learned, не зависит от GlyphTokenizer)
-            # Каждый токен vocab → 6D вершина Q6
-            self.tok_to_q6 = nn.Linear(cfg.d_model, 6, bias=False)
+            if self.use_glyph_tokenizer:
+                # v62: Q6 lookup table из GlyphTokenizer (SOLAN-76)
+                # Каждый token_id → фиксированная Q6 вершина {-1,+1}^6
+                q6_table = self._build_glyph_q6_table(cfg.vocab_size)
+                self.register_buffer('q6_table', q6_table)
+            else:
+                # Fallback: learned projection embedding → Q6
+                self.tok_to_q6 = nn.Linear(cfg.d_model, 6, bias=False)
 
         # v56: Matrix Grammar — 2D матричная грамматика (Atamiri/Аймара)
         self.use_matrix_grammar = getattr(cfg, 'use_matrix_grammar', False)
@@ -922,6 +931,40 @@ class YiJingGPT(nn.Module):
         if cfg.weight_tying:
             self.head.weight = self.tok_emb.weight
 
+    @staticmethod
+    def _build_glyph_q6_table(vocab_size: int) -> torch.Tensor:
+        """Строит таблицу Q6-вершин для всех token_id из GlyphTokenizer (SOLAN-76).
+
+        Для ID вне покрытия SOLAN — детерминированный hash в {-1,+1}^6.
+
+        Returns:
+            Tensor (vocab_size, 6), значения ∈ {-1, +1}
+        """
+        gt = GlyphTokenizer()
+        table = torch.zeros(vocab_size, 6)
+        # CharTokenizer: id 0=PAD, id 1=UNK, id 2+i=sorted_chars[i]
+        standard_chars = sorted(set(
+            [chr(c) for c in range(32, 127)]
+            + [chr(10), chr(9)]
+            + [chr(c) for c in range(192, 256)]
+        ))
+        for token_id in range(vocab_size):
+            if token_id < 2:
+                # PAD/UNK → origin
+                bits = (0, 0, 0, 0, 0, 0)
+            else:
+                char_idx = token_id - 2
+                ch = standard_chars[char_idx] if char_idx < len(standard_chars) else None
+                if ch is not None and ch in gt.char_to_bits:
+                    bits = gt.char_to_bits[ch]
+                else:
+                    # Deterministic fallback: Knuth hash → 6 bits
+                    code = (token_id * 2654435761) % 64
+                    bits = tuple((code >> (5 - b)) & 1 for b in range(6))
+            vertex = tuple(2 * b - 1 for b in bits)
+            table[token_id] = torch.tensor(vertex, dtype=torch.float32)
+        return table
+
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             nn.init.trunc_normal_(module.weight, std=0.02)
@@ -930,7 +973,7 @@ class YiJingGPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.trunc_normal_(module.weight, std=0.02)
 
-    def forward(self, idx, targets=None, kv_cache=None):
+    def forward(self, idx, targets=None, kv_cache=None, glyph_vertices=None):
         b, t = idx.size()
         x = self.tok_emb(idx)
 
@@ -950,12 +993,19 @@ class YiJingGPT(nn.Module):
             bi_mask = self.bi_tri_attn.get_mask(t)  # (t, t) soft directional mask
             x = x * bi_mask.diag().unsqueeze(0).unsqueeze(-1)
 
-        # v55: Convergence Bridge — обогащение через гибридную иерархию
+        # v55/v62: Convergence Bridge — обогащение через гибридную иерархию
         convergence_info = None
         if self.use_convergence_bridge:
-            # Генерируем Q6 вершины из token embeddings (learned projection)
-            glyph_vertices = torch.tanh(self.tok_to_q6(x))  # (B, T, 6) → soft Q6
-            x, convergence_info = self.convergence_bridge(x, glyph_vertices)
+            if glyph_vertices is not None:
+                # Внешние Q6 вершины (переданы из training loop)
+                gv = glyph_vertices
+            elif self.use_glyph_tokenizer:
+                # v62: Q6 lookup из GlyphTokenizer (SOLAN-76) — frozen таблица
+                gv = self.q6_table[idx]  # (B, T, 6), {-1, +1}
+            else:
+                # Fallback: learned projection
+                gv = torch.tanh(self.tok_to_q6(x))  # (B, T, 6) → soft Q6
+            x, convergence_info = self.convergence_bridge(x, gv)
 
         # v56: Matrix Grammar — 2D axial attention обогащение
         if self.use_matrix_grammar:
