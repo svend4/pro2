@@ -43,7 +43,7 @@
     "interlingua_stats": {},
     "interlingua_history": []
   },
-  "_last_updated": "2026-03-11 08:57:07",
+  "_last_updated": "2026-03-11 15:00:50",
   "v58_bridge_lightweight": {
     "name": "v58_bridge_lightweight",
     "params": 1406268,
@@ -275,70 +275,72 @@
     "name": "bridged_lightweight",
     "params": 2195888,
     "bridge_type": "BridgedInterlingua",
-    "final_val": 1.075067893664042,
-    "final_ppl": 2.930191835240463,
-    "best_val": 1.075067893664042,
-    "best_ppl": 2.930191835240463,
-    "time": 1085.6084043979645,
+    "final_val": 1.072413198153178,
+    "final_ppl": 2.9224233841279132,
+    "best_val": 1.072413198153178,
+    "best_ppl": 2.9224233841279132,
+    "time": 646.4955496788025,
     "history": [
       {
         "step": 1,
-        "train": 5.612514495849609,
-        "val": 5.108562326431274,
-        "ppl": 165.43234611385301
+        "train": 5.611854553222656,
+        "val": 5.1037375926971436,
+        "ppl": 164.63610147161913
       },
       {
         "step": 200,
-        "train": 1.1144715547561646,
-        "val": 1.1190371751785277,
-        "ppl": 3.06190470574446
+        "train": 1.113572359085083,
+        "val": 1.117394995689392,
+        "ppl": 3.0568806349810345
       },
       {
         "step": 400,
-        "train": 1.084489345550537,
-        "val": 1.087606910864512,
-        "ppl": 2.9671648794532364
+        "train": 1.084949016571045,
+        "val": 1.0876838127772013,
+        "ppl": 2.96739306888172
       },
       {
         "step": 600,
-        "train": 1.081024169921875,
-        "val": 1.078501856327057,
-        "ppl": 2.940271300947764
+        "train": 1.0772018432617188,
+        "val": 1.0769699414571126,
+        "ppl": 2.9357705039193105
       },
       {
         "step": 800,
-        "train": 1.0911704301834106,
-        "val": 1.075067893664042,
-        "ppl": 2.930191835240463
+        "train": 1.08896803855896,
+        "val": 1.072413198153178,
+        "ppl": 2.9224233841279132
       }
     ],
     "interlingua_stats": {
-      "global_gate": 0.4885150194168091,
-      "scale": 0.05154256895184517,
+      "global_gate": 0.493172287940979,
+      "scale": 0.07216111570596695,
       "trit_distribution": {
-        "pos": 0.0,
-        "zero": 1.0,
+        "pos": 1.0,
+        "zero": 0.0,
         "neg": 0.0
       },
       "n_bridges": 3,
       "n_bridge_outputs": 4,
       "bridge_mode": "lightweight",
       "uncertainty_budget": 0.30000001192092896,
-      "archetype_usage_mean": 0.0,
-      "archetype_usage_std": 0.0,
-      "active_archetypes": 0,
+      "ternary_temperature": 0.6890576474687263,
+      "ternary_step": 800,
+      "archetype_usage_mean": 0.7031242847442627,
+      "archetype_usage_std": 5.03751174107947e-08,
+      "active_archetypes": 64,
       "bridge_scales": [
         {
           "pair": 0,
-          "scale": 0.09960115700960159
+          "scale": 0.10071367770433426
         },
         {
           "pair": 1,
-          "scale": 0.09960115700960159
+          "scale": 0.10186491161584854
         },
         {
           "pair": 2,
-          "scale": 0.09960115700960159
+          "scale": 0.09552750736474991
         }
       ],
       "q6_correlation": 1.0,
@@ -347,32 +349,34 @@
     "interlingua_history": [
       {
         "step": 1,
-        "global_gate": 0.5,
-        "scale": 0.09999900311231613,
+        "global_gate": 0.5002486109733582,
+        "scale": 0.10099872201681137,
         "trit_distribution": {
           "pos": 0.0,
-          "zero": 1.0,
-          "neg": 0.0
+          "zero": 0.0,
+          "neg": 1.0
         },
         "n_bridges": 3,
         "n_bridge_outputs": 4,
         "bridge_mode": "lightweight",
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
+        "ternary_temperature": 0.9999994448348666,
+        "ternary_step": 1,
+        "archetype_usage_mean": 0.0015022484585642815,
+        "archetype_usage_std": 1.2313707387079376e-08,
         "active_archetypes": 0,
         "bridge_scales": [
           {
             "pair": 0,
-            "scale": 0.09999900311231613
+            "scale": 0.10093801468610764
           },
           {
             "pair": 1,
-            "scale": 0.09999900311231613
+            "scale": 0.09950684756040573
           },
           {
             "pair": 2,
-            "scale": 0.09999900311231613
+            "scale": 0.09905408322811127
           }
         ],
         "q6_correlation": 1.0,
@@ -380,32 +384,34 @@
       },
       {
         "step": 200,
-        "global_gate": 0.48935800790786743,
-        "scale": 0.055623799562454224,
+        "global_gate": 0.4935839772224426,
+        "scale": 0.07404608279466629,
         "trit_distribution": {
-          "pos": 0.0,
-          "zero": 1.0,
+          "pos": 1.0,
+          "zero": 0.0,
           "neg": 0.0
         },
         "n_bridges": 3,
         "n_bridge_outputs": 4,
         "bridge_mode": "lightweight",
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.9779754323328191,
+        "ternary_step": 200,
+        "archetype_usage_mean": 0.3297874331474304,
+        "archetype_usage_std": 7.64953938414692e-07,
+        "active_archetypes": 64,
         "bridge_scales": [
           {
             "pair": 0,
-            "scale": 0.09981019049882889
+            "scale": 0.1008828654885292
           },
           {
             "pair": 1,
-            "scale": 0.09981019049882889
+            "scale": 0.10200870782136917
           },
           {
             "pair": 2,
-            "scale": 0.09981019049882889
+            "scale": 0.09562033414840698
           }
         ],
         "q6_correlation": 1.0,
@@ -413,32 +419,34 @@
       },
       {
         "step": 400,
-        "global_gate": 0.4885982275009155,
-        "scale": 0.05197708681225777,
+        "global_gate": 0.4930855333805084,
+        "scale": 0.07184281200170517,
         "trit_distribution": {
-          "pos": 0.0,
-          "zero": 1.0,
+          "pos": 1.0,
+          "zero": 0.0,
           "neg": 0.0
         },
         "n_bridges": 3,
         "n_bridge_outputs": 4,
         "bridge_mode": "lightweight",
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.9140576474687263,
+        "ternary_step": 400,
+        "archetype_usage_mean": 0.5214124917984009,
+        "archetype_usage_std": 5.792530259896012e-07,
+        "active_archetypes": 64,
         "bridge_scales": [
           {
             "pair": 0,
-            "scale": 0.09967338293790817
+            "scale": 0.1007828637957573
           },
           {
             "pair": 1,
-            "scale": 0.09967338293790817
+            "scale": 0.10194024443626404
           },
           {
             "pair": 2,
-            "scale": 0.09967338293790817
+            "scale": 0.09557363390922546
           }
         ],
         "q6_correlation": 1.0,
@@ -446,32 +454,34 @@
       },
       {
         "step": 600,
-        "global_gate": 0.4885311722755432,
-        "scale": 0.05162937566637993,
+        "global_gate": 0.4931352734565735,
+        "scale": 0.0720108151435852,
         "trit_distribution": {
-          "pos": 0.0,
-          "zero": 1.0,
+          "pos": 1.0,
+          "zero": 0.0,
           "neg": 0.0
         },
         "n_bridges": 3,
         "n_bridge_outputs": 4,
         "bridge_mode": "lightweight",
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.8145033635316129,
+        "ternary_step": 600,
+        "archetype_usage_mean": 0.6523522734642029,
+        "archetype_usage_std": 1.0908149050692373e-07,
+        "active_archetypes": 64,
         "bridge_scales": [
           {
             "pair": 0,
-            "scale": 0.0996110811829567
+            "scale": 0.10072147846221924
           },
           {
             "pair": 1,
-            "scale": 0.0996110811829567
+            "scale": 0.10187293589115143
           },
           {
             "pair": 2,
-            "scale": 0.0996110811829567
+            "scale": 0.09553563594818115
           }
         ],
         "q6_correlation": 1.0,
@@ -479,32 +489,34 @@
       },
       {
         "step": 800,
-        "global_gate": 0.4885150194168091,
-        "scale": 0.05154256895184517,
+        "global_gate": 0.493172287940979,
+        "scale": 0.07216111570596695,
         "trit_distribution": {
-          "pos": 0.0,
-          "zero": 1.0,
+          "pos": 1.0,
+          "zero": 0.0,
           "neg": 0.0
         },
         "n_bridges": 3,
         "n_bridge_outputs": 4,
         "bridge_mode": "lightweight",
         "uncertainty_budget": 0.30000001192092896,
-        "archetype_usage_mean": 0.0,
-        "archetype_usage_std": 0.0,
-        "active_archetypes": 0,
+        "ternary_temperature": 0.6890576474687263,
+        "ternary_step": 800,
+        "archetype_usage_mean": 0.7031242847442627,
+        "archetype_usage_std": 5.03751174107947e-08,
+        "active_archetypes": 64,
         "bridge_scales": [
           {
             "pair": 0,
-            "scale": 0.09960115700960159
+            "scale": 0.10071367770433426
           },
           {
             "pair": 1,
-            "scale": 0.09960115700960159
+            "scale": 0.10186491161584854
           },
           {
             "pair": 2,
-            "scale": 0.09960115700960159
+            "scale": 0.09552750736474991
           }
         ],
         "q6_correlation": 1.0,
