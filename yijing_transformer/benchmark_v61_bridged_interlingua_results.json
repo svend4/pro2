@@ -7,7 +7,7 @@
     "final_ppl": 2.9395154582600536,
     "best_val": 1.0782447576522827,
     "best_ppl": 2.9395154582600536,
-    "time": 144.2240493297577,
+    "time": 171.22587776184082,
     "history": [
       {
         "step": 1,
@@ -43,7 +43,7 @@
     "interlingua_stats": {},
     "interlingua_history": []
   },
-  "_last_updated": "2026-03-11 15:00:50",
+  "_last_updated": "2026-03-11 17:06:28",
   "v58_bridge_lightweight": {
     "name": "v58_bridge_lightweight",
     "params": 1406268,
@@ -275,11 +275,11 @@
     "name": "bridged_lightweight",
     "params": 2195888,
     "bridge_type": "BridgedInterlingua",
-    "final_val": 1.072413198153178,
-    "final_ppl": 2.9224233841279132,
-    "best_val": 1.072413198153178,
-    "best_ppl": 2.9224233841279132,
-    "time": 646.4955496788025,
+    "final_val": 1.0721541364987692,
+    "final_ppl": 2.9216663943488843,
+    "best_val": 1.0721541364987692,
+    "best_ppl": 2.9216663943488843,
+    "time": 984.2138543128967,
     "history": [
       {
         "step": 1,
@@ -301,20 +301,20 @@
       },
       {
         "step": 600,
-        "train": 1.0772018432617188,
-        "val": 1.0769699414571126,
-        "ppl": 2.9357705039193105
+        "train": 1.0768842697143555,
+        "val": 1.0767916440963745,
+        "ppl": 2.935247110447953
       },
       {
         "step": 800,
-        "train": 1.08896803855896,
-        "val": 1.072413198153178,
-        "ppl": 2.9224233841279132
+        "train": 1.0888787508010864,
+        "val": 1.0721541364987692,
+        "ppl": 2.9216663943488843
       }
     ],
     "interlingua_stats": {
-      "global_gate": 0.493172287940979,
-      "scale": 0.07216111570596695,
+      "global_gate": 0.49317100644111633,
+      "scale": 0.07215548306703568,
       "trit_distribution": {
         "pos": 1.0,
         "zero": 0.0,
@@ -326,21 +326,21 @@
       "uncertainty_budget": 0.30000001192092896,
       "ternary_temperature": 0.6890576474687263,
       "ternary_step": 800,
-      "archetype_usage_mean": 0.7031242847442627,
-      "archetype_usage_std": 5.03751174107947e-08,
+      "archetype_usage_mean": 0.5926260948181152,
+      "archetype_usage_std": 1.4109031098996638e-07,
       "active_archetypes": 64,
       "bridge_scales": [
         {
           "pair": 0,
-          "scale": 0.10071367770433426
+          "scale": 0.10071443766355515
         },
         {
           "pair": 1,
-          "scale": 0.10186491161584854
+          "scale": 0.1018652394413948
         },
         {
           "pair": 2,
-          "scale": 0.09552750736474991
+          "scale": 0.09553337842226028
         }
       ],
       "q6_correlation": 1.0,
@@ -454,8 +454,8 @@
       },
       {
         "step": 600,
-        "global_gate": 0.4931352734565735,
-        "scale": 0.0720108151435852,
+        "global_gate": 0.49313807487487793,
+        "scale": 0.07202252745628357,
         "trit_distribution": {
           "pos": 1.0,
           "zero": 0.0,
@@ -467,21 +467,21 @@
         "uncertainty_budget": 0.30000001192092896,
         "ternary_temperature": 0.8145033635316129,
         "ternary_step": 600,
-        "archetype_usage_mean": 0.6523522734642029,
-        "archetype_usage_std": 1.0908149050692373e-07,
+        "archetype_usage_mean": 0.558101236820221,
+        "archetype_usage_std": 1.3887462557704566e-07,
         "active_archetypes": 64,
         "bridge_scales": [
           {
             "pair": 0,
-            "scale": 0.10072147846221924
+            "scale": 0.10071845352649689
           },
           {
             "pair": 1,
-            "scale": 0.10187293589115143
+            "scale": 0.10187049955129623
           },
           {
             "pair": 2,
-            "scale": 0.09553563594818115
+            "scale": 0.09553889185190201
           }
         ],
         "q6_correlation": 1.0,
@@ -489,8 +489,8 @@
       },
       {
         "step": 800,
-        "global_gate": 0.493172287940979,
-        "scale": 0.07216111570596695,
+        "global_gate": 0.49317100644111633,
+        "scale": 0.07215548306703568,
         "trit_distribution": {
           "pos": 1.0,
           "zero": 0.0,
@@ -502,21 +502,21 @@
         "uncertainty_budget": 0.30000001192092896,
         "ternary_temperature": 0.6890576474687263,
         "ternary_step": 800,
-        "archetype_usage_mean": 0.7031242847442627,
-        "archetype_usage_std": 5.03751174107947e-08,
+        "archetype_usage_mean": 0.5926260948181152,
+        "archetype_usage_std": 1.4109031098996638e-07,
         "active_archetypes": 64,
         "bridge_scales": [
           {
             "pair": 0,
-            "scale": 0.10071367770433426
+            "scale": 0.10071443766355515
           },
           {
             "pair": 1,
-            "scale": 0.10186491161584854
+            "scale": 0.1018652394413948
           },
           {
             "pair": 2,
-            "scale": 0.09552750736474991
+            "scale": 0.09553337842226028
           }
         ],
         "q6_correlation": 1.0,
@@ -1216,6 +1216,289 @@
           {
             "pair": 2,
             "scale": 0.09960115700960159
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      }
+    ]
+  },
+  "bridged_paired_bit": {
+    "name": "bridged_paired_bit",
+    "params": 2196404,
+    "bridge_type": "BridgedInterlingua",
+    "final_val": 1.075123131275177,
+    "final_ppl": 2.930353696507982,
+    "best_val": 1.075123131275177,
+    "best_ppl": 2.930353696507982,
+    "time": 908.6008973121643,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.587009906768799,
+        "val": 5.06150697072347,
+        "ppl": 157.82817964862238
+      },
+      {
+        "step": 200,
+        "train": 1.137968897819519,
+        "val": 1.1093649784723918,
+        "ppl": 3.03243212320931
+      },
+      {
+        "step": 400,
+        "train": 1.0747629404067993,
+        "val": 1.0850248773892721,
+        "ppl": 2.959513442791673
+      },
+      {
+        "step": 600,
+        "train": 1.0832092761993408,
+        "val": 1.0771665215492248,
+        "ppl": 2.936347674683674
+      },
+      {
+        "step": 800,
+        "train": 1.0697524547576904,
+        "val": 1.075123131275177,
+        "ppl": 2.930353696507982
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.48792633414268494,
+      "scale": 0.04864199459552765,
+      "trit_distribution": {
+        "pos": 1.0,
+        "zero": 0.0,
+        "neg": 0.0
+      },
+      "n_bridges": 3,
+      "n_bridge_outputs": 4,
+      "bridge_mode": "lightweight",
+      "uncertainty_budget": 0.30000001192092896,
+      "ternary_temperature": 0.6890576474687263,
+      "ternary_step": 800,
+      "paired_bit": true,
+      "direction_stats": {
+        "spring": 1.0,
+        "autumn": 0.0
+      },
+      "archetype_usage_mean": 0.7615941762924194,
+      "archetype_usage_std": 6.007583408518258e-08,
+      "active_archetypes": 64,
+      "bridge_scales": [
+        {
+          "pair": 0,
+          "scale": 0.09000755101442337
+        },
+        {
+          "pair": 1,
+          "scale": 0.10640034824609756
+        },
+        {
+          "pair": 2,
+          "scale": 0.10804587602615356
+        }
+      ],
+      "q6_correlation": 1.0,
+      "class": "BridgedInterlingua"
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.499750018119812,
+        "scale": 0.0989990159869194,
+        "trit_distribution": {
+          "pos": 0.0,
+          "zero": 0.0,
+          "neg": 1.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.9999994448348666,
+        "ternary_step": 1,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 1.0,
+          "autumn": 0.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09900283068418503
+          },
+          {
+            "pair": 1,
+            "scale": 0.10099612176418304
+          },
+          {
+            "pair": 2,
+            "scale": 0.1009945198893547
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 200,
+        "global_gate": 0.4887007474899292,
+        "scale": 0.05250503122806549,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.9779754323328191,
+        "ternary_step": 200,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 1.0,
+          "autumn": 0.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09008711576461792
+          },
+          {
+            "pair": 1,
+            "scale": 0.10665071755647659
+          },
+          {
+            "pair": 2,
+            "scale": 0.10826699435710907
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4879733920097351,
+        "scale": 0.04890831559896469,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.9140576474687263,
+        "ternary_step": 400,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 1.0,
+          "autumn": 0.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09007001668214798
+          },
+          {
+            "pair": 1,
+            "scale": 0.106532521545887
+          },
+          {
+            "pair": 2,
+            "scale": 0.10815312713384628
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 600,
+        "global_gate": 0.48786213994026184,
+        "scale": 0.048328500241041183,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.8145033635316129,
+        "ternary_step": 600,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 1.0,
+          "autumn": 0.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09000927209854126
+          },
+          {
+            "pair": 1,
+            "scale": 0.10643047094345093
+          },
+          {
+            "pair": 2,
+            "scale": 0.10805484652519226
+          }
+        ],
+        "q6_correlation": 1.0,
+        "class": "BridgedInterlingua"
+      },
+      {
+        "step": 800,
+        "global_gate": 0.48792633414268494,
+        "scale": 0.04864199459552765,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "n_bridges": 3,
+        "n_bridge_outputs": 4,
+        "bridge_mode": "lightweight",
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.6890576474687263,
+        "ternary_step": 800,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 1.0,
+          "autumn": 0.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "bridge_scales": [
+          {
+            "pair": 0,
+            "scale": 0.09000755101442337
+          },
+          {
+            "pair": 1,
+            "scale": 0.10640034824609756
+          },
+          {
+            "pair": 2,
+            "scale": 0.10804587602615356
           }
         ],
         "q6_correlation": 1.0,
