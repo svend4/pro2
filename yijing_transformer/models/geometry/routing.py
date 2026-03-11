@@ -980,12 +980,14 @@ class ArchetypalInterlingua(nn.Module):
                  use_ternary: bool = True, uncertainty_budget: float = 0.3,
                  n_heads: int = 4,
                  ternary_warmup_steps: int = 2000,
-                 ternary_min_temp: float = 0.1):
+                 ternary_min_temp: float = 0.1,
+                 use_paired_bit: bool = False):
         super().__init__()
         self.d_model = d_model
         self.n_sources = n_sources
         self.n_archetypes = n_archetypes
         self.use_ternary = use_ternary
+        self.use_paired_bit = use_paired_bit
         d_bn = d_bottleneck or max(d_model // 4, 16)
 
         # --- Фаза 1: Кодировщики (по одному на источник) ---
@@ -1013,9 +1015,16 @@ class ArchetypalInterlingua(nn.Module):
 
         # --- Фаза 2: Тернарная агрегация ---
         if use_ternary:
-            # Тернарный scoring: каждый модуль → {-1, 0, +1} на каждый архетип
-            self.trit_proj = nn.Linear(d_model, 1, bias=True)
-            nn.init.zeros_(self.trit_proj.bias)
+            if use_paired_bit:
+                # Строительная логика: проекция в 2 бита (пару) на архетип
+                # trit = bit_a + bit_b - 1; direction = bit_a - bit_b
+                self.paired_bit_proj = nn.Linear(d_model, 2, bias=True)
+                nn.init.zeros_(self.paired_bit_proj.bias)
+                self.paired_bit_temp = 1.0  # начальная температура сигмоиды
+            else:
+                # Тернарный scoring: каждый модуль → {-1, 0, +1} на каждый архетип
+                self.trit_proj = nn.Linear(d_model, 1, bias=True)
+                nn.init.zeros_(self.trit_proj.bias)
             # Learnable uncertainty budget
             self.log_uncertainty = nn.Parameter(
                 torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
@@ -1049,6 +1058,7 @@ class ArchetypalInterlingua(nn.Module):
         # Статистика
         self._last_global_gate = 0.5
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
+        self._last_direction_stats = {'spring': 0.0, 'autumn': 0.0}
         self._last_raw_scores = None  # для activation loss
         self._last_archetype_usage = None
 
@@ -1114,6 +1124,58 @@ class ArchetypalInterlingua(nn.Module):
         temp = self.ternary_min_temp + (1.0 - self.ternary_min_temp) * 0.5 * (1.0 + math.cos(math.pi * progress))
         return temp
 
+    def _paired_bit_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+        """Строительная квантизация: трит из пары битов.
+
+        Каждый бит — независимая сигмоида с STE. Трит = bit_a + bit_b - 1.
+        Нет мёртвой зоны: градиент течёт через оба бита всегда.
+
+        (1,1) → +1 (jisa, лето)    (0,0) → -1 (jani, зима)
+        (0,1) →  0 (весна, ↑)      (1,0) →  0 (осень, ↓)
+
+        Args:
+            contribution: (B, n_archetypes, d_model)
+
+        Returns:
+            trit_scores: (B, n_archetypes) — триты {-1, 0, +1}
+        """
+        logits = self.paired_bit_proj(contribution)  # (B, n_archetypes, 2)
+        self._last_raw_scores = logits.sum(dim=-1)  # совместимость с activation loss
+
+        temp = self.ternary_temperature
+        # Температура влияет на жёсткость сигмоиды
+        effective_temp = max(temp, 0.1)
+
+        probs = torch.sigmoid(logits / effective_temp)  # (B, n_archetypes, 2)
+
+        # STE: soft forward, hard backward
+        bits_hard = (probs > 0.5).float()
+        bits = probs + (bits_hard - probs).detach()
+
+        bit_a = bits[..., 0]  # (B, n_archetypes)
+        bit_b = bits[..., 1]  # (B, n_archetypes)
+
+        # Трит = bit_a + bit_b - 1
+        trit_scores = bit_a + bit_b - 1.0
+
+        # Статистика направления переходов
+        with torch.no_grad():
+            hard_a = bits_hard[..., 0]
+            hard_b = bits_hard[..., 1]
+            hard_trits = hard_a + hard_b - 1.0
+            zero_mask = (hard_trits == 0)
+            if zero_mask.any():
+                direction = hard_a - hard_b  # +1=осень, -1=весна
+                spring = ((direction == -1) & zero_mask).float().sum().item()
+                autumn = ((direction == 1) & zero_mask).float().sum().item()
+                n_zeros = zero_mask.float().sum().item()
+                self._last_direction_stats = {
+                    'spring': spring / max(n_zeros, 1),
+                    'autumn': autumn / max(n_zeros, 1),
+                }
+
+        return trit_scores
+
     def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
         """Тернарная квантизация вклада: {-1, 0, +1} per archetype.
 
@@ -1127,6 +1189,10 @@ class ArchetypalInterlingua(nn.Module):
         Returns:
             trit_scores: (B, n_archetypes) — мягкие или жёсткие триты
         """
+        # Строительная логика: трит из пары битов
+        if self.use_paired_bit:
+            return self._paired_bit_quantize(contribution)
+
         scores = self.trit_proj(contribution).squeeze(-1)  # (B, n_archetypes)
 
         # Сохраняем raw scores для activation loss
@@ -1272,6 +1338,9 @@ class ArchetypalInterlingua(nn.Module):
             stats['uncertainty_budget'] = self.uncertainty_budget.item()
             stats['ternary_temperature'] = self.ternary_temperature
             stats['ternary_step'] = self._ternary_step.item()
+            if self.use_paired_bit:
+                stats['paired_bit'] = True
+                stats['direction_stats'] = self._last_direction_stats
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
             stats['archetype_usage_mean'] = usage.mean().item()
@@ -1345,12 +1414,14 @@ class BridgedInterlingua(nn.Module):
                  n_heads: int = 4, bridge_n_heads: int = 2,
                  bridge_dropout: float = 0.1,
                  ternary_warmup_steps: int = 2000,
-                 ternary_min_temp: float = 0.1):
+                 ternary_min_temp: float = 0.1,
+                 use_paired_bit: bool = False):
         super().__init__()
         self.d_model = d_model
         self.n_sources = n_sources
         self.n_archetypes = n_archetypes
         self.use_ternary = use_ternary
+        self.use_paired_bit = use_paired_bit
         self.bridge_mode = bridge_mode
 
         # --- Фаза 1: Мостовая медиация (один уровень) ---
@@ -1403,8 +1474,14 @@ class BridgedInterlingua(nn.Module):
 
         # --- Фаза 3: Тернарная агрегация ---
         if use_ternary:
-            self.trit_proj = nn.Linear(d_model, 1, bias=True)
-            nn.init.zeros_(self.trit_proj.bias)
+            if use_paired_bit:
+                # Строительная логика: 2 бита на архетип
+                self.paired_bit_proj = nn.Linear(d_model, 2, bias=True)
+                nn.init.zeros_(self.paired_bit_proj.bias)
+                self.paired_bit_temp = 1.0
+            else:
+                self.trit_proj = nn.Linear(d_model, 1, bias=True)
+                nn.init.zeros_(self.trit_proj.bias)
             self.log_uncertainty = nn.Parameter(
                 torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
             )
@@ -1432,6 +1509,7 @@ class BridgedInterlingua(nn.Module):
         # Статистика
         self._last_global_gate = 0.5
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
+        self._last_direction_stats = {'spring': 0.0, 'autumn': 0.0}
         self._last_archetype_usage = None
         self._last_bridge_compatibility = []
         self._last_raw_scores = None
@@ -1513,8 +1591,42 @@ class BridgedInterlingua(nn.Module):
         temp = self.ternary_min_temp + (1.0 - self.ternary_min_temp) * 0.5 * (1.0 + math.cos(math.pi * progress))
         return temp
 
+    def _paired_bit_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+        """Строительная квантизация: трит из пары битов (как в ArchetypalInterlingua)."""
+        logits = self.paired_bit_proj(contribution)  # (B, n_archetypes, 2)
+        self._last_raw_scores = logits.sum(dim=-1)
+
+        temp = self.ternary_temperature
+        effective_temp = max(temp, 0.1)
+
+        probs = torch.sigmoid(logits / effective_temp)
+        bits_hard = (probs > 0.5).float()
+        bits = probs + (bits_hard - probs).detach()
+
+        trit_scores = bits[..., 0] + bits[..., 1] - 1.0
+
+        with torch.no_grad():
+            hard_a = bits_hard[..., 0]
+            hard_b = bits_hard[..., 1]
+            hard_trits = hard_a + hard_b - 1.0
+            zero_mask = (hard_trits == 0)
+            if zero_mask.any():
+                direction = hard_a - hard_b
+                spring = ((direction == -1) & zero_mask).float().sum().item()
+                autumn = ((direction == 1) & zero_mask).float().sum().item()
+                n_zeros = zero_mask.float().sum().item()
+                self._last_direction_stats = {
+                    'spring': spring / max(n_zeros, 1),
+                    'autumn': autumn / max(n_zeros, 1),
+                }
+
+        return trit_scores
+
     def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
         """Тернарная квантизация с temperature annealing."""
+        if self.use_paired_bit:
+            return self._paired_bit_quantize(contribution)
+
         scores = self.trit_proj(contribution).squeeze(-1)
         self._last_raw_scores = scores
 
@@ -1646,6 +1758,9 @@ class BridgedInterlingua(nn.Module):
             stats['uncertainty_budget'] = self.uncertainty_budget.item()
             stats['ternary_temperature'] = self.ternary_temperature
             stats['ternary_step'] = self._ternary_step.item()
+            if self.use_paired_bit:
+                stats['paired_bit'] = True
+                stats['direction_stats'] = self._last_direction_stats
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
             stats['archetype_usage_mean'] = usage.mean().item()

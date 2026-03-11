@@ -414,6 +414,13 @@ class YiJingConfig:
     bridged_bridge_n_heads: int = 2          # головы cross-attention в мостах (full mode)
     bridged_bridge_dropout: float = 0.1      # dropout в мостах
 
+    # v62: Строительная логика — трит из пары битов (paired bit quantization)
+    # Вместо пороговой квантизации {-1,0,+1} — два бита с STE:
+    # (1,1)→+1 (jisa/лето), (0,0)→-1 (jani/зима),
+    # (0,1)→0↑ (весна), (1,0)→0↓ (осень)
+    # Решает проблему STE zero-gradient trap: нет мёртвой зоны
+    interlingua_use_paired_bit: bool = False  # строительная логика для тритов
+
     # v57: Абриале — событийно-управляемые изотропные N-местные связи (Пацкин)
     use_abriale: bool = False            # Абриале-слой (событийное управление)
     abriale_d_event: int = 64            # размерность пространства событий

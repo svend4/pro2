@@ -562,6 +562,16 @@ class TernaryQuantizer(nn.Module):
         """Возвращает штраф за неопределённость для добавления к основному loss."""
         return self._uncertainty_loss
 
+    def trit_distribution(self, x: torch.Tensor) -> dict:
+        """Распределение тритов {+1, 0, -1} для мониторинга."""
+        q = self.hard_quantize(x)
+        total = q.numel()
+        return {
+            'pos': (q > 0).float().sum().item() / total,
+            'zero': (q == 0).float().sum().item() / total,
+            'neg': (q < 0).float().sum().item() / total,
+        }
+
     def analyze_bian_yao(self, x: torch.Tensor) -> dict:
         """Анализирует распределение 变爻 (изменяющихся линий).
 
@@ -580,3 +590,155 @@ class TernaryQuantizer(nn.Module):
             'bian_yao_mask': bian_mask,
             'uncertainty_per_dim': bian_mask.float().mean(dim=tuple(range(bian_mask.dim() - 1))),
         }
+
+
+class PairedBitQuantizer(nn.Module):
+    """Строительная логика: трит = согласие/несогласие пары битов.
+
+    Идея: вместо квантизации одного скаляра в {-1, 0, +1} через пороговую
+    функцию (которая создаёт мёртвую зону для градиентов при 0), каждый трит
+    кодируется ПАРОЙ независимых бинарных решений:
+
+        (1, 1) → +1 (jisa, да-да)     — оба согласны: ян / лето
+        (0, 0) → -1 (jani, нет-нет)   — оба согласны: инь / зима
+        (0, 1) →  0↑ (ina↑, весна)    — несогласие, тренд вверх (инь→ян)
+        (1, 0) →  0↓ (ina↓, осень)    — несогласие, тренд вниз (ян→инь)
+
+    Четверичная по форме (4 состояния), троичная по духу (3 значения трита),
+    но с дополнительным битом — направлением перехода для нулевых тритов.
+
+    Преимущества над TernaryQuantizer:
+    1. Нет мёртвой зоны: каждый бит — сигмоида с полным градиентом через STE
+    2. Нулевое состояние возникает из НЕСОГЛАСИЯ двух решений, не из порога
+    3. Направление перехода (весна/осень) = дополнительная информация
+    4. Естественная связь с 变爻: 01 = инь→ян (весна), 10 = ян→инь (осень)
+
+    Формула: trit = bit_a + bit_b - 1
+        bit_a, bit_b ∈ {0, 1}  →  trit ∈ {-1, 0, +1}
+
+    Пространство:
+        n тритов = 2n битов = 4^n состояний по форме (vs 3^n для TernaryQuantizer)
+        Для n=6: 4096 состояний (из них 729 уникальных по тритовому значению
+        + направления переходов для каждого 0-трита)
+
+    Args:
+        total_dim: число тритов (= n, пар битов). Входной вектор: 2*total_dim скаляров
+        temp: температура сигмоиды для мягкой квантизации
+        adaptive_temp: обучаемая температура
+        uncertainty_budget: целевая доля нулевых тритов [0, 1]
+    """
+
+    def __init__(self, total_dim: int = 6, temp: float = 1.0,
+                 adaptive_temp: bool = False, uncertainty_budget: float = 0.3):
+        super().__init__()
+        self.total_dim = total_dim
+        self.input_dim = total_dim * 2  # 2 бита на каждый трит
+
+        self.adaptive_temp = adaptive_temp
+        if adaptive_temp:
+            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+        else:
+            self.temp = temp
+
+        # Learnable uncertainty budget
+        self.log_uncertainty = nn.Parameter(
+            torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
+        )
+
+        # Штраф за неопределённость
+        self._uncertainty_loss = torch.tensor(0.0)
+        # Последние статистики
+        self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
+        self._last_direction_stats = {'spring': 0.0, 'autumn': 0.0}
+
+    @property
+    def current_temp(self):
+        if self.adaptive_temp:
+            return self.log_temp.exp().clamp(min=0.05, max=5.0)
+        return self.temp
+
+    @property
+    def uncertainty_budget(self) -> torch.Tensor:
+        return torch.sigmoid(self.log_uncertainty)
+
+    def forward(self, x: torch.Tensor) -> tuple:
+        """Парно-битовая квантизация.
+
+        Args:
+            x: (..., 2 * total_dim) — входные логиты для пар битов
+
+        Returns:
+            trits: (..., total_dim) — тритовые значения {-1, 0, +1}
+            direction: (..., total_dim) — направление перехода для 0-тритов
+                +1 = осень (ян→инь, bit_a=1 bit_b=0)
+                -1 = весна (инь→ян, bit_a=0 bit_b=1)
+                 0 = стабильное состояние (оба одинаковые)
+        """
+        # Reshape: последнее измерение → (total_dim, 2)
+        x_pairs = x.reshape(*x.shape[:-1], self.total_dim, 2)
+
+        # Каждый бит — независимая сигмоида
+        temp = self.current_temp
+        probs = torch.sigmoid(x_pairs / temp)  # (..., total_dim, 2)
+
+        # STE: soft forward, hard backward
+        bits_hard = (probs > 0.5).float()
+        bits = probs + (bits_hard - probs).detach()  # STE
+
+        bit_a = bits[..., 0]  # (..., total_dim)
+        bit_b = bits[..., 1]  # (..., total_dim)
+
+        # Трит = bit_a + bit_b - 1
+        # (1,1)→+1, (0,0)→-1, (0,1)→0, (1,0)→0
+        trits = bit_a + bit_b - 1.0
+
+        # Направление перехода (значимо только для тритов ≈ 0)
+        # bit_a - bit_b: (1,0)→+1=осень, (0,1)→-1=весна, (0,0)→0, (1,1)→0
+        direction = bit_a - bit_b
+
+        # Uncertainty penalty: контроль бюджета нулевых тритов
+        with torch.no_grad():
+            hard_trits = (bits_hard[..., 0] + bits_hard[..., 1] - 1.0)
+            zero_fraction = (hard_trits == 0).float().mean()
+            total = hard_trits.numel()
+            self._last_trit_distribution = {
+                'pos': (hard_trits > 0).float().sum().item() / total,
+                'zero': (hard_trits == 0).float().sum().item() / total,
+                'neg': (hard_trits < 0).float().sum().item() / total,
+            }
+            # Направления (только для 0-тритов)
+            zero_mask = (hard_trits == 0)
+            if zero_mask.any():
+                hard_dir = bits_hard[..., 0] - bits_hard[..., 1]
+                spring = ((hard_dir == -1) & zero_mask).float().sum().item()
+                autumn = ((hard_dir == 1) & zero_mask).float().sum().item()
+                n_zeros = zero_mask.float().sum().item()
+                self._last_direction_stats = {
+                    'spring': spring / max(n_zeros, 1),
+                    'autumn': autumn / max(n_zeros, 1),
+                }
+
+        # Soft zero_fraction for gradient flow
+        soft_zero = 1.0 - trits.abs()  # близко к 1 для тритов ≈ 0
+        soft_zero_fraction = soft_zero.clamp(min=0).mean()
+        target_fraction = self.uncertainty_budget
+        self._uncertainty_loss = ((soft_zero_fraction - target_fraction) ** 2) * 0.1
+
+        return trits, direction
+
+    def get_uncertainty_loss(self) -> torch.Tensor:
+        return self._uncertainty_loss
+
+    def get_trit_distribution(self) -> dict:
+        return self._last_trit_distribution
+
+    def get_direction_stats(self) -> dict:
+        return self._last_direction_stats
+
+    def hard_quantize(self, x: torch.Tensor) -> tuple:
+        """Жёсткая квантизация без STE (для инференса)."""
+        x_pairs = x.reshape(*x.shape[:-1], self.total_dim, 2)
+        bits = (x_pairs > 0).float()
+        trits = bits[..., 0] + bits[..., 1] - 1.0
+        direction = bits[..., 0] - bits[..., 1]
+        return trits, direction
