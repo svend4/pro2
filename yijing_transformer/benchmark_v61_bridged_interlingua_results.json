@@ -43,7 +43,7 @@
     "interlingua_stats": {},
     "interlingua_history": []
   },
-  "_last_updated": "2026-03-11 17:06:28",
+  "_last_updated": "2026-03-11 17:23:26",
   "v58_bridge_lightweight": {
     "name": "v58_bridge_lightweight",
     "params": 1406268,
@@ -1503,6 +1503,187 @@
         ],
         "q6_correlation": 1.0,
         "class": "BridgedInterlingua"
+      }
+    ]
+  },
+  "v60_paired_bit": {
+    "name": "v60_paired_bit",
+    "params": 2116124,
+    "bridge_type": "ArchetypalInterlingua",
+    "final_val": 1.0753150224685668,
+    "final_ppl": 2.9309160595303894,
+    "best_val": 1.0753150224685668,
+    "best_ppl": 2.9309160595303894,
+    "time": 862.9270191192627,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.4859089851379395,
+        "val": 5.029212268193563,
+        "ppl": 152.812589933907
+      },
+      {
+        "step": 200,
+        "train": 1.101630449295044,
+        "val": 1.108061691125234,
+        "ppl": 3.0284825670543434
+      },
+      {
+        "step": 400,
+        "train": 1.1007517576217651,
+        "val": 1.08648947874705,
+        "ppl": 2.9638511259112597
+      },
+      {
+        "step": 600,
+        "train": 1.0670925378799438,
+        "val": 1.0789895137151082,
+        "ppl": 2.9417054956399427
+      },
+      {
+        "step": 800,
+        "train": 1.057984709739685,
+        "val": 1.0753150224685668,
+        "ppl": 2.9309160595303894
+      }
+    ],
+    "interlingua_stats": {
+      "global_gate": 0.4887883961200714,
+      "scale": 0.05275238677859306,
+      "trit_distribution": {
+        "pos": 1.0,
+        "zero": 0.0,
+        "neg": 0.0
+      },
+      "uncertainty_budget": 0.30000001192092896,
+      "ternary_temperature": 0.6890576474687263,
+      "ternary_step": 800,
+      "paired_bit": true,
+      "direction_stats": {
+        "spring": 0.0,
+        "autumn": 1.0
+      },
+      "archetype_usage_mean": 0.7615941762924194,
+      "archetype_usage_std": 6.007583408518258e-08,
+      "active_archetypes": 64,
+      "q6_correlation": 1.0,
+      "class": "ArchetypalInterlingua"
+    },
+    "interlingua_history": [
+      {
+        "step": 1,
+        "global_gate": 0.500249981880188,
+        "scale": 0.10099899768829346,
+        "trit_distribution": {
+          "pos": 0.9464285714285714,
+          "zero": 0.05357142857142857,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.9999994448348666,
+        "ternary_step": 1,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 0.0,
+          "autumn": 1.0
+        },
+        "archetype_usage_mean": 0.7365397810935974,
+        "archetype_usage_std": 0.0,
+        "active_archetypes": 64,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 200,
+        "global_gate": 0.4893224835395813,
+        "scale": 0.055403392761945724,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.9779754323328191,
+        "ternary_step": 200,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 0.0,
+          "autumn": 1.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 400,
+        "global_gate": 0.4887259900569916,
+        "scale": 0.05249745398759842,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.9140576474687263,
+        "ternary_step": 400,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 0.0,
+          "autumn": 1.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 600,
+        "global_gate": 0.48879557847976685,
+        "scale": 0.05279744416475296,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.8145033635316129,
+        "ternary_step": 600,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 0.0,
+          "autumn": 1.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
+      },
+      {
+        "step": 800,
+        "global_gate": 0.4887883961200714,
+        "scale": 0.05275238677859306,
+        "trit_distribution": {
+          "pos": 1.0,
+          "zero": 0.0,
+          "neg": 0.0
+        },
+        "uncertainty_budget": 0.30000001192092896,
+        "ternary_temperature": 0.6890576474687263,
+        "ternary_step": 800,
+        "paired_bit": true,
+        "direction_stats": {
+          "spring": 0.0,
+          "autumn": 1.0
+        },
+        "archetype_usage_mean": 0.7615941762924194,
+        "archetype_usage_std": 6.007583408518258e-08,
+        "active_archetypes": 64,
+        "q6_correlation": 1.0,
+        "class": "ArchetypalInterlingua"
       }
     ]
   }
