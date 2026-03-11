@@ -1034,9 +1034,18 @@ class ArchetypalInterlingua(nn.Module):
         # Learnable scale
         self.scale = nn.Parameter(torch.tensor(0.1))
 
+        # --- Temperature annealing для тернарной квантизации ---
+        # Начинаем с мягких тритов (temp=1.0), постепенно хардим (temp→0.1)
+        # Это обеспечивает gradient flow на ранних этапах обучения
+        if use_ternary:
+            self.ternary_warmup_steps = 2000
+            self.ternary_min_temp = 0.1
+            self.register_buffer('_ternary_step', torch.tensor(0, dtype=torch.long))
+
         # Статистика
         self._last_global_gate = 0.5
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
+        self._last_raw_scores = None  # для activation loss
         self._last_archetype_usage = None
 
         # Q6 якоря для корреляционного анализа
@@ -1086,30 +1095,54 @@ class ArchetypalInterlingua(nn.Module):
 
         return contribution
 
+    @property
+    def ternary_temperature(self) -> float:
+        """Текущая температура тернарной квантизации.
+
+        Анилируется от 1.0 (мягкие триты, полный gradient flow)
+        до ternary_min_temp (жёсткие триты) за ternary_warmup_steps шагов.
+        """
+        if not self.use_ternary:
+            return 1.0
+        step = self._ternary_step.item()
+        progress = min(step / max(self.ternary_warmup_steps, 1), 1.0)
+        # cosine annealing: плавный переход
+        temp = self.ternary_min_temp + (1.0 - self.ternary_min_temp) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        return temp
+
     def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
         """Тернарная квантизация вклада: {-1, 0, +1} per archetype.
+
+        С temperature annealing: на ранних шагах обучения используются мягкие
+        триты (tanh(scores/T) с большим T), обеспечивая gradient flow.
+        По мере обучения T → 0.1, триты становятся жёсткими.
 
         Args:
             contribution: (B, n_archetypes, d_model)
 
         Returns:
-            trit_scores: (B, n_archetypes) в {-1, 0, +1} (soft)
+            trit_scores: (B, n_archetypes) — мягкие или жёсткие триты
         """
-        # Проецируем каждый архетип в скаляр
         scores = self.trit_proj(contribution).squeeze(-1)  # (B, n_archetypes)
 
-        # Soft ternary: tanh даёт [-1, +1], threshold определяет зону "0"
-        raw = torch.tanh(scores)
+        # Сохраняем raw scores для activation loss
+        self._last_raw_scores = scores
 
-        # Uncertainty threshold из budget
-        threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1  # [0.1, 0.6]
+        temp = self.ternary_temperature
 
-        # Hard ternary (with STE)
-        hard = torch.zeros_like(raw)
-        hard[raw > threshold] = 1.0
-        hard[raw < -threshold] = -1.0
-        # STE: gradient flows through raw
-        trit_scores = raw + (hard - raw).detach()
+        if temp > 0.15:
+            # Тёплая фаза: мягкие триты, градиент течёт напрямую
+            # tanh(scores / temp) ≈ непрерывная аппроксимация ternary
+            trit_scores = torch.tanh(scores / temp)
+        else:
+            # Холодная фаза: жёсткие триты с STE
+            raw = torch.tanh(scores)
+            threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
+
+            hard = torch.zeros_like(raw)
+            hard[raw > threshold] = 1.0
+            hard[raw < -threshold] = -1.0
+            trit_scores = raw + (hard - raw).detach()
 
         return trit_scores
 
@@ -1140,16 +1173,16 @@ class ArchetypalInterlingua(nn.Module):
 
         # === Фаза 2: Агрегация ===
         if self.use_ternary and trit_scores_list:
+            # Инкремент шага для temperature annealing (только в training)
+            if self.training:
+                self._ternary_step += 1
+
             # Тернарное голосование: суммируем триты всех модулей
             trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)  # (B, n_archetypes)
-            # Консенсус: sign(сумма) → {-1, 0, +1}
-            # Мягкий вариант: tanh(сумма / N) → [-1, +1]
             consensus = torch.tanh(trit_sum / max(self.n_sources, 1))  # (B, n_archetypes)
 
-            # Взвешиваем вклады по консенсусу
-            # |consensus| = 1: все модули согласны → сильный вклад
-            # |consensus| ≈ 0: разногласие → слабый вклад
-            weights = consensus.abs().unsqueeze(-1)  # (B, n_archetypes, 1)
+            # Epsilon leak: гарантирует gradient flow к encoders даже при consensus≈0
+            weights = (consensus.abs() + 0.01).unsqueeze(-1)  # (B, n_archetypes, 1)
 
             # Средний вклад, взвешенный консенсусом
             stacked = torch.stack(contributions, dim=0)  # (N, B, archetypes, d_model)
@@ -1192,25 +1225,35 @@ class ArchetypalInterlingua(nn.Module):
     def get_interlingua_loss(self) -> torch.Tensor:
         """Вспомогательный loss для обучения интерлингвы.
 
-        Два компонента:
+        Три компонента:
         1. Archetype balance: все архетипы используются примерно одинаково
         2. Uncertainty penalty: штраф за несоответствие тритового баланса бюджету
+        3. Activation encouragement: толкает trit_proj scores от нуля
+           (обеспечивает gradient flow через trit_proj на ранних этапах)
         """
         loss = torch.tensor(0.0, device=self.archetype_queries.device)
 
         if self._last_archetype_usage is not None:
-            # Balance loss: равномерное использование архетипов
-            usage = self._last_archetype_usage  # (n_archetypes,)
+            usage = self._last_archetype_usage
             target = usage.mean()
             balance_loss = ((usage - target) ** 2).mean()
             loss = loss + 0.1 * balance_loss
 
         if self.use_ternary:
-            # Uncertainty penalty: доля нулей ≈ uncertainty_budget
             zero_frac = self._last_trit_distribution.get('zero', 0.33)
             target_frac = self.uncertainty_budget.item()
             uncertainty_loss = (zero_frac - target_frac) ** 2
             loss = loss + 0.05 * uncertainty_loss
+
+            # Activation encouragement: штрафует scores ≈ 0
+            # Gradient течёт напрямую через trit_proj (не detached!)
+            # Сила убывает по мере annealing (когда scores уже большие, не нужен)
+            if self._last_raw_scores is not None:
+                temp = self.ternary_temperature
+                encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
+                if encouragement_weight > 0:
+                    activation_loss = -self._last_raw_scores.abs().mean()
+                    loss = loss + 0.02 * encouragement_weight * activation_loss
 
         return loss
 
@@ -1223,6 +1266,8 @@ class ArchetypalInterlingua(nn.Module):
         }
         if self.use_ternary:
             stats['uncertainty_budget'] = self.uncertainty_budget.item()
+            stats['ternary_temperature'] = self.ternary_temperature
+            stats['ternary_step'] = self._ternary_step.item()
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
             stats['archetype_usage_mean'] = usage.mean().item()
@@ -1372,11 +1417,18 @@ class BridgedInterlingua(nn.Module):
         self.global_gate = nn.Parameter(torch.tensor(0.0))
         self.scale = nn.Parameter(torch.tensor(0.1))
 
+        # --- Temperature annealing для тернарной квантизации ---
+        if use_ternary:
+            self.ternary_warmup_steps = 2000
+            self.ternary_min_temp = 0.1
+            self.register_buffer('_ternary_step', torch.tensor(0, dtype=torch.long))
+
         # Статистика
         self._last_global_gate = 0.5
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
         self._last_archetype_usage = None
         self._last_bridge_compatibility = []
+        self._last_raw_scores = None
 
         # Q6 якоря
         self._init_q6_anchors()
@@ -1445,17 +1497,32 @@ class BridgedInterlingua(nn.Module):
         contribution, _ = self.encode_attn(query=queries, key=h, value=h)
         return contribution
 
+    @property
+    def ternary_temperature(self) -> float:
+        """Текущая температура тернарной квантизации (cosine annealing)."""
+        if not self.use_ternary:
+            return 1.0
+        step = self._ternary_step.item()
+        progress = min(step / max(self.ternary_warmup_steps, 1), 1.0)
+        temp = self.ternary_min_temp + (1.0 - self.ternary_min_temp) * 0.5 * (1.0 + math.cos(math.pi * progress))
+        return temp
+
     def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
-        """Тернарная квантизация: {-1, 0, +1} per archetype."""
+        """Тернарная квантизация с temperature annealing."""
         scores = self.trit_proj(contribution).squeeze(-1)
-        raw = torch.tanh(scores)
+        self._last_raw_scores = scores
 
-        threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
+        temp = self.ternary_temperature
 
-        hard = torch.zeros_like(raw)
-        hard[raw > threshold] = 1.0
-        hard[raw < -threshold] = -1.0
-        trit_scores = raw + (hard - raw).detach()
+        if temp > 0.15:
+            trit_scores = torch.tanh(scores / temp)
+        else:
+            raw = torch.tanh(scores)
+            threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
+            hard = torch.zeros_like(raw)
+            hard[raw > threshold] = 1.0
+            hard[raw < -threshold] = -1.0
+            trit_scores = raw + (hard - raw).detach()
 
         return trit_scores
 
@@ -1494,9 +1561,12 @@ class BridgedInterlingua(nn.Module):
 
         # === Фаза 3: Тернарная агрегация ===
         if self.use_ternary and trit_scores_list:
+            if self.training:
+                self._ternary_step += 1
+
             trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)
             consensus = torch.tanh(trit_sum / max(self.n_bridge_outputs, 1))
-            weights = consensus.abs().unsqueeze(-1)
+            weights = (consensus.abs() + 0.01).unsqueeze(-1)
 
             stacked = torch.stack(contributions, dim=0)
             mean_contrib = stacked.mean(dim=0)
@@ -1546,6 +1616,14 @@ class BridgedInterlingua(nn.Module):
             uncertainty_loss = (zero_frac - target_frac) ** 2
             loss = loss + 0.05 * uncertainty_loss
 
+            # Activation encouragement: штрафует scores ≈ 0
+            if self._last_raw_scores is not None:
+                temp = self.ternary_temperature
+                encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
+                if encouragement_weight > 0:
+                    activation_loss = -self._last_raw_scores.abs().mean()
+                    loss = loss + 0.02 * encouragement_weight * activation_loss
+
         return loss
 
     def get_interlingua_stats(self) -> dict:
@@ -1560,6 +1638,8 @@ class BridgedInterlingua(nn.Module):
         }
         if self.use_ternary:
             stats['uncertainty_budget'] = self.uncertainty_budget.item()
+            stats['ternary_temperature'] = self.ternary_temperature
+            stats['ternary_step'] = self._ternary_step.item()
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
             stats['archetype_usage_mean'] = usage.mean().item()
