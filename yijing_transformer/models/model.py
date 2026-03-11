@@ -450,6 +450,7 @@ class YiJingTransformerLayer(nn.Module):
                         n_heads=getattr(cfg, 'interlingua_n_heads', 4),
                         bridge_n_heads=getattr(cfg, 'bridged_bridge_n_heads', 2),
                         bridge_dropout=getattr(cfg, 'bridged_bridge_dropout', 0.1),
+                        use_paired_bit=getattr(cfg, 'interlingua_use_paired_bit', False),
                     )
                     self.use_archetypal_interlingua = True  # reuse forward path
                 elif self.use_archetypal_interlingua:
@@ -461,6 +462,7 @@ class YiJingTransformerLayer(nn.Module):
                         use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
                         uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
                         n_heads=getattr(cfg, 'interlingua_n_heads', 4),
+                        use_paired_bit=getattr(cfg, 'interlingua_use_paired_bit', False),
                     )
                 elif self.use_abriale_bridge:
                     # v59: AbrialeBridge — гибрид Abriale + Bridge

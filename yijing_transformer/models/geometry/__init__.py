@@ -60,6 +60,7 @@ from .quantizers import (
     GumbelQuantizer,
     GroupedQuantizer,
     TernaryQuantizer,
+    PairedBitQuantizer,
 )
 
 # Attention patterns & modules
