@@ -163,6 +163,9 @@ def measure_hex_contribution(model):
 def train(args):
     device = torch.device(args.device)
 
+    # Glyph tokenizer подразумевает convergence bridge
+    use_glyph = getattr(args, 'glyph_tokenizer', False)
+
     cfg = YiJingConfig(
         vocab_size=args.vocab_size,
         d_model=args.d_model,
@@ -183,6 +186,8 @@ def train(args):
         use_amp=getattr(args, 'amp', False),
         n_kv_heads=getattr(args, 'gqa_heads', None),
         sliding_window=getattr(args, 'sliding_window', None),
+        use_convergence_bridge=use_glyph or getattr(args, 'convergence_bridge', False),
+        use_glyph_tokenizer=use_glyph,
     )
 
     logger = Logger(cfg, args)
@@ -201,7 +206,8 @@ def train(args):
           f"n_heads={cfg.n_heads}, block_size={cfg.block_size}")
     print(f"Features: RoPE={cfg.use_rope}, SwiGLU={cfg.use_swiglu}, "
           f"BianGua={cfg.use_bian_gua}, MoE={cfg.use_hex_moe}, "
-          f"AdaptiveTemp={cfg.adaptive_temp}")
+          f"AdaptiveTemp={cfg.adaptive_temp}, "
+          f"GlyphTokenizer={cfg.use_glyph_tokenizer}")
     print()
 
     optimizer = torch.optim.AdamW(
@@ -305,6 +311,17 @@ def train(args):
                     for k, v in info.items():
                         if isinstance(v, (int, float)):
                             metrics[f'{layer_name}/{k}'] = v
+            # v62: Convergence Bridge diagnostics (GlyphTokenizer)
+            if args.model == 'yijing' and hasattr(model, 'convergence_bridge'):
+                cb = model.convergence_bridge
+                corr = cb.token_abstractor.cluster_hexagram_correlation().item()
+                metrics['convergence/hex_correlation'] = round(corr, 4)
+                metrics['convergence/bridge_scale'] = round(cb.bridge_scale.item(), 4)
+                metrics['convergence/abstractor_temp'] = round(
+                    cb.token_abstractor.temperature.item(), 4)
+                metrics['convergence/composer_scale'] = round(
+                    cb.glyph_composer.scale.item(), 4)
+
             # Interlingua stats (temperature annealing, archetypes)
             if args.model == 'yijing' and hasattr(model, 'archetypal_interlingua'):
                 il = model.archetypal_interlingua
@@ -344,6 +361,20 @@ def train(args):
                      for k, v in vals.items()]
             print(f"  {layer_name}: {', '.join(parts)}")
 
+        # v62: Convergence Bridge итоговая диагностика
+        if hasattr(model, 'convergence_bridge'):
+            cb = model.convergence_bridge
+            corr = cb.token_abstractor.cluster_hexagram_correlation().item()
+            print(f"\n  ConvergenceBridge:")
+            print(f"    hex_correlation={corr:.4f}")
+            print(f"    bridge_scale={cb.bridge_scale.item():.4f}")
+            print(f"    abstractor_temp={cb.token_abstractor.temperature.item():.4f}")
+            print(f"    composer_scale={cb.glyph_composer.scale.item():.4f}")
+            if model.use_glyph_tokenizer:
+                print(f"    glyph_source=GlyphTokenizer (SOLAN-76)")
+            else:
+                print(f"    glyph_source=learned_projection")
+
     logger.close()
     print("\nTraining complete.")
     return model
@@ -382,6 +413,10 @@ def main():
                         help='Number of KV heads for GQA (default: MHA)')
     parser.add_argument('--sliding-window', type=int, default=None,
                         help='Sliding window size for attention')
+    parser.add_argument('--glyph-tokenizer', action='store_true', default=False,
+                        help='Use GlyphTokenizer (SOLAN-76) for ConvergenceBridge Q6 vertices')
+    parser.add_argument('--convergence-bridge', action='store_true', default=False,
+                        help='Enable ConvergenceBridge (without GlyphTokenizer uses learned projection)')
     args = parser.parse_args()
     train(args)
 
