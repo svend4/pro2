@@ -43,7 +43,7 @@
     "interlingua_stats": {},
     "interlingua_history": []
   },
-  "_last_updated": "2026-03-11 18:22:43",
+  "_last_updated": "2026-03-11 18:53:06",
   "v58_bridge_lightweight": {
     "name": "v58_bridge_lightweight",
     "params": 1406268,
@@ -1955,5 +1955,49 @@
         "class": "ArchetypalInterlingua"
       }
     ]
+  },
+  "v64_bridge_light_plus_prior": {
+    "name": "v64_bridge_light_plus_prior",
+    "params": 1766849,
+    "bridge_type": "BridgeOfModules",
+    "final_val": 0.798494569460551,
+    "final_ppl": 2.2221930518420776,
+    "best_val": 0.798494569460551,
+    "best_ppl": 2.2221930518420776,
+    "time": 759.949038028717,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.89030122756958,
+        "val": 5.493873262405396,
+        "ppl": 243.19735212902958
+      },
+      {
+        "step": 200,
+        "train": 1.4315881729125977,
+        "val": 1.4126180450121562,
+        "ppl": 4.106692849111021
+      },
+      {
+        "step": 400,
+        "train": 1.2401859760284424,
+        "val": 1.2440446019172668,
+        "ppl": 3.4696183486056844
+      },
+      {
+        "step": 600,
+        "train": 1.041684627532959,
+        "val": 1.0389346798261008,
+        "ppl": 2.826204597269078
+      },
+      {
+        "step": 800,
+        "train": 0.8319436311721802,
+        "val": 0.798494569460551,
+        "ppl": 2.2221930518420776
+      }
+    ],
+    "interlingua_stats": {},
+    "interlingua_history": []
   }
 }

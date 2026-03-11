@@ -202,6 +202,15 @@ CONFIGS = {
         interlingua_n_archetypes=64,
         interlingua_n_heads=4,
     ),
+    # v64: Bridge_lightweight + ConvergenceBridge + GlyphPrior
+    # ConvergenceBridge (pre-transformer) → geometric sources → BridgeOfModules (post-sources)
+    'v64_bridge_light_plus_prior': dict(
+        **ALL_SOURCES,
+        use_bridge_of_modules=True,
+        bridge_mode='lightweight',
+        use_convergence_bridge=True,
+        use_glyph_prior=True,
+    ),
 }
 
 CONFIG_ORDER = [
@@ -212,6 +221,7 @@ CONFIG_ORDER = [
     'bridged_paired_bit', 'v60_paired_bit',
     'v63_convergence_learned', 'v63_convergence_glyph_prior',
     'v63_prior_plus_interlingua',
+    'v64_bridge_light_plus_prior',
 ]
 
 
