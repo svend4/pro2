@@ -64,7 +64,7 @@ from training.utils_v18 import WSDScheduler
 
 RESULTS_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'benchmark_v69_bridge_utils_results.json'
+    'benchmark_v69_bridge_utils_results_v2.json'
 )
 
 
@@ -73,9 +73,11 @@ def set_seed(seed=42):
     torch.manual_seed(seed)
 
 
-def load_data(block_size=128, seed=42):
-    random.seed(seed)
-    words = [
+def _generate_vocab(n_words, seed=123):
+    """Generate a diverse vocabulary of n_words unique pseudo-words."""
+    rng = random.Random(seed)
+    # Start with 200 real English words for natural byte patterns
+    base = [
         "the", "of", "and", "to", "in", "a", "is", "that", "it", "was",
         "for", "on", "are", "with", "as", "his", "they", "be", "at", "one",
         "have", "this", "from", "by", "not", "but", "what", "all", "were", "when",
@@ -86,12 +88,50 @@ def load_data(block_size=128, seed=42):
         "no", "most", "who", "over", "know", "than", "call", "first", "people", "may",
         "down", "been", "now", "find", "any", "new", "work", "part", "take", "get",
         "place", "made", "after", "back", "only", "use", "where", "good", "very", "still",
+        "world", "should", "house", "between", "life", "never", "before", "great", "just", "state",
+        "away", "through", "number", "hand", "high", "keep", "last", "city", "tree", "cross",
+        "might", "close", "seem", "light", "along", "every", "under", "name", "school", "right",
+        "think", "home", "give", "water", "room", "small", "end", "group", "play", "run",
+        "start", "move", "kind", "need", "point", "old", "line", "open", "head", "turn",
+        "real", "leave", "help", "next", "big", "large", "man", "woman", "child", "year",
+        "different", "important", "possible", "national", "political", "social", "economic", "public",
+        "international", "local", "general", "major", "current", "similar", "specific", "available",
+        "natural", "military", "particular", "financial", "environmental", "medical", "traditional",
+        "popular", "significant", "serious", "common", "individual", "necessary", "legal",
     ]
+    # Generate additional pseudo-words via syllable combination
+    onsets = ["b", "c", "d", "f", "g", "h", "j", "k", "l", "m", "n", "p", "r", "s", "t", "v", "w",
+              "bl", "br", "cl", "cr", "dr", "fl", "fr", "gl", "gr", "pl", "pr", "sc", "sk", "sl",
+              "sm", "sn", "sp", "st", "str", "sw", "tr", "thr", "wh", "wr", "ch", "sh", "th"]
+    vowels = ["a", "e", "i", "o", "u", "ai", "ea", "ee", "oo", "ou", "oi", "au", "ie"]
+    codas = ["", "d", "g", "k", "l", "m", "n", "p", "r", "s", "t", "x", "ng", "nt", "nd", "st", "ct"]
+    vocab = set(base)
+    while len(vocab) < n_words:
+        n_syl = rng.choice([1, 1, 2, 2, 2, 3, 3])
+        word = ""
+        for _ in range(n_syl):
+            word += rng.choice(onsets) + rng.choice(vowels) + rng.choice(codas)
+        if len(word) >= 2 and word not in vocab:
+            vocab.add(word)
+    return sorted(vocab)
+
+
+def load_data(block_size=128, seed=42):
+    random.seed(seed)
+    words = _generate_vocab(5000)
+    # Sentence templates for structural variety
+    templates = [
+        lambda w, r: ' '.join(r.choice(w) for _ in range(r.randint(5, 30))) + '.',
+        lambda w, r: r.choice(w).capitalize() + ' ' + ' '.join(r.choice(w) for _ in range(r.randint(4, 20))) + ', ' + ' '.join(r.choice(w) for _ in range(r.randint(3, 15))) + '.',
+        lambda w, r: r.choice(w).capitalize() + ' ' + r.choice(w) + ' ' + r.choice(w) + '? ' + r.choice(w).capitalize() + ' ' + ' '.join(r.choice(w) for _ in range(r.randint(3, 12))) + '.',
+        lambda w, r: '"' + ' '.join(r.choice(w) for _ in range(r.randint(3, 15))) + '," ' + r.choice(w) + ' ' + r.choice(w) + '.',
+        lambda w, r: ' '.join(r.choice(w) for _ in range(r.randint(8, 25))) + '; ' + ' '.join(r.choice(w) for _ in range(r.randint(5, 15))) + '.',
+    ]
+    rng = random.Random(seed)
     lines = []
-    for _ in range(60000):
-        n = random.randint(5, 25)
-        line = ' '.join(random.choice(words) for _ in range(n))
-        lines.append(line + '.')
+    for _ in range(500000):
+        tmpl = rng.choice(templates)
+        lines.append(tmpl(words, rng))
     full = '\n'.join(lines)
     split = int(len(full) * 0.9)
     train_text, val_text = full[:split], full[split:]
@@ -362,7 +402,7 @@ def get_lr_at_step(step, n_steps, lr, scheduler_type, warmup_frac=0.1):
 
 def train_and_eval(config_name, arch_cfg, train_cfg, train_data, val_data, vocab_size,
                    d_model=128, n_layers=4, n_heads=4, block_size=128,
-                   n_steps=800, batch_size=16, eval_every=200):
+                   n_steps=2000, batch_size=16, eval_every=400):
     set_seed(42)
 
     model = BenchmarkLM(
