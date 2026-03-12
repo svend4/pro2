@@ -49,7 +49,7 @@
       }
     ]
   },
-  "_last_updated": "2026-03-12 19:02:16",
+  "_last_updated": "2026-03-12 19:34:05",
   "nautilus/sophia": {
     "name": "nautilus/sophia",
     "arch": "nautilus",
@@ -402,6 +402,109 @@
         "train": 0.024674439802765846,
         "val": 0.013480623004337151,
         "ppl": 1.0135718962816846
+      }
+    ]
+  },
+  "nautilus/sophia_full": {
+    "name": "nautilus/sophia_full",
+    "arch": "nautilus",
+    "training": {
+      "optimizer": "sophia",
+      "lr": 0.0001,
+      "weight_decay": 0.1,
+      "scheduler": "wsd",
+      "use_agc": true,
+      "use_zloss": true
+    },
+    "params": 962756,
+    "final_val": 5.619840860366821,
+    "final_ppl": 275.8454817928588,
+    "best_val": 5.619331804911296,
+    "best_ppl": 275.7050968803544,
+    "time": 184.34841179847717,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.6424431800842285,
+        "val": 5.651818005243937,
+        "ppl": 284.8087792964153
+      },
+      {
+        "step": 200,
+        "train": 5.637759685516357,
+        "val": 5.6409569899241125,
+        "ppl": 281.7322043879589
+      },
+      {
+        "step": 400,
+        "train": 5.644828796386719,
+        "val": 5.631253862380982,
+        "ppl": 279.0117407231593
+      },
+      {
+        "step": 600,
+        "train": 5.629333019256592,
+        "val": 5.619331804911296,
+        "ppl": 275.7050968803544
+      },
+      {
+        "step": 800,
+        "train": 5.602267265319824,
+        "val": 5.619840860366821,
+        "ppl": 275.8454817928588
+      }
+    ]
+  },
+  "nautilus/lion_lookahead_agc": {
+    "name": "nautilus/lion_lookahead_agc",
+    "arch": "nautilus",
+    "training": {
+      "optimizer": "lion",
+      "lr": 0.0003,
+      "weight_decay": 0.03,
+      "wrapper": "lookahead",
+      "lookahead_k": 5,
+      "lookahead_alpha": 0.5,
+      "scheduler": "cosine",
+      "use_agc": true,
+      "use_zloss": false
+    },
+    "params": 962756,
+    "final_val": 1.8707165042559306,
+    "final_ppl": 6.49294695714383,
+    "best_val": 1.8707165042559306,
+    "best_ppl": 6.49294695714383,
+    "time": 181.0400092601776,
+    "history": [
+      {
+        "step": 1,
+        "train": 5.639191150665283,
+        "val": 5.649537022908529,
+        "ppl": 284.15987585186537
+      },
+      {
+        "step": 200,
+        "train": 2.219552993774414,
+        "val": 2.2028318881988525,
+        "ppl": 9.050607551299889
+      },
+      {
+        "step": 400,
+        "train": 1.9691221714019775,
+        "val": 1.957954482237498,
+        "ppl": 7.084820107720865
+      },
+      {
+        "step": 600,
+        "train": 1.912204623222351,
+        "val": 1.8913983186086019,
+        "ppl": 6.628631141873409
+      },
+      {
+        "step": 800,
+        "train": 1.87422513961792,
+        "val": 1.8707165042559306,
+        "ppl": 6.49294695714383
       }
     ]
   }
