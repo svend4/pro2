@@ -343,3 +343,169 @@ class NautilusHierarchy(nn.Module):
             m = masks[i] if i < len(masks) else 1.0
             stats[f'nautilus/{name}/curriculum'] = round(m, 4)
         return stats
+
+
+class MatryoshkaNautilus(nn.Module):
+    """v66: NautilusHierarchy + MatryoshkaQuantizer — пространственно-временное
+    кодирование между камерами.
+
+    Идея: каждая камера Наутилуса обогащает сигнал. «До камеры» и «после камеры»
+    — это естественная пара (пространство × время) для MatryoshkaQuantizer.
+
+    Level 2 (гекс-цифры) кодирует *что именно изменила каждая камера*,
+    давая модели эксплицитный сигнал об иерархическом обогащении.
+
+    Поток:
+        h = ln_pre(x)
+        for each chamber:
+            state_before = h + accumulated_enrichment
+            delta = chamber(state_before)
+            state_after = state_before + delta
+            # Matryoshka: q_after vs q_before → spacetime encoding
+            q_before = to_q(state_before)
+            q_after  = to_q(state_after)
+            m_out = matryoshka(q_after, x_ref=q_before)
+            accumulated_enrichment += delta + gate * m_out
+        result = x + residual_gate * ln_post(accumulated_enrichment)
+
+    Результат: Matryoshka Level 2 получает реальный временной сигнал
+    (разница между состояниями до/после камеры), а не тождественный.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        q_dim: int = 6,
+        matryoshka_temp: float = 0.3,
+        init_scale: float = 0.01,
+        warmup_steps: int = 2000,
+        mode: str = 'sequential',
+        enabled_chambers: list = None,
+    ):
+        super().__init__()
+
+        # Reuse NautilusHierarchy for chambers, scheduler, norms
+        self.nautilus = NautilusHierarchy(
+            d_model=d_model,
+            init_scale=init_scale,
+            warmup_steps=warmup_steps,
+            mode=mode,
+            enabled_chambers=enabled_chambers,
+        )
+
+        # MatryoshkaQuantizer для межкамерного кодирования
+        from .quantizers import MatryoshkaQuantizer
+        self.matryoshka = MatryoshkaQuantizer(
+            total_dim=q_dim, d_model=d_model, temp=matryoshka_temp,
+        )
+
+        # Projection d_model → Q-space
+        self.to_q = nn.Linear(d_model, q_dim, bias=False)
+
+        # Gate for matryoshka enrichment (per-chamber)
+        n_chambers = len(self.nautilus.chambers)
+        self.matryoshka_gates = nn.Parameter(torch.zeros(n_chambers))
+
+        # Diagnostics
+        self._matryoshka_infos = []
+
+    def set_step(self, step: int):
+        """Proxy to NautilusHierarchy.set_step."""
+        self.nautilus.set_step(step)
+
+    def forward(self, x: torch.Tensor) -> tuple:
+        """Применяет Наутилус-иерархию с межкамерным MatryoshkaQuantizer.
+
+        Args:
+            x: (B, T, D) token embeddings
+
+        Returns:
+            (enriched_x, info_dict)
+        """
+        masks = self.nautilus.scheduler.get_masks(self.nautilus._current_step)
+        h = self.nautilus.ln_pre(x)
+
+        if self.nautilus.mode == 'sequential':
+            enrichment = torch.zeros_like(h)
+            self._matryoshka_infos = []
+
+            for i, chamber in enumerate(self.nautilus.chambers):
+                mask = masks[i] if i < len(masks) else 1.0
+
+                state_before = h + enrichment
+                delta = chamber(state_before, curriculum_mask=mask)
+                enrichment = enrichment + delta
+                state_after = h + enrichment
+
+                # Matryoshka: encode what this chamber changed
+                q_before = self.to_q(state_before.detach() if not self.training else state_before)
+                q_after = self.to_q(state_after)
+                m_out, m_info = self.matryoshka(q_after, x_ref=q_before)
+
+                # Gated matryoshka enrichment, modulated by curriculum
+                m_gate = torch.sigmoid(self.matryoshka_gates[i])
+                enrichment = enrichment + m_gate * mask * m_out
+                self._matryoshka_infos.append(m_info)
+
+        elif self.nautilus.mode == 'parallel':
+            # Parallel: каждая камера + её matryoshka delta
+            deltas = []
+            self._matryoshka_infos = []
+            for i, chamber in enumerate(self.nautilus.chambers):
+                mask = masks[i] if i < len(masks) else 1.0
+                delta = chamber(h, curriculum_mask=mask)
+
+                # Matryoshka: encode chamber enrichment
+                q_before = self.to_q(h)
+                q_after = self.to_q(h + delta)
+                m_out, m_info = self.matryoshka(q_after, x_ref=q_before)
+
+                m_gate = torch.sigmoid(self.matryoshka_gates[i])
+                deltas.append(delta + m_gate * mask * m_out)
+                self._matryoshka_infos.append(m_info)
+
+            concatenated = torch.cat(deltas, dim=-1)
+            enrichment = self.nautilus.merge_proj(concatenated)
+
+        else:
+            raise ValueError(f"Unknown mode: {self.nautilus.mode}")
+
+        # Post-norm + residual gate
+        enrichment = self.nautilus.ln_post(enrichment)
+        result = x + self.nautilus.residual_gate * enrichment
+
+        # Collect info
+        info = {
+            'step': self.nautilus._current_step,
+            'mode': self.nautilus.mode,
+            'residual_gate': self.nautilus.residual_gate.item(),
+            'masks': masks,
+            'chambers': {
+                name: chamber.get_stats()
+                for name, chamber in zip(
+                    self.nautilus.chamber_names, self.nautilus.chambers
+                )
+            },
+            'matryoshka': {
+                'n_chambers': len(self.nautilus.chambers),
+                'gates': [
+                    round(torch.sigmoid(self.matryoshka_gates[i]).item(), 4)
+                    for i in range(len(self.nautilus.chambers))
+                ],
+                'quantizer_stats': self.matryoshka.get_stats(),
+            },
+        }
+
+        return result, info
+
+    def get_stats(self) -> dict:
+        """Aggregated stats for logging."""
+        stats = self.nautilus.get_nautilus_stats()
+        # Add matryoshka-specific stats
+        for i, name in enumerate(self.nautilus.chamber_names):
+            g = torch.sigmoid(self.matryoshka_gates[i]).item()
+            stats[f'matryoshka/{name}/gate'] = round(g, 4)
+        mq_stats = self.matryoshka.get_stats()
+        for k, v in mq_stats.items():
+            stats[f'matryoshka/quantizer/{k}'] = v
+        return stats
