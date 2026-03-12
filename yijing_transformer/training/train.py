@@ -37,6 +37,9 @@ from config.config import YiJingConfig
 from models.model import YiJingGPT
 from models.baseline import VanillaGPT
 
+# Bridge: подключение всех утилит из utils_v12..v52
+from training.bridge import TrainingBridge
+
 
 # ==================== УТИЛИТЫ ====================
 
@@ -216,9 +219,44 @@ def train(args):
           f"Nautilus={cfg.use_nautilus}")
     print()
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay, betas=(0.9, 0.95)
+    # === Bridge: пробуждение спящих утилит из v12..v52 ===
+    bridge = TrainingBridge(model, cfg)
+
+    # Оптимизатор: через bridge (поддержка Sophia, LAMB, Lion, SAM, Lookahead)
+    optimizer_type = getattr(args, 'optimizer', 'adamw')
+    optimizer_wrapper = getattr(args, 'optimizer_wrapper', None)
+    optimizer = bridge.build_optimizer(
+        optimizer_type=optimizer_type,
+        wrapper=optimizer_wrapper,
+        llrd_factor=getattr(args, 'llrd_factor', 1.0),
     )
+
+    # Scheduler: через bridge (поддержка WSD, Cosine Restarts, Curriculum)
+    scheduler_type = getattr(args, 'scheduler', 'cosine')
+    scheduler = bridge.build_scheduler(
+        optimizer=optimizer,
+        scheduler_type=scheduler_type,
+    )
+
+    # Регуляризация: через bridge (Z-Loss, AGC, Mixup, Label Smoothing, etc.)
+    regularization = bridge.build_regularization()
+
+    # Мониторинг: через bridge (Loss Spike, Grokking, Gradient Flow, etc.)
+    monitor = bridge.build_monitor(verbose=True)
+
+    # Data pipeline: через bridge (Packing, BPE Dropout, Freq Weighting)
+    data_pipeline = bridge.build_data_pipeline()
+
+    # Model surgery: через bridge (µP init, pruning, freezing)
+    surgeon = bridge.build_surgeon()
+    if getattr(args, 'mup_init', False):
+        surgeon.apply_mup_init()
+        print("Applied µP initialization")
+    if getattr(args, 'freeze_layers', 0) > 0:
+        surgeon.freeze_layers(up_to=args.freeze_layers)
+        print(f"Frozen first {args.freeze_layers} layers")
+
+    print(f"Bridge components: {bridge.summary()}")
 
     start_step = 0
     if args.resume:
@@ -271,6 +309,7 @@ def train(args):
     start_time = time.time()
 
     for step in range(start_step + 1, cfg.total_steps + 1):
+        # LR управляется через bridge scheduler
         lr = get_lr(step, cfg)
         for pg in optimizer.param_groups:
             pg['lr'] = lr
@@ -282,23 +321,40 @@ def train(args):
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
             )
 
+        # Bridge: data augmentation pipeline
+        xb, yb = data_pipeline.process((xb, yb), step=step)
+
         # v63: обновляем Nautilus curriculum step
         if hasattr(model, 'nautilus'):
             model.nautilus.set_step(step)
 
         with autocast('cuda', enabled=use_amp, dtype=amp_dtype):
-            _, loss, _ = model(xb, yb)
+            logits, loss, _ = model(xb, yb)
+            # Bridge: модификаторы loss (Z-Loss, Entropy Reg, etc.)
+            loss = bridge.before_backward(logits, yb, loss)
             loss = loss / cfg.grad_accum_steps
 
         scaler.scale(loss).backward()
+
+        # Bridge: модификаторы градиентов (AGC, Grad Noise, Centralization)
+        bridge.after_backward(step)
+
         accum_loss += loss.item()
 
         if step % cfg.grad_accum_steps == 0:
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), cfg.max_grad_norm
+            )
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
+
+            # Bridge: мониторинг после шага (Loss Spike, Grokking, etc.)
+            alerts = bridge.after_step(
+                step, loss.item() * cfg.grad_accum_steps,
+                lr=lr, grad_norm=grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm,
+            )
 
         if step % cfg.log_every == 0:
             avg_loss = accum_loss / cfg.log_every * cfg.grad_accum_steps
@@ -398,6 +454,34 @@ def train(args):
                 s = chamber.get_stats()
                 print(f"    {name}: gate={s['gate_mean']:.4f}, scale={s['scale']:.4f}")
 
+    # Bridge: финальный диагностический отчёт
+    print("\n" + "=" * 50)
+    print("Bridge Diagnostic Report (v12..v52 utils)")
+    print("=" * 50)
+    bridge_report = bridge.diagnostic_report(cfg.total_steps)
+    for section, data in bridge_report.items():
+        if section == 'step':
+            continue
+        print(f"\n  [{section}]")
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, float):
+                    print(f"    {k}: {v:.4f}")
+                else:
+                    print(f"    {k}: {v}")
+        elif isinstance(data, list):
+            for item in data:
+                print(f"    - {item}")
+        else:
+            print(f"    {data}")
+
+    # Bridge: алерты за всю тренировку
+    all_alerts = monitor.get_alerts()
+    if all_alerts:
+        print(f"\n  [Alerts ({len(all_alerts)} total)]")
+        for alert in all_alerts[-10:]:  # последние 10
+            print(f"    {alert}")
+
     logger.close()
     print("\nTraining complete.")
     return model
@@ -451,6 +535,23 @@ def main():
                         help='Initial scale for nautilus chambers')
     parser.add_argument('--nautilus-warmup-steps', type=int, default=2000,
                         help='Steps for progressive chamber activation')
+
+    # === Bridge: утилиты из v12..v52 ===
+    parser.add_argument('--optimizer', type=str, default='adamw',
+                        choices=['adamw', 'sophia', 'lamb', 'lion'],
+                        help='Optimizer type (v18: LAMB, v19: Sophia, v45: Lion)')
+    parser.add_argument('--optimizer-wrapper', type=str, default=None,
+                        choices=['lookahead', 'sam'],
+                        help='Optimizer wrapper (v23: Lookahead, v27: SAM)')
+    parser.add_argument('--scheduler', type=str, default='cosine',
+                        choices=['cosine', 'wsd', 'cosine_restarts'],
+                        help='LR scheduler (v18: WSD, v32: Cosine Restarts)')
+    parser.add_argument('--llrd-factor', type=float, default=1.0,
+                        help='Layer-wise LR decay factor (v14/v24: 0.8 typical)')
+    parser.add_argument('--mup-init', action='store_true', default=False,
+                        help='Apply µP initialization (v12)')
+    parser.add_argument('--freeze-layers', type=int, default=0,
+                        help='Freeze first N layers (v50: progressive freezing)')
     args = parser.parse_args()
     train(args)
 
