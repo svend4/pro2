@@ -148,6 +148,7 @@ from .nautilus import (
     NautilusHierarchy,
     NautilusScheduler,
     MatryoshkaNautilus,
+    PostCascadeMatryoshkaNautilus,
 )
 
 # Core: ternary hypercube & spacetime

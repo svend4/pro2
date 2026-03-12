@@ -509,3 +509,102 @@ class MatryoshkaNautilus(nn.Module):
         for k, v in mq_stats.items():
             stats[f'matryoshka/quantizer/{k}'] = v
         return stats
+
+
+class PostCascadeMatryoshkaNautilus(nn.Module):
+    """v67: Матрёшка ПОСЛЕ полного каскада Наутилуса.
+
+    Урок v66: вставка MatryoshkaQuantizer между камерами Наутилуса добавляет
+    шум через случайную проекцию to_q, разрушая каскадное обогащение
+    (PPL 3.07 vs 1.01 у чистого Наутилуса).
+
+    Решение: Наутилус работает без помех (каскад камер как обычно),
+    MatryoshkaQuantizer применяется ПОСЛЕ — кодирует суммарное изменение.
+
+    Поток:
+        x_enriched, nautilus_info = nautilus(x)    # полный каскад без вмешательства
+        q_before = to_q(x)                         # вход = «прошлое»
+        q_after  = to_q(x_enriched)                # выход = «настоящее»
+        m_out, m_info = matryoshka(q_after, x_ref=q_before)  # Level 2 = spacetime
+        result = x_enriched + m_gate * m_out       # дополнительное обогащение
+
+    Level 2 кодирует «что изменил весь Наутилус» — от микро-геометрии
+    CubeDiagonal до глобальной FlowerOfLife.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        q_dim: int = 6,
+        matryoshka_temp: float = 0.3,
+        init_scale: float = 0.01,
+        warmup_steps: int = 2000,
+        mode: str = 'sequential',
+        enabled_chambers: list = None,
+    ):
+        super().__init__()
+
+        # NautilusHierarchy runs its full cascade unmodified
+        self.nautilus = NautilusHierarchy(
+            d_model=d_model,
+            init_scale=init_scale,
+            warmup_steps=warmup_steps,
+            mode=mode,
+            enabled_chambers=enabled_chambers,
+        )
+
+        # MatryoshkaQuantizer applied after cascade
+        from .quantizers import MatryoshkaQuantizer
+        self.matryoshka = MatryoshkaQuantizer(
+            total_dim=q_dim, d_model=d_model, temp=matryoshka_temp,
+        )
+
+        # Projection d_model → Q-space
+        self.to_q = nn.Linear(d_model, q_dim, bias=False)
+
+        # Single gate for post-cascade matryoshka enrichment
+        self.matryoshka_gate = nn.Parameter(torch.tensor(0.0))
+
+    def set_step(self, step: int):
+        self.nautilus.set_step(step)
+
+    def forward(self, x: torch.Tensor) -> tuple:
+        """Наутилус-каскад + пост-каскадная Матрёшка.
+
+        Args:
+            x: (B, T, D) token embeddings
+
+        Returns:
+            (enriched_x, info_dict)
+        """
+        # 1. Full Nautilus cascade (uninterrupted)
+        x_enriched, nautilus_info = self.nautilus(x)
+
+        # 2. Matryoshka: encode what the entire Nautilus changed
+        q_before = self.to_q(x)           # input = «past» (space)
+        q_after = self.to_q(x_enriched)   # output = «present» (time)
+        m_out, m_info = self.matryoshka(q_after, x_ref=q_before)
+
+        # 3. Gated addition
+        m_gate = torch.sigmoid(self.matryoshka_gate)
+        result = x_enriched + m_gate * m_out
+
+        # Collect info
+        info = nautilus_info.copy()
+        info['matryoshka'] = {
+            'mode': 'post_cascade',
+            'gate': round(m_gate.item(), 4),
+            'quantizer_stats': self.matryoshka.get_stats(),
+        }
+
+        return result, info
+
+    def get_stats(self) -> dict:
+        stats = self.nautilus.get_nautilus_stats()
+        stats['matryoshka/gate'] = round(
+            torch.sigmoid(self.matryoshka_gate).item(), 4
+        )
+        mq_stats = self.matryoshka.get_stats()
+        for k, v in mq_stats.items():
+            stats[f'matryoshka/quantizer/{k}'] = v
+        return stats

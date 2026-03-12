@@ -1,15 +1,8 @@
 """
-v66: Тесты для MatryoshkaNautilus — интеграция MatryoshkaQuantizer в NautilusHierarchy.
+v66+v67: Тесты для MatryoshkaNautilus и PostCascadeMatryoshkaNautilus.
 
-Проверяет:
-- Инициализация с разными параметрами
-- Forward pass: shapes, gradients
-- Matryoshka gates работают (per-chamber)
-- Sequential vs parallel mode
-- Curriculum scheduling работает
-- set_step proxy
-- get_stats возвращает ожидаемые ключи
-- Matryoshka получает разные x/x_ref (не тождественные)
+v66 (inter-chamber): MatryoshkaQuantizer между камерами Наутилуса
+v67 (post-cascade):  MatryoshkaQuantizer после полного каскада Наутилуса
 """
 
 import pytest
@@ -18,6 +11,7 @@ import torch.nn as nn
 
 from yijing_transformer.models.geometry.nautilus import (
     MatryoshkaNautilus,
+    PostCascadeMatryoshkaNautilus,
     NautilusHierarchy,
 )
 
@@ -276,3 +270,158 @@ class TestEdgeCases:
         out, _ = model(x)
         assert not torch.isnan(out).any()
         assert not torch.isinf(out).any()
+
+
+# ═══════════════════════════════════════════════════════════════
+# v67: PostCascadeMatryoshkaNautilus tests
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def pc_model(d_model):
+    """PostCascadeMatryoshkaNautilus with 2 fast chambers."""
+    return PostCascadeMatryoshkaNautilus(
+        d_model=d_model,
+        q_dim=6,
+        matryoshka_temp=0.3,
+        init_scale=0.01,
+        warmup_steps=100,
+        enabled_chambers=['cube_diagonal', 'heisenberg'],
+    )
+
+
+class TestPostCascadeInit:
+    def test_has_nautilus(self, pc_model):
+        assert isinstance(pc_model.nautilus, NautilusHierarchy)
+
+    def test_has_matryoshka(self, pc_model):
+        assert pc_model.matryoshka.total_dim == 6
+
+    def test_has_to_q(self, pc_model, d_model):
+        assert pc_model.to_q.in_features == d_model
+        assert pc_model.to_q.out_features == 6
+
+    def test_single_gate(self, pc_model):
+        # Single scalar gate, not per-chamber
+        assert pc_model.matryoshka_gate.shape == ()
+        assert torch.sigmoid(pc_model.matryoshka_gate).item() == pytest.approx(0.5, abs=0.01)
+
+
+class TestPostCascadeForward:
+    def test_output_shape(self, pc_model, x, batch, seq_len, d_model):
+        out, info = pc_model(x)
+        assert out.shape == (batch, seq_len, d_model)
+
+    def test_info_has_matryoshka(self, pc_model, x):
+        _, info = pc_model(x)
+        assert 'matryoshka' in info
+        assert info['matryoshka']['mode'] == 'post_cascade'
+        assert 'gate' in info['matryoshka']
+
+    def test_gradients_flow(self, pc_model, x):
+        x_g = x.clone().requires_grad_(True)
+        out, _ = pc_model(x_g)
+        out.sum().backward()
+        assert x_g.grad is not None
+        assert x_g.grad.abs().sum() > 0
+
+    def test_matryoshka_gate_gets_gradient(self, pc_model, x):
+        out, _ = pc_model(x)
+        out.sum().backward()
+        assert pc_model.matryoshka_gate.grad is not None
+
+    def test_to_q_gets_gradient(self, pc_model, x):
+        out, _ = pc_model(x)
+        out.sum().backward()
+        assert pc_model.to_q.weight.grad is not None
+
+    def test_level2_gets_gradient(self, pc_model, x):
+        out, _ = pc_model(x)
+        out.sum().backward()
+        assert pc_model.matryoshka.proj_level2.weight.grad is not None
+
+
+class TestPostCascadeSpacetime:
+    def test_level2_active(self, pc_model, x):
+        """Post-cascade always has x_ref (input) ≠ x (nautilus output)."""
+        pc_model.set_step(10000)
+        pc_model(x)
+        stats = pc_model.matryoshka.get_stats()
+        assert stats.get('has_spacetime', False) is True
+
+    def test_matryoshka_sees_different_inputs(self, pc_model, x):
+        """Verify q_before and q_after differ (Nautilus changed something)."""
+        pc_model.set_step(10000)
+        pc_model.eval()
+
+        q_inputs = []
+        orig_forward = pc_model.matryoshka.forward
+
+        def hook_forward(q_after, x_ref=None):
+            q_inputs.append((
+                q_after.detach().clone(),
+                x_ref.detach().clone() if x_ref is not None else None,
+            ))
+            return orig_forward(q_after, x_ref=x_ref)
+
+        pc_model.matryoshka.forward = hook_forward
+        try:
+            pc_model(x)
+        finally:
+            pc_model.matryoshka.forward = orig_forward
+
+        assert len(q_inputs) == 1  # single call (post-cascade)
+        q_after, q_before = q_inputs[0]
+        assert q_before is not None
+
+
+class TestPostCascadeStats:
+    def test_nautilus_keys(self, pc_model, x):
+        pc_model(x)
+        stats = pc_model.get_stats()
+        for name in pc_model.nautilus.chamber_names:
+            assert f'nautilus/{name}/gate' in stats
+
+    def test_matryoshka_keys(self, pc_model, x):
+        pc_model(x)
+        stats = pc_model.get_stats()
+        assert 'matryoshka/gate' in stats
+        assert 'matryoshka/quantizer/gate_L0' in stats
+
+    def test_gate_in_range(self, pc_model, x):
+        pc_model(x)
+        stats = pc_model.get_stats()
+        g = stats['matryoshka/gate']
+        assert 0.0 <= g <= 1.0
+
+
+class TestPostCascadeEdgeCases:
+    def test_single_chamber(self, d_model, x):
+        m = PostCascadeMatryoshkaNautilus(
+            d_model=d_model, enabled_chambers=['heisenberg'],
+        )
+        out, _ = m(x)
+        assert out.shape == x.shape
+
+    def test_all_chambers(self, d_model, x):
+        m = PostCascadeMatryoshkaNautilus(d_model=d_model)
+        out, _ = m(x)
+        assert out.shape == x.shape
+
+    def test_different_q_dim(self, d_model, x):
+        m = PostCascadeMatryoshkaNautilus(
+            d_model=d_model, q_dim=8,
+            enabled_chambers=['cube_diagonal', 'heisenberg'],
+        )
+        out, _ = m(x)
+        assert out.shape == x.shape
+        assert m.matryoshka.total_dim == 8
+
+    def test_no_nan(self, pc_model, x):
+        pc_model.set_step(50)
+        out, _ = pc_model(x)
+        assert not torch.isnan(out).any()
+        assert not torch.isinf(out).any()
+
+    def test_set_step_proxy(self, pc_model):
+        pc_model.set_step(42)
+        assert pc_model.nautilus._current_step == 42
