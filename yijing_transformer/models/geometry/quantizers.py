@@ -11,6 +11,7 @@ from .core import (
     get_trigrams, get_hexagrams, generate_hypercube,
     generate_e8_roots, generate_four_state_codebook, antipodal_index,
     generate_ternary_hypercube, generate_ternary_trigrams,
+    hex_digit_semantics,
 )
 
 
@@ -742,3 +743,298 @@ class PairedBitQuantizer(nn.Module):
         trits = bits[..., 0] + bits[..., 1] - 1.0
         direction = bits[..., 0] - bits[..., 1]
         return trits, direction
+
+
+class MatryoshkaQuantizer(nn.Module):
+    """Матрёшечный квантизатор: иерархическое кодирование от бита до Q12.
+
+    Принцип Наутилуса в кодировании: каждый уровень строится
+    из пар предыдущего, как камеры раковины.
+
+    ┌──────────────────────────────────────────────────────────────────┐
+    │ Уровень 0 — Бит (1 координата Q6):                              │
+    │   {-1, +1} = 2 состояния                                        │
+    │   6 бит = 64 гексаграммы = вершины Q6                           │
+    ├──────────────────────────────────────────────────────────────────┤
+    │ Уровень 1 — Трит (пространственная пара):                        │
+    │   2 соседних координаты (d₁,d₂):                                │
+    │     (+1,+1) → +1 ян   (лето,  да-да,  老阳)                     │
+    │     (-1,-1) → -1 инь  (зима,  нет-нет, 老阴)                    │
+    │     (-1,+1) →  0↑ весна (нет→да, 少阳)                          │
+    │     (+1,-1) →  0↓ осень (да→нет, 少阴)                          │
+    │   3 пары = 3 трита + 3 направления = 4³ = 64 обогащённых        │
+    ├──────────────────────────────────────────────────────────────────┤
+    │ Уровень 2 — Гекс-цифра (пространство × время):                  │
+    │   Ребро можно прочесть двумя способами:                          │
+    │     A) Два соседних ребра (пространство) → 4 состояния           │
+    │     B) Одно ребро в два момента (время) → 4 состояния            │
+    │   Вместе: 4 × 4 = 16 состояний = 1 hex digit = вершина Q4       │
+    │   3 гекс-цифры = 16³ = 4096 = вершина Q12 = Q6(space)×Q6(time) │
+    └──────────────────────────────────────────────────────────────────┘
+
+    Интерпретация «времени» (x_ref):
+      - Предыдущий токен в последовательности
+      - Представление до обогащения (вход камеры Наутилуса)
+      - Выход предыдущей камеры Наутилуса
+
+    Рекурсивный потенциал (не реализован, на будущее):
+      Q6 → Q12 (space×time) → Q24 (space×time × space×time from another source)
+      Каждый уровень удваивает размерность через пространственно-временное спаривание.
+
+    Args:
+        total_dim: размерность Q-пространства (6 для Q6, должно быть чётное)
+        d_model: размерность модели (для enriched-выхода)
+        temp: температура мягкой квантизации
+        adaptive_temp: обучаемая температура
+    """
+
+    def __init__(self, total_dim: int = 6, d_model: int = 128,
+                 temp: float = 0.3, adaptive_temp: bool = False):
+        super().__init__()
+        assert total_dim % 2 == 0, f"total_dim must be even, got {total_dim}"
+        self.total_dim = total_dim
+        self.d_model = d_model
+        self.n_pairs = total_dim // 2
+
+        self.adaptive_temp = adaptive_temp
+        if adaptive_temp:
+            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+        else:
+            self.temp = temp
+
+        # === Level 0: Binary codebook Q_n ===
+        binary_cb = generate_hypercube(total_dim)  # (2^n, n)
+        self.register_buffer('binary_codebook', binary_cb)
+        self.register_buffer('binary_cb_norm_sq', (binary_cb ** 2).sum(dim=1))
+
+        # === Level 1: Pair codebook Q2 ===
+        pair_cb = generate_hypercube(2)  # (4, 2)
+        self.register_buffer('pair_codebook', pair_cb)
+        self.register_buffer('pair_cb_norm_sq', (pair_cb ** 2).sum(dim=1))
+
+        # Trit and direction lookup tables (indexed by pair_codebook order)
+        # generate_hypercube(2): [(-1,-1), (-1,+1), (+1,-1), (+1,+1)]
+        #   (-1,-1) → trit=-1 (инь),     direction=0  (стабильно)
+        #   (-1,+1) → trit=0  (переход),  direction=+1 (весна, ↑)
+        #   (+1,-1) → trit=0  (переход),  direction=-1 (осень, ↓)
+        #   (+1,+1) → trit=+1 (ян),       direction=0  (стабильно)
+        self.register_buffer('trit_table', torch.tensor([-1.0, 0.0, 0.0, 1.0]))
+        self.register_buffer('direction_table', torch.tensor([0.0, 1.0, -1.0, 0.0]))
+
+        # === Level 2: Hex digit codebook Q4 ===
+        hex_cb = generate_hypercube(4)  # (16, 4)
+        self.register_buffer('hex_codebook', hex_cb)
+        self.register_buffer('hex_cb_norm_sq', (hex_cb ** 2).sum(dim=1))
+
+        # === Projections to d_model (for enriched output) ===
+        # Level 0: Q_n quantized coordinates → d_model
+        self.proj_level0 = nn.Linear(total_dim, d_model, bias=False)
+        # Level 1: trits + directions → d_model
+        self.proj_level1 = nn.Linear(self.n_pairs * 2, d_model, bias=False)
+        # Level 2: soft Q4 quantized × n_pairs → d_model
+        self.proj_level2 = nn.Linear(self.n_pairs * 4, d_model, bias=False)
+
+        # Level gates (Nautilus: higher levels ← larger initial weight)
+        self.level_gates = nn.Parameter(torch.tensor([0.0, 0.5, 1.0]))
+
+        # Diagnostics
+        self._stats = {}
+
+    @property
+    def current_temp(self):
+        if self.adaptive_temp:
+            return self.log_temp.exp().clamp(min=0.01, max=5.0)
+        return self.temp
+
+    def _soft_quantize(self, x, codebook, cb_norm_sq):
+        """Мягкая квантизация: расстояния → softmax → взвешенная сумма."""
+        x_norm_sq = (x * x).sum(dim=-1, keepdim=True)
+        cross = x @ codebook.T
+        dists_sq = x_norm_sq - 2 * cross + cb_norm_sq
+        weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
+        quantized = weights @ codebook
+        return quantized, weights
+
+    def _extract_pairs(self, x):
+        """Разбивает вектор на пары координат (Касаткин): (d₁d₂), (d₃d₄), (d₅d₆)."""
+        return [x[..., p * 2:(p + 1) * 2] for p in range(self.n_pairs)]
+
+    def _pairs_to_trits(self, pairs):
+        """Пары координат → триты {-1,0,+1} + направления {-1,0,+1}."""
+        trits = []
+        directions = []
+        for pair in pairs:
+            _, w = self._soft_quantize(pair, self.pair_codebook, self.pair_cb_norm_sq)
+            trits.append((w * self.trit_table).sum(dim=-1))
+            directions.append((w * self.direction_table).sum(dim=-1))
+        return torch.stack(trits, dim=-1), torch.stack(directions, dim=-1)
+
+    def _pairs_to_hex(self, pairs_now, pairs_ref):
+        """Пространство × время → гекс-цифры (Q4 soft quantization).
+
+        Каждая гекс-цифра = (d₁_now, d₂_now, d₁_ref, d₂_ref) ∈ Q4.
+        16 состояний = комбинация пространственного и временного прочтения.
+        """
+        hex_feats = []
+        for p in range(self.n_pairs):
+            combined = torch.cat([pairs_now[p], pairs_ref[p]], dim=-1)  # (..., 4)
+            q, _ = self._soft_quantize(combined, self.hex_codebook, self.hex_cb_norm_sq)
+            hex_feats.append(q)  # (..., 4) — soft-quantized Q4 vertex
+        return torch.cat(hex_feats, dim=-1)  # (..., n_pairs × 4)
+
+    def forward(self, x, x_ref=None):
+        """Иерархическая квантизация по принципу Матрёшки.
+
+        Args:
+            x: (..., total_dim) — текущее представление в Q-пространстве
+            x_ref: (..., total_dim) — опорное представление (для Level 2).
+                None → только Level 0 + Level 1 (без временного измерения).
+
+        Returns:
+            output: (..., d_model) — обогащённое иерархическое представление
+            info: dict с диагностикой каждого уровня
+        """
+        info = {}
+
+        # === Level 0: Binary quantization (Q6 → 64 hexagrams) ===
+        q0, w0 = self._soft_quantize(x, self.binary_codebook, self.binary_cb_norm_sq)
+        out0 = self.proj_level0(q0)
+        info['level0_quantized'] = q0
+
+        # === Level 1: Spatial pairs → trits ===
+        pairs = self._extract_pairs(q0)
+        trits, directions = self._pairs_to_trits(pairs)
+        trit_features = torch.cat([trits, directions], dim=-1)  # (..., n_pairs × 2)
+        out1 = self.proj_level1(trit_features)
+        info['trits'] = trits
+        info['directions'] = directions
+
+        # === Level 2: Space×Time hex digits (requires reference) ===
+        has_level2 = x_ref is not None
+        if has_level2:
+            q_ref, _ = self._soft_quantize(x_ref, self.binary_codebook, self.binary_cb_norm_sq)
+            pairs_ref = self._extract_pairs(q_ref)
+            hex_feats = self._pairs_to_hex(pairs, pairs_ref)  # (..., n_pairs × 4)
+            out2 = self.proj_level2(hex_feats)
+            info['hex_features'] = hex_feats
+
+        # === Combine levels with gated weights (Nautilus scaling) ===
+        gates = torch.sigmoid(self.level_gates)
+        output = gates[0] * out0 + gates[1] * out1
+        if has_level2:
+            output = output + gates[2] * out2
+
+        info['level_gates'] = gates.detach()
+
+        # Store monitoring stats
+        with torch.no_grad():
+            self._stats = {
+                'trit_yang': (trits > 0.5).float().mean().item(),
+                'trit_transition': ((trits > -0.5) & (trits < 0.5)).float().mean().item(),
+                'trit_yin': (trits < -0.5).float().mean().item(),
+                'dir_spring': (directions > 0.5).float().mean().item(),
+                'dir_autumn': (directions < -0.5).float().mean().item(),
+                'gate_L0': gates[0].item(),
+                'gate_L1': gates[1].item(),
+                'gate_L2': gates[2].item(),
+                'has_spacetime': has_level2,
+            }
+
+        return output, info
+
+    def hard_quantize(self, x, x_ref=None):
+        """Жёсткая квантизация всех уровней (для инференса и анализа).
+
+        Returns:
+            dict с:
+              bits: (..., total_dim) — Level 0 знаковое кодирование
+              trits: (..., n_pairs) — Level 1 тритовые значения
+              directions: (..., n_pairs) — Level 1 направления перехода
+              hex_digits: (..., n_pairs) — Level 2 индексы гекс-цифр [0-15]
+              hex_vectors: (..., n_pairs × 4) — Level 2 бинарные Q4 вершины
+        """
+        hard_bits = torch.sign(x)
+        pairs = self._extract_pairs(hard_bits)
+
+        # Level 1: hard trits
+        hard_trits = []
+        hard_dirs = []
+        for pair in pairs:
+            b1, b2 = pair[..., 0], pair[..., 1]
+            # trit = (b1 + b2) / 2: (+1+1)/2=+1, (-1-1)/2=-1, mixed=0
+            hard_trits.append((b1 + b2) / 2)
+            # direction = (b2 - b1) / 2: (-1,+1)→+1=spring(↑), (+1,-1)→-1=autumn(↓)
+            hard_dirs.append((b2 - b1) / 2)
+        trits = torch.stack(hard_trits, dim=-1)
+        dirs = torch.stack(hard_dirs, dim=-1)
+
+        result = {'bits': hard_bits, 'trits': trits, 'directions': dirs}
+
+        # Level 2: space×time hex digits
+        if x_ref is not None:
+            hard_ref = torch.sign(x_ref)
+            pairs_ref = self._extract_pairs(hard_ref)
+            hex_indices = []
+            hex_vectors = []
+            for p in range(self.n_pairs):
+                bits_4 = torch.cat([pairs[p], pairs_ref[p]], dim=-1)  # (..., 4)
+                hex_vectors.append(bits_4)
+                # Convert {-1,+1}⁴ → index [0-15]
+                bits_01 = ((bits_4 + 1) / 2).long()
+                weights = torch.tensor([8, 4, 2, 1], device=bits_01.device)
+                idx = (bits_01 * weights).sum(dim=-1)
+                hex_indices.append(idx)
+            result['hex_digits'] = torch.stack(hex_indices, dim=-1)
+            result['hex_vectors'] = torch.cat(hex_vectors, dim=-1)
+
+        return result
+
+    def get_stats(self):
+        """Текущая статистика для мониторинга."""
+        return self._stats
+
+    def matryoshka_analysis(self, x, x_ref=None):
+        """Полный анализ иерархии для визуализации и интерпретации.
+
+        Returns:
+            dict с подробным описанием каждого уровня.
+        """
+        hard = self.hard_quantize(x, x_ref)
+
+        analysis = {
+            'n_levels': 3 if x_ref is not None else 2,
+            'level0': {
+                'name': 'Бит (Q6, 64 гексаграммы)',
+                'dim': self.total_dim,
+                'states': 2 ** self.total_dim,
+                'bits': hard['bits'],
+            },
+            'level1': {
+                'name': 'Трит (пространственная пара, 4→3 состояния)',
+                'n_pairs': self.n_pairs,
+                'states_per_pair': 4,
+                'collapsed_states': 3,
+                'total_states': 4 ** self.n_pairs,
+                'trits': hard['trits'],
+                'directions': hard['directions'],
+                'distribution': {
+                    'yang': (hard['trits'] > 0.5).float().mean().item(),
+                    'yin': (hard['trits'] < -0.5).float().mean().item(),
+                    'transition': ((hard['trits'] > -0.5) & (hard['trits'] < 0.5)).float().mean().item(),
+                },
+            },
+        }
+
+        if x_ref is not None and 'hex_digits' in hard:
+            hex_idx = hard['hex_digits']
+            analysis['level2'] = {
+                'name': 'Гекс-цифра (пространство×время, Q4→Q12)',
+                'states_per_digit': 16,
+                'n_digits': self.n_pairs,
+                'total_states': 16 ** self.n_pairs,
+                'new_dimension': self.total_dim * 2,
+                'hex_digits': hex_idx,
+                'unique_states_used': len(torch.unique(hex_idx.reshape(-1))),
+            }
+
+        return analysis

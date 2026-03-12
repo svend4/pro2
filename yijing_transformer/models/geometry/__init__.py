@@ -61,6 +61,7 @@ from .quantizers import (
     GroupedQuantizer,
     TernaryQuantizer,
     PairedBitQuantizer,
+    MatryoshkaQuantizer,
 )
 
 # Attention patterns & modules
@@ -148,8 +149,10 @@ from .nautilus import (
     NautilusScheduler,
 )
 
-# Core: ternary hypercube
+# Core: ternary hypercube & spacetime
 from .core import (
     generate_ternary_hypercube,
     generate_ternary_trigrams,
+    hex_digit_semantics,
+    generate_spacetime_pairs,
 )
