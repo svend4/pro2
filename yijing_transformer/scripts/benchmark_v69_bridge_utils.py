@@ -423,7 +423,7 @@ def train_and_eval(config_name, arch_cfg, train_cfg, train_data, val_data, vocab
 
             # AGC on second backward
             if agc is not None:
-                agc.clip_gradients()
+                agc.clip()
             else:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
@@ -434,7 +434,7 @@ def train_and_eval(config_name, arch_cfg, train_cfg, train_data, val_data, vocab
 
             # AGC or standard clipping
             if agc is not None:
-                agc.clip_gradients()
+                agc.clip()
             else:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
