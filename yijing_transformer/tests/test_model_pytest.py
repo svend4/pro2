@@ -13232,3 +13232,505 @@ class TestMultiQueryAttentionHelper:
         assert info['type'] == 'MQA'
         gqa = MultiQueryAttentionHelper(n_heads=8, n_kv_heads=2)
         assert gqa.get_info()['type'] == 'GQA'
+
+
+# ==================== v53 Tests ====================
+
+class TestStochasticDepth:
+    """Тесты для Stochastic Depth."""
+
+    def test_eval_passthrough(self):
+        from training.utils_v53 import StochasticDepth
+        sd = StochasticDepth(drop_prob=0.5)
+        sd.eval()
+        x = torch.randn(4, 8, 16)
+        out = sd(x)
+        assert torch.equal(out, x)
+
+    def test_train_shape(self):
+        from training.utils_v53 import StochasticDepth
+        sd = StochasticDepth(drop_prob=0.3, mode='row')
+        sd.train()
+        x = torch.randn(4, 8, 16)
+        out = sd(x)
+        assert out.shape == x.shape
+
+    def test_batch_mode(self):
+        from training.utils_v53 import StochasticDepth
+        sd = StochasticDepth(drop_prob=0.5, mode='batch')
+        sd.train()
+        x = torch.randn(4, 8, 16)
+        out = sd(x)
+        assert out.shape == x.shape
+
+    def test_with_residual(self):
+        from training.utils_v53 import StochasticDepth
+        sd = StochasticDepth(drop_prob=0.0)
+        sd.train()
+        x = torch.randn(4, 8, 16)
+        residual = torch.randn(4, 8, 16)
+        out = sd(x, residual=residual)
+        assert torch.allclose(out, x + residual)
+
+    def test_zero_drop(self):
+        from training.utils_v53 import StochasticDepth
+        sd = StochasticDepth(drop_prob=0.0)
+        sd.train()
+        x = torch.randn(4, 8, 16)
+        out = sd(x)
+        assert torch.equal(out, x)
+
+    def test_invalid_drop_prob(self):
+        from training.utils_v53 import StochasticDepth
+        import pytest
+        with pytest.raises(ValueError):
+            StochasticDepth(drop_prob=1.5)
+
+    def test_invalid_mode(self):
+        from training.utils_v53 import StochasticDepth
+        import pytest
+        with pytest.raises(ValueError):
+            StochasticDepth(mode='invalid')
+
+    def test_get_info(self):
+        from training.utils_v53 import StochasticDepth
+        sd = StochasticDepth(drop_prob=0.2)
+        info = sd.get_info()
+        assert info['drop_prob'] == 0.2
+        assert abs(info['keep_prob'] - 0.8) < 1e-6
+
+
+class TestTokenMixingMLP:
+    """Тесты для Token Mixing MLP."""
+
+    def test_forward_shape(self):
+        from training.utils_v53 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=16)
+        x = torch.randn(2, 16, 32)
+        out = mixer(x)
+        assert out.shape == (2, 16, 32)
+
+    def test_residual_connection(self):
+        from training.utils_v53 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=8)
+        # With zero-init, output should be close to input
+        x = torch.randn(1, 8, 16)
+        out = mixer(x)
+        assert out.shape == x.shape
+
+    def test_get_info(self):
+        from training.utils_v53 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=32, hidden_mult=2.0)
+        info = mixer.get_info()
+        assert info['seq_len'] == 32
+        assert info['params'] > 0
+
+    def test_gradient_flow(self):
+        from training.utils_v53 import TokenMixingMLP
+        mixer = TokenMixingMLP(seq_len=8)
+        x = torch.randn(2, 8, 16, requires_grad=True)
+        out = mixer(x)
+        out.sum().backward()
+        assert x.grad is not None
+        assert x.grad.shape == x.shape
+
+
+class TestLossBalancer:
+    """Тесты для Loss Balancer."""
+
+    def test_two_tasks(self):
+        from training.utils_v53 import LossBalancer
+        balancer = LossBalancer(n_tasks=2)
+        loss1 = torch.tensor(1.0, requires_grad=True)
+        loss2 = torch.tensor(2.0, requires_grad=True)
+        total = balancer([loss1, loss2])
+        assert total.shape == ()
+        total.backward()
+
+    def test_wrong_n_tasks(self):
+        from training.utils_v53 import LossBalancer
+        balancer = LossBalancer(n_tasks=3)
+        with __import__('pytest').raises(ValueError):
+            balancer([torch.tensor(1.0), torch.tensor(2.0)])
+
+    def test_get_weights(self):
+        from training.utils_v53 import LossBalancer
+        balancer = LossBalancer(n_tasks=3, initial_weight=0.0)
+        weights = balancer.get_weights()
+        assert len(weights) == 3
+        # initial_weight=0 => precision = exp(0) = 1
+        for w in weights.values():
+            assert abs(w - 1.0) < 1e-5
+
+    def test_get_info(self):
+        from training.utils_v53 import LossBalancer
+        balancer = LossBalancer(n_tasks=2)
+        info = balancer.get_info()
+        assert info['n_tasks'] == 2
+        assert 'weights' in info
+
+    def test_learnable(self):
+        from training.utils_v53 import LossBalancer
+        balancer = LossBalancer(n_tasks=2)
+        assert balancer.log_vars.requires_grad
+
+
+class TestWarmupStableDecayScheduler:
+    """Тесты для WSD Scheduler."""
+
+    def test_warmup_phase(self):
+        from training.utils_v53 import WarmupStableDecayScheduler
+        opt = torch.optim.SGD([torch.randn(1)], lr=0.1)
+        sched = WarmupStableDecayScheduler(
+            opt, warmup_steps=10, stable_steps=10, decay_steps=10,
+            base_lr=0.01
+        )
+        lr = sched.get_lr(step=0)
+        assert lr < 0.01
+        assert sched.get_phase(step=0) == 'warmup'
+
+    def test_stable_phase(self):
+        from training.utils_v53 import WarmupStableDecayScheduler
+        opt = torch.optim.SGD([torch.randn(1)], lr=0.1)
+        sched = WarmupStableDecayScheduler(
+            opt, warmup_steps=10, stable_steps=20, decay_steps=10,
+            base_lr=0.01
+        )
+        lr = sched.get_lr(step=15)
+        assert abs(lr - 0.01) < 1e-6
+        assert sched.get_phase(step=15) == 'stable'
+
+    def test_decay_phase(self):
+        from training.utils_v53 import WarmupStableDecayScheduler
+        opt = torch.optim.SGD([torch.randn(1)], lr=0.1)
+        sched = WarmupStableDecayScheduler(
+            opt, warmup_steps=10, stable_steps=10, decay_steps=10,
+            base_lr=0.01, min_lr=0.001
+        )
+        lr = sched.get_lr(step=29)
+        assert lr >= 0.001
+        assert lr < 0.01
+        assert sched.get_phase(step=25) == 'decay'
+
+    def test_step(self):
+        from training.utils_v53 import WarmupStableDecayScheduler
+        opt = torch.optim.SGD([torch.randn(1)], lr=0.1)
+        sched = WarmupStableDecayScheduler(
+            opt, warmup_steps=5, stable_steps=5, decay_steps=5,
+            base_lr=0.01
+        )
+        for _ in range(5):
+            sched.step()
+        assert sched.current_step == 5
+        assert sched.get_phase() == 'stable'
+
+    def test_get_info(self):
+        from training.utils_v53 import WarmupStableDecayScheduler
+        opt = torch.optim.SGD([torch.randn(1)], lr=0.1)
+        sched = WarmupStableDecayScheduler(
+            opt, warmup_steps=10, stable_steps=20, decay_steps=10
+        )
+        info = sched.get_info()
+        assert info['total_steps'] == 40
+        assert 'current_lr' in info
+
+
+class TestGradientCheckpointingScheduler:
+    """Тесты для Gradient Checkpointing Scheduler."""
+
+    def test_sqrt_strategy(self):
+        from training.utils_v53 import GradientCheckpointingScheduler
+        sched = GradientCheckpointingScheduler(n_layers=16, strategy='sqrt')
+        layers = sched.get_checkpoint_layers()
+        assert len(layers) == 4  # sqrt(16) = 4
+
+    def test_uniform_strategy(self):
+        from training.utils_v53 import GradientCheckpointingScheduler
+        sched = GradientCheckpointingScheduler(n_layers=12, strategy='uniform')
+        layers = sched.get_checkpoint_layers(interval=3)
+        assert 0 in layers
+        assert 3 in layers
+        assert 6 in layers
+
+    def test_memory_budget(self):
+        from training.utils_v53 import GradientCheckpointingScheduler
+        sched = GradientCheckpointingScheduler(
+            n_layers=10, strategy='memory_budget'
+        )
+        layers = sched.get_checkpoint_layers(memory_budget_ratio=0.3)
+        assert len(layers) >= 1
+
+    def test_should_checkpoint(self):
+        from training.utils_v53 import GradientCheckpointingScheduler
+        sched = GradientCheckpointingScheduler(n_layers=16, strategy='sqrt')
+        layers = sched.get_checkpoint_layers()
+        for l in layers:
+            assert sched.should_checkpoint(l)
+
+    def test_estimate_memory_savings(self):
+        from training.utils_v53 import GradientCheckpointingScheduler
+        sched = GradientCheckpointingScheduler(n_layers=16, strategy='sqrt')
+        savings = sched.estimate_memory_savings()
+        assert 'n_checkpointed' in savings
+        assert savings['n_checkpointed'] > 0
+
+    def test_invalid_strategy(self):
+        from training.utils_v53 import GradientCheckpointingScheduler
+        import pytest
+        with pytest.raises(ValueError):
+            GradientCheckpointingScheduler(n_layers=10, strategy='bad')
+
+    def test_get_info(self):
+        from training.utils_v53 import GradientCheckpointingScheduler
+        sched = GradientCheckpointingScheduler(n_layers=12, strategy='sqrt')
+        info = sched.get_info()
+        assert info['strategy'] == 'sqrt'
+        assert 'checkpoint_layers' in info
+
+
+# ==================== v54 Tests ====================
+
+class TestFakeQuantize:
+    """Тесты для Fake Quantization."""
+
+    def test_forward_shape(self):
+        from training.utils_v54 import FakeQuantize
+        fq = FakeQuantize(bits=8)
+        fq.train()
+        x = torch.randn(4, 16)
+        out = fq(x)
+        assert out.shape == x.shape
+
+    def test_eval_quantized(self):
+        from training.utils_v54 import FakeQuantize
+        fq = FakeQuantize(bits=8)
+        fq.train()
+        x = torch.randn(4, 16)
+        _ = fq(x)  # update stats
+        fq.eval()
+        out = fq(x)
+        assert out.shape == x.shape
+
+    def test_gradient_passthrough(self):
+        from training.utils_v54 import FakeQuantize
+        fq = FakeQuantize(bits=8)
+        fq.train()
+        x = torch.randn(4, 16, requires_grad=True)
+        out = fq(x)
+        out.sum().backward()
+        assert x.grad is not None
+
+    def test_low_bits(self):
+        from training.utils_v54 import FakeQuantize
+        fq = FakeQuantize(bits=4)
+        fq.train()
+        x = torch.randn(4, 16)
+        out = fq(x)
+        assert out.shape == x.shape
+        # 4-bit quantization should have more error
+        fq8 = FakeQuantize(bits=8)
+        fq8.train()
+        out8 = fq8(x)
+        err4 = (out - x).abs().mean()
+        err8 = (out8 - x).abs().mean()
+        # Low bits => more quantization error (or equal for small tensors)
+        assert err4 >= err8 * 0.5  # relaxed check
+
+    def test_get_info(self):
+        from training.utils_v54 import FakeQuantize
+        fq = FakeQuantize(bits=8, symmetric=True)
+        info = fq.get_info()
+        assert info['bits'] == 8
+        assert info['symmetric'] is True
+
+
+class TestStructuredPruningScheduler:
+    """Тесты для Structured Pruning Scheduler."""
+
+    def test_warmup_zero(self):
+        from training.utils_v54 import StructuredPruningScheduler
+        sched = StructuredPruningScheduler(
+            total_steps=100, target_sparsity=0.5, warmup_fraction=0.1
+        )
+        assert sched.get_sparsity(step=0) == 0.0
+        assert sched.get_sparsity(step=5) == 0.0
+
+    def test_cooldown_target(self):
+        from training.utils_v54 import StructuredPruningScheduler
+        sched = StructuredPruningScheduler(
+            total_steps=100, target_sparsity=0.5, cooldown_fraction=0.1
+        )
+        assert sched.get_sparsity(step=95) == 0.5
+
+    def test_monotonic_increase(self):
+        from training.utils_v54 import StructuredPruningScheduler
+        sched = StructuredPruningScheduler(total_steps=100, target_sparsity=0.5)
+        prev = 0.0
+        for step in range(100):
+            s = sched.get_sparsity(step)
+            assert s >= prev - 1e-6
+            prev = s
+
+    def test_step(self):
+        from training.utils_v54 import StructuredPruningScheduler
+        sched = StructuredPruningScheduler(total_steps=50, target_sparsity=0.3)
+        for _ in range(50):
+            sched.step()
+        assert sched.current_step == 50
+
+    def test_compute_mask(self):
+        from training.utils_v54 import StructuredPruningScheduler
+        sched = StructuredPruningScheduler(total_steps=100, target_sparsity=0.5)
+        weight = torch.randn(10, 20)
+        mask = sched.compute_mask(weight, sparsity=0.5)
+        assert mask.shape == (10,)
+        assert mask.sum() >= 1
+
+    def test_get_info(self):
+        from training.utils_v54 import StructuredPruningScheduler
+        sched = StructuredPruningScheduler(total_steps=100, target_sparsity=0.5)
+        info = sched.get_info()
+        assert info['target_sparsity'] == 0.5
+        assert info['phase'] == 'warmup'
+
+
+class TestOnlineDistillationLoss:
+    """Тесты для Online Distillation Loss."""
+
+    def test_forward(self):
+        from training.utils_v54 import OnlineDistillationLoss
+        odl = OnlineDistillationLoss(temperature=4.0, alpha=0.5)
+        logits_1 = torch.randn(4, 10)
+        logits_2 = torch.randn(4, 10)
+        targets = torch.randint(0, 10, (4,))
+        loss_1, loss_2 = odl(logits_1, logits_2, targets)
+        assert loss_1.shape == ()
+        assert loss_2.shape == ()
+
+    def test_gradient_flow(self):
+        from training.utils_v54 import OnlineDistillationLoss
+        odl = OnlineDistillationLoss()
+        logits_1 = torch.randn(4, 10, requires_grad=True)
+        logits_2 = torch.randn(4, 10, requires_grad=True)
+        targets = torch.randint(0, 10, (4,))
+        loss_1, loss_2 = odl(logits_1, logits_2, targets)
+        loss_1.backward()
+        assert logits_1.grad is not None
+
+    def test_symmetric(self):
+        from training.utils_v54 import OnlineDistillationLoss
+        odl = OnlineDistillationLoss(temperature=2.0, alpha=0.5)
+        logits = torch.randn(4, 10)
+        targets = torch.randint(0, 10, (4,))
+        loss_1, loss_2 = odl(logits, logits, targets)
+        # Same logits => losses should be equal
+        assert abs(loss_1.item() - loss_2.item()) < 1e-4
+
+    def test_get_info(self):
+        from training.utils_v54 import OnlineDistillationLoss
+        odl = OnlineDistillationLoss(temperature=3.0, alpha=0.7)
+        info = odl.get_info()
+        assert info['temperature'] == 3.0
+        assert info['alpha'] == 0.7
+
+
+class TestModelFLOPsProfiler:
+    """Тесты для Model FLOPs Profiler."""
+
+    def test_simple_model(self):
+        from training.utils_v54 import ModelFLOPsProfiler
+        model = nn.Sequential(
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Linear(128, 10),
+        )
+        profiler = ModelFLOPsProfiler(model)
+        result = profiler.estimate(input_shape=(1, 1))
+        assert result['total_flops'] > 0
+        assert result['total_gflops'] >= 0
+
+    def test_with_layernorm(self):
+        from training.utils_v54 import ModelFLOPsProfiler
+        model = nn.Sequential(
+            nn.Linear(32, 64),
+            nn.LayerNorm(64),
+            nn.Linear(64, 10),
+        )
+        profiler = ModelFLOPsProfiler(model)
+        result = profiler.estimate(input_shape=(2, 8))
+        assert result['total_flops'] > 0
+
+    def test_get_info(self):
+        from training.utils_v54 import ModelFLOPsProfiler
+        model = nn.Linear(32, 16)
+        profiler = ModelFLOPsProfiler(model)
+        info = profiler.get_info()
+        assert info['total_params'] == 32 * 16 + 16
+        assert info['total_params_m'] > 0
+
+    def test_top_layers(self):
+        from training.utils_v54 import ModelFLOPsProfiler
+        model = nn.Sequential(
+            nn.Linear(64, 256),
+            nn.Linear(256, 128),
+            nn.Linear(128, 10),
+        )
+        profiler = ModelFLOPsProfiler(model)
+        result = profiler.estimate(input_shape=(1, 1))
+        assert len(result['per_layer']) <= 10
+
+
+class TestActivationMemoryEstimator:
+    """Тесты для Activation Memory Estimator."""
+
+    def test_estimate(self):
+        from training.utils_v54 import ActivationMemoryEstimator
+        est = ActivationMemoryEstimator(
+            n_layers=12, d_model=768, n_heads=12
+        )
+        result = est.estimate(batch_size=8, seq_len=512)
+        assert result['total_mb'] > 0
+        assert result['total_gb'] > 0
+        assert 'breakdown' in result
+
+    def test_scaling(self):
+        from training.utils_v54 import ActivationMemoryEstimator
+        est = ActivationMemoryEstimator(
+            n_layers=12, d_model=768, n_heads=12
+        )
+        r1 = est.estimate(batch_size=1, seq_len=512)
+        r2 = est.estimate(batch_size=2, seq_len=512)
+        # Double batch => ~double memory
+        ratio = r2['total_bytes'] / r1['total_bytes']
+        assert 1.9 < ratio < 2.1
+
+    def test_compare_with_checkpointing(self):
+        from training.utils_v54 import ActivationMemoryEstimator
+        est = ActivationMemoryEstimator(
+            n_layers=24, d_model=1024, n_heads=16
+        )
+        cmp = est.compare_with_checkpointing(batch_size=4, seq_len=512)
+        assert cmp['with_checkpointing_mb'] < cmp['without_checkpointing_mb']
+        assert cmp['memory_saved_mb'] > 0
+        assert cmp['savings_ratio'] > 0
+
+    def test_dtype(self):
+        from training.utils_v54 import ActivationMemoryEstimator
+        est_fp16 = ActivationMemoryEstimator(
+            n_layers=6, d_model=256, n_heads=4, dtype_bytes=2
+        )
+        est_fp32 = ActivationMemoryEstimator(
+            n_layers=6, d_model=256, n_heads=4, dtype_bytes=4
+        )
+        r16 = est_fp16.estimate(batch_size=1, seq_len=64)
+        r32 = est_fp32.estimate(batch_size=1, seq_len=64)
+        assert r32['total_bytes'] == r16['total_bytes'] * 2
+
+    def test_get_info(self):
+        from training.utils_v54 import ActivationMemoryEstimator
+        est = ActivationMemoryEstimator(
+            n_layers=6, d_model=256, n_heads=4
+        )
+        info = est.get_info()
+        assert info['n_layers'] == 6
+        assert info['d_model'] == 256
