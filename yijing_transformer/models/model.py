@@ -1053,16 +1053,6 @@ class YiJingGPT(nn.Module):
                 glyph_vertices = learned_q6
 
             x, convergence_info = self.convergence_bridge(x, glyph_vertices)
-            if glyph_vertices is not None:
-                # Внешние Q6 вершины (переданы из training loop)
-                gv = glyph_vertices
-            elif self.use_glyph_tokenizer:
-                # v62: Q6 lookup из GlyphTokenizer (SOLAN-76) — frozen таблица
-                gv = self.q6_table[idx]  # (B, T, 6), {-1, +1}
-            else:
-                # Fallback: learned projection
-                gv = torch.tanh(self.tok_to_q6(x))  # (B, T, 6) → soft Q6
-            x, convergence_info = self.convergence_bridge(x, gv)
 
         # v56: Matrix Grammar — 2D axial attention обогащение
         if self.use_matrix_grammar:

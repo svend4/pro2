@@ -510,6 +510,67 @@ def kasatkin_axis_projection(axis: str = 'diagonal') -> torch.Tensor:
     return projections
 
 
+def hex_digit_semantics() -> list:
+    """Семантика 16 состояний гекс-цифры Q4 = (пространство × время).
+
+    Гекс-цифра = 4 бита: (d₁_now, d₂_now, d₁_ref, d₂_ref)
+
+    Пространственная пара (d₁_now, d₂_now):
+        (+1,+1) = ян    — оба ребра есть
+        (-1,-1) = инь   — оба ребра нет
+        (-1,+1) = весна — рост (нет→да)
+        (+1,-1) = осень — спад (да→нет)
+
+    Временная динамика: сравниваем пространственную пару now vs ref.
+        Совпадение = стабильность, различие = изменение.
+
+    Итого 16 уникальных комбинаций, каждая = вершина Q4.
+
+    Returns:
+        list из 16 словарей с семантикой каждого состояния.
+    """
+    spatial_labels = {
+        (-1, -1): 'yin', (-1, 1): 'spring',
+        (1, -1): 'autumn', (1, 1): 'yang',
+    }
+    cb = generate_hypercube(4)  # (16, 4)
+    result = []
+    for i, state in enumerate(cb):
+        s1, s2, t1, t2 = [int(v) for v in state.tolist()]
+        spatial_now = spatial_labels[(s1, s2)]
+        spatial_ref = spatial_labels[(t1, t2)]
+        stable = (s1 == t1) and (s2 == t2)
+        result.append({
+            'index': i,
+            'bits': (s1, s2, t1, t2),
+            'hex': format(i, 'x'),
+            'spatial_now': spatial_now,
+            'spatial_ref': spatial_ref,
+            'stable': stable,
+            'label': f"{spatial_now}_{'stable' if stable else 'from_' + spatial_ref}",
+        })
+    return result
+
+
+def generate_spacetime_pairs(n_pairs: int = 3) -> torch.Tensor:
+    """Генерирует Q4^n_pairs = Q(4*n_pairs) — пространственно-временной кодбук.
+
+    Для n_pairs=3 (Q6): Q4³ = Q12 = 4096 вершин.
+    Каждая вершина = 3 гекс-цифры = 12 бит.
+
+    Это эквивалентно Q6(пространство) × Q6(время), но
+    факторизовано через гекс-цифры для вычислительной эффективности:
+        softmax(16) × 3 = O(48) вместо softmax(4096) = O(4096).
+
+    Args:
+        n_pairs: число пар координат (3 для Q6)
+
+    Returns:
+        (16^n_pairs, 4*n_pairs) — все вершины Q(4*n_pairs)
+    """
+    return generate_hypercube(4 * n_pairs)
+
+
 def generate_four_state_codebook() -> torch.Tensor:
     """4096 состояний: 4 состояния × 6 линий = {-1, -0.5, +0.5, +1}⁶.
 

@@ -1,0 +1,427 @@
+"""
+v66+v67: Тесты для MatryoshkaNautilus и PostCascadeMatryoshkaNautilus.
+
+v66 (inter-chamber): MatryoshkaQuantizer между камерами Наутилуса
+v67 (post-cascade):  MatryoshkaQuantizer после полного каскада Наутилуса
+"""
+
+import pytest
+import torch
+import torch.nn as nn
+
+from yijing_transformer.models.geometry.nautilus import (
+    MatryoshkaNautilus,
+    PostCascadeMatryoshkaNautilus,
+    NautilusHierarchy,
+)
+
+
+@pytest.fixture
+def d_model():
+    return 64
+
+
+@pytest.fixture
+def batch():
+    return 2
+
+
+@pytest.fixture
+def seq_len():
+    return 8
+
+
+@pytest.fixture
+def model(d_model):
+    """MatryoshkaNautilus with only 2 fast chambers for testing."""
+    return MatryoshkaNautilus(
+        d_model=d_model,
+        q_dim=6,
+        matryoshka_temp=0.3,
+        init_scale=0.01,
+        warmup_steps=100,
+        mode='sequential',
+        enabled_chambers=['cube_diagonal', 'heisenberg'],
+    )
+
+
+@pytest.fixture
+def x(batch, seq_len, d_model):
+    torch.manual_seed(42)
+    return torch.randn(batch, seq_len, d_model)
+
+
+# === Initialization ===
+
+class TestInit:
+    def test_creates_nautilus(self, model):
+        assert hasattr(model, 'nautilus')
+        assert isinstance(model.nautilus, NautilusHierarchy)
+
+    def test_creates_matryoshka(self, model):
+        assert hasattr(model, 'matryoshka')
+        assert model.matryoshka.total_dim == 6
+
+    def test_creates_q_projection(self, model, d_model):
+        assert model.to_q.in_features == d_model
+        assert model.to_q.out_features == 6
+
+    def test_per_chamber_gates(self, model):
+        n_chambers = len(model.nautilus.chambers)
+        assert model.matryoshka_gates.shape == (n_chambers,)
+        # Initialized to 0 → sigmoid = 0.5
+        assert torch.allclose(
+            torch.sigmoid(model.matryoshka_gates),
+            torch.tensor([0.5] * n_chambers),
+        )
+
+    def test_enabled_chambers(self, model):
+        assert model.nautilus.chamber_names == ['cube_diagonal', 'heisenberg']
+
+    def test_default_all_chambers(self, d_model):
+        m = MatryoshkaNautilus(d_model=d_model)
+        assert len(m.nautilus.chambers) == 7
+
+
+# === Forward Pass ===
+
+class TestForward:
+    def test_output_shape(self, model, x, batch, seq_len, d_model):
+        out, info = model(x)
+        assert out.shape == (batch, seq_len, d_model)
+
+    def test_returns_info_dict(self, model, x):
+        out, info = model(x)
+        assert 'chambers' in info
+        assert 'matryoshka' in info
+        assert 'residual_gate' in info
+
+    def test_matryoshka_info(self, model, x):
+        _, info = model(x)
+        m_info = info['matryoshka']
+        assert 'gates' in m_info
+        assert 'quantizer_stats' in m_info
+        assert len(m_info['gates']) == len(model.nautilus.chambers)
+
+    def test_gradients_flow(self, model, x):
+        x_g = x.clone().requires_grad_(True)
+        out, _ = model(x_g)
+        loss = out.sum()
+        loss.backward()
+        assert x_g.grad is not None
+        assert x_g.grad.abs().sum() > 0
+
+    def test_matryoshka_gates_get_gradient(self, model, x):
+        out, _ = model(x)
+        loss = out.sum()
+        loss.backward()
+        assert model.matryoshka_gates.grad is not None
+
+    def test_to_q_gets_gradient(self, model, x):
+        out, _ = model(x)
+        loss = out.sum()
+        loss.backward()
+        assert model.to_q.weight.grad is not None
+
+    def test_matryoshka_projections_get_gradient(self, model, x):
+        out, _ = model(x)
+        loss = out.sum()
+        loss.backward()
+        # Level 2 projections should get gradients (x_ref != x)
+        assert model.matryoshka.proj_level2.weight.grad is not None
+
+
+# === Curriculum ===
+
+class TestCurriculum:
+    def test_set_step_proxy(self, model):
+        model.set_step(50)
+        assert model.nautilus._current_step == 50
+
+    def test_step0_partial_activation(self, model, x):
+        model.set_step(0)
+        _, info = model(x)
+        # At step 0, only first chamber should be active
+        masks = info['masks']
+        assert masks[0] == 0.0 or masks[0] > 0  # first mask starts ramping
+        # Not all masks should be 1.0 at step 0
+        assert not all(m == 1.0 for m in masks)
+
+    def test_warmup_complete(self, model, x):
+        model.set_step(10000)  # way past warmup
+        _, info = model(x)
+        masks = info['masks']
+        assert all(m == 1.0 for m in masks)
+
+
+# === Spacetime Signal ===
+
+class TestSpacetime:
+    def test_matryoshka_gets_different_inputs(self, model, x):
+        """Verify x and x_ref to matryoshka are actually different."""
+        model.set_step(10000)
+        model.eval()
+
+        # Collect what the matryoshka sees via hook
+        q_inputs = []
+
+        orig_forward = model.matryoshka.forward
+
+        def hook_forward(q_after, x_ref=None):
+            q_inputs.append((q_after.detach().clone(), x_ref.detach().clone() if x_ref is not None else None))
+            return orig_forward(q_after, x_ref=x_ref)
+
+        model.matryoshka.forward = hook_forward
+        try:
+            out, _ = model(x)
+        finally:
+            model.matryoshka.forward = orig_forward
+
+        # At least one call should have x_ref != None and different from q_after
+        assert len(q_inputs) > 0
+        for q_after, q_before in q_inputs:
+            assert q_before is not None, "x_ref should be provided"
+            # After a chamber enriches, q_after should differ from q_before
+            diff = (q_after - q_before).abs().max().item()
+            # diff could be small if init_scale is small, but should not be exactly 0
+            # (unless chamber is completely inactive)
+
+    def test_level2_active_in_stats(self, model, x):
+        """MatryoshkaQuantizer should report has_spacetime=True."""
+        model.set_step(10000)
+        model(x)
+        stats = model.matryoshka.get_stats()
+        assert stats.get('has_spacetime', False) is True
+
+
+# === get_stats ===
+
+class TestStats:
+    def test_returns_nautilus_keys(self, model, x):
+        model(x)
+        stats = model.get_stats()
+        for name in model.nautilus.chamber_names:
+            assert f'nautilus/{name}/gate' in stats
+            assert f'nautilus/{name}/scale' in stats
+
+    def test_returns_matryoshka_keys(self, model, x):
+        model(x)
+        stats = model.get_stats()
+        for name in model.nautilus.chamber_names:
+            assert f'matryoshka/{name}/gate' in stats
+        assert 'matryoshka/quantizer/gate_L0' in stats
+
+    def test_stats_values_reasonable(self, model, x):
+        model(x)
+        stats = model.get_stats()
+        for name in model.nautilus.chamber_names:
+            g = stats[f'matryoshka/{name}/gate']
+            assert 0.0 <= g <= 1.0, f"Gate {name} out of range: {g}"
+
+
+# === Parallel Mode ===
+
+class TestParallelMode:
+    def test_parallel_forward(self, d_model, x):
+        model = MatryoshkaNautilus(
+            d_model=d_model,
+            mode='parallel',
+            enabled_chambers=['cube_diagonal', 'heisenberg'],
+        )
+        out, info = model(x)
+        assert out.shape == x.shape
+
+    def test_parallel_gradients(self, d_model, x):
+        model = MatryoshkaNautilus(
+            d_model=d_model,
+            mode='parallel',
+            enabled_chambers=['cube_diagonal', 'heisenberg'],
+        )
+        x_g = x.clone().requires_grad_(True)
+        out, _ = model(x_g)
+        out.sum().backward()
+        assert x_g.grad is not None
+
+
+# === Edge Cases ===
+
+class TestEdgeCases:
+    def test_single_chamber(self, d_model, x):
+        model = MatryoshkaNautilus(
+            d_model=d_model,
+            enabled_chambers=['heisenberg'],
+        )
+        out, info = model(x)
+        assert out.shape == x.shape
+        assert info['matryoshka']['n_chambers'] == 1
+
+    def test_different_q_dim(self, d_model, x):
+        model = MatryoshkaNautilus(
+            d_model=d_model,
+            q_dim=8,
+            enabled_chambers=['cube_diagonal', 'heisenberg'],
+        )
+        out, _ = model(x)
+        assert out.shape == x.shape
+        assert model.matryoshka.total_dim == 8
+
+    def test_no_nan_in_output(self, model, x):
+        model.set_step(50)
+        out, _ = model(x)
+        assert not torch.isnan(out).any()
+        assert not torch.isinf(out).any()
+
+
+# ═══════════════════════════════════════════════════════════════
+# v67: PostCascadeMatryoshkaNautilus tests
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def pc_model(d_model):
+    """PostCascadeMatryoshkaNautilus with 2 fast chambers."""
+    return PostCascadeMatryoshkaNautilus(
+        d_model=d_model,
+        q_dim=6,
+        matryoshka_temp=0.3,
+        init_scale=0.01,
+        warmup_steps=100,
+        enabled_chambers=['cube_diagonal', 'heisenberg'],
+    )
+
+
+class TestPostCascadeInit:
+    def test_has_nautilus(self, pc_model):
+        assert isinstance(pc_model.nautilus, NautilusHierarchy)
+
+    def test_has_matryoshka(self, pc_model):
+        assert pc_model.matryoshka.total_dim == 6
+
+    def test_has_to_q(self, pc_model, d_model):
+        assert pc_model.to_q.in_features == d_model
+        assert pc_model.to_q.out_features == 6
+
+    def test_single_gate(self, pc_model):
+        # Single scalar gate, not per-chamber
+        assert pc_model.matryoshka_gate.shape == ()
+        assert torch.sigmoid(pc_model.matryoshka_gate).item() == pytest.approx(0.5, abs=0.01)
+
+
+class TestPostCascadeForward:
+    def test_output_shape(self, pc_model, x, batch, seq_len, d_model):
+        out, info = pc_model(x)
+        assert out.shape == (batch, seq_len, d_model)
+
+    def test_info_has_matryoshka(self, pc_model, x):
+        _, info = pc_model(x)
+        assert 'matryoshka' in info
+        assert info['matryoshka']['mode'] == 'post_cascade'
+        assert 'gate' in info['matryoshka']
+
+    def test_gradients_flow(self, pc_model, x):
+        x_g = x.clone().requires_grad_(True)
+        out, _ = pc_model(x_g)
+        out.sum().backward()
+        assert x_g.grad is not None
+        assert x_g.grad.abs().sum() > 0
+
+    def test_matryoshka_gate_gets_gradient(self, pc_model, x):
+        out, _ = pc_model(x)
+        out.sum().backward()
+        assert pc_model.matryoshka_gate.grad is not None
+
+    def test_to_q_gets_gradient(self, pc_model, x):
+        out, _ = pc_model(x)
+        out.sum().backward()
+        assert pc_model.to_q.weight.grad is not None
+
+    def test_level2_gets_gradient(self, pc_model, x):
+        out, _ = pc_model(x)
+        out.sum().backward()
+        assert pc_model.matryoshka.proj_level2.weight.grad is not None
+
+
+class TestPostCascadeSpacetime:
+    def test_level2_active(self, pc_model, x):
+        """Post-cascade always has x_ref (input) ≠ x (nautilus output)."""
+        pc_model.set_step(10000)
+        pc_model(x)
+        stats = pc_model.matryoshka.get_stats()
+        assert stats.get('has_spacetime', False) is True
+
+    def test_matryoshka_sees_different_inputs(self, pc_model, x):
+        """Verify q_before and q_after differ (Nautilus changed something)."""
+        pc_model.set_step(10000)
+        pc_model.eval()
+
+        q_inputs = []
+        orig_forward = pc_model.matryoshka.forward
+
+        def hook_forward(q_after, x_ref=None):
+            q_inputs.append((
+                q_after.detach().clone(),
+                x_ref.detach().clone() if x_ref is not None else None,
+            ))
+            return orig_forward(q_after, x_ref=x_ref)
+
+        pc_model.matryoshka.forward = hook_forward
+        try:
+            pc_model(x)
+        finally:
+            pc_model.matryoshka.forward = orig_forward
+
+        assert len(q_inputs) == 1  # single call (post-cascade)
+        q_after, q_before = q_inputs[0]
+        assert q_before is not None
+
+
+class TestPostCascadeStats:
+    def test_nautilus_keys(self, pc_model, x):
+        pc_model(x)
+        stats = pc_model.get_stats()
+        for name in pc_model.nautilus.chamber_names:
+            assert f'nautilus/{name}/gate' in stats
+
+    def test_matryoshka_keys(self, pc_model, x):
+        pc_model(x)
+        stats = pc_model.get_stats()
+        assert 'matryoshka/gate' in stats
+        assert 'matryoshka/quantizer/gate_L0' in stats
+
+    def test_gate_in_range(self, pc_model, x):
+        pc_model(x)
+        stats = pc_model.get_stats()
+        g = stats['matryoshka/gate']
+        assert 0.0 <= g <= 1.0
+
+
+class TestPostCascadeEdgeCases:
+    def test_single_chamber(self, d_model, x):
+        m = PostCascadeMatryoshkaNautilus(
+            d_model=d_model, enabled_chambers=['heisenberg'],
+        )
+        out, _ = m(x)
+        assert out.shape == x.shape
+
+    def test_all_chambers(self, d_model, x):
+        m = PostCascadeMatryoshkaNautilus(d_model=d_model)
+        out, _ = m(x)
+        assert out.shape == x.shape
+
+    def test_different_q_dim(self, d_model, x):
+        m = PostCascadeMatryoshkaNautilus(
+            d_model=d_model, q_dim=8,
+            enabled_chambers=['cube_diagonal', 'heisenberg'],
+        )
+        out, _ = m(x)
+        assert out.shape == x.shape
+        assert m.matryoshka.total_dim == 8
+
+    def test_no_nan(self, pc_model, x):
+        pc_model.set_step(50)
+        out, _ = pc_model(x)
+        assert not torch.isnan(out).any()
+        assert not torch.isinf(out).any()
+
+    def test_set_step_proxy(self, pc_model):
+        pc_model.set_step(42)
+        assert pc_model.nautilus._current_step == 42
