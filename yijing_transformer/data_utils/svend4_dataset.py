@@ -1,11 +1,13 @@
 """
 Датасет из корпуса svend4 для NautilusYiJing.
 
-Поддерживает 4 домена:
+Поддерживает 6 доменов:
   - ai_agents    : ИИ-скиллы, агенты, пирамида автоматизации
   - infosystems  : энциклопедия, метаданные, контентные блоки
   - knowledge    : архетипы, гуманитарные формулы
   - algorithms   : TSP, оптимизация, мультиагентные системы
+  - data2        : 300+ томов энциклопедии (Беляев и др.)
+  - meta         : метатексты, книги по ИЦзин
 
 Использование:
     # Загрузка всего корпуса
@@ -27,7 +29,7 @@ from dataclasses import dataclass, field
 
 import torch
 
-DOMAINS = ["ai_agents", "infosystems", "knowledge", "algorithms"]
+DOMAINS = ["ai_agents", "infosystems", "knowledge", "algorithms", "data2", "meta"]
 
 
 @dataclass

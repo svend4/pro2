@@ -275,8 +275,33 @@ def train(args):
     start_step = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        ckpt_vocab = ckpt['model_state_dict']['tok_emb.weight'].shape[0]
+        cur_vocab = cfg.vocab_size
+        if ckpt_vocab != cur_vocab:
+            # Расширяем/обрезаем embedding до нового vocab_size
+            import torch.nn as nn
+            old_emb = ckpt['model_state_dict']['tok_emb.weight']   # (ckpt_vocab, d)
+            new_emb = model.tok_emb.weight.data.clone()              # (cur_vocab, d)
+            copy_rows = min(ckpt_vocab, cur_vocab)
+            new_emb[:copy_rows] = old_emb[:copy_rows]
+            ckpt['model_state_dict']['tok_emb.weight'] = new_emb
+            # Аналогично для lm_head / head (разные имена в разных версиях)
+            for head_key in ('lm_head.weight', 'head.weight'):
+                if head_key in ckpt['model_state_dict']:
+                    old_head = ckpt['model_state_dict'][head_key]
+                    head_mod = model
+                    for part in head_key.split('.')[:-1]:
+                        head_mod = getattr(head_mod, part)
+                    new_head = head_mod.weight.data.clone()
+                    new_head[:copy_rows] = old_head[:copy_rows]
+                    ckpt['model_state_dict'][head_key] = new_head
+            print(f"Vocab extended: {ckpt_vocab} → {cur_vocab} "
+                  f"({cur_vocab - ckpt_vocab:+d} новых токенов)")
         model.load_state_dict(ckpt['model_state_dict'])
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        if ckpt_vocab == cur_vocab:
+            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        else:
+            print("Optimizer state сброшен (vocab изменился, начинаем с нуля)")
         start_step = ckpt['step']
         print(f"Resumed from step {start_step}")
 
