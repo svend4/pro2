@@ -445,3 +445,83 @@ Input → Embedding + PosEmb
 >
 > **Не переводить модель на человеческий язык. Переводить человека на язык модели.**
 > TwilightInterpreter — не переводчик, а **мост между двумя языками**.
+
+---
+
+## Phase 9: Archetype Differentiation V2 (Two-Stage Training)
+
+### Проблема Phase 8
+
+ArchetypeLayer V1 использовал `nn.Linear(6, 4)` для проекции expert weights → Q4 axes.
+Это не работало: expert weights — разреженные top-2 распределения с минимальной дисперсией.
+Результат: ASEO (Аксиома) для ВСЕХ типов текста, H=2.77 (максимальная энтропия = uniform).
+
+### Решение: Двухэтапное обучение
+
+**Архитектурное изменение (V2):**
+- Добавлен `hidden_to_axes` MLP: `Linear(128→64) → GELU → Linear(64→4)`
+- Hidden state (богатый, зависящий от контента) как PRIMARY сигнал
+- Expert weights как AUXILIARY сигнал (через `expert_to_axes`)
+- Learnable `axis_blend` (sigmoid ≈ 0.89, предпочитает hidden state)
+
+**Этап 1: Чистая axis supervision (400 шагов, без LM loss)**
+- Обучается ТОЛЬКО `hidden_to_axes` MLP + `axis_blend`
+- Loss = MSE между предсказанными axes и expert-derived targets
+- Каждый эксперт имеет "дом" в Q4:
+
+```
+MATH  → (-1,-1,-1,-1) = Кристалл   (Material, Static, Elementary, Ordered)
+CODE  → (-1,+1,+1,-1) = Машина     (Material, Dynamic, Complex, Ordered)
+HUMAN → (+1,+1,-1,+1) = Интуиция   (Abstract, Dynamic, Elementary, Fluid)
+SYS   → (-1,-1,+1,-1) = Здание     (Material, Static, Complex, Ordered)
+RECON → (+1,+1,+1,+1) = Общество   (Abstract, Dynamic, Complex, Fluid)
+INFO  → (+1,-1,+1,+1) = Культура   (Abstract, Static, Complex, Fluid)
+```
+
+- axloss: 0.08 → 0.036 за 400 шагов
+
+**Этап 2: Совместное обучение (800 шагов, LM + supervision)**
+- Обучаются: archetype_layer + core_second + twilight
+- LR: archetype=3e-4, core_second=5e-6, twilight=1e-5
+- Losses: CE + 1.0·axis_MSE + 0.3·sharpness_penalty
+
+### Результаты Phase 9c
+
+| Content Type | Archetype | Q4 Code | Axes (M/A, S/D, E/C, O/F) | Twilight |
+|---|---|---|---|---|
+| CODE (def fib) | MDCO Машина | (-1,+1,+1,-1) | -0.52, -0.14, +0.18, -0.53 | 0.01 |
+| CODE (class) | MSCO Здание | (-1,-1,+1,-1) | -0.09, -0.12, +0.09, -0.10 | 0.00 |
+| MATH (формула) | MSCO Здание | (-1,-1,+1,-1) | -0.24, -0.11, +0.44, -0.24 | 0.01 |
+| HUMAN (привет) | **ADCF Общество** | **(+1,+1,+1,+1)** | **+0.73, +0.88, +0.88, +0.71** | 0.12 |
+| HUMAN (жизнь) | **ADCF Общество** | **(+1,+1,+1,+1)** | **+0.89, +0.77, +0.79, +0.87** | 0.39 |
+| SYSTEM (chmod) | ADEF Интуиция | (+1,+1,-1,+1) | -0.13, +0.09, +0.14, -0.15 | 0.01 |
+| INFO (нейросети) | **ADCF Общество** | **(+1,+1,+1,+1)** | **+0.90, +0.59, +0.75, +0.88** | 0.76 |
+| RECON (аналогия) | **ADCF Общество** | **(+1,+1,+1,+1)** | **+0.90, +0.72, +0.83, +0.87** | 0.59 |
+| MIXED (love) | MSEO Кристалл | (-1,-1,-1,-1) | -0.66, -0.54, -0.14, -0.68 | 0.01 |
+
+**5 уникальных архетипов** (было 1 в Phase 8):
+- MDCO (Машина), MSCO (Здание), ADEF (Интуиция), ADCF (Общество), MSEO (Кристалл)
+
+**Ключевые улучшения:**
+- Entropy: 2.77 → 1.64 (от uniform к sharp selection)
+- Axes magnitude: 0.07 → 0.90 (saturation!)
+- Top probability: 0.063 → 0.51 (confident!)
+- PPL: 17.74 (без регрессии)
+- CODE и HUMAN — в **противоположных углах** Q4 гиперкуба
+
+### Архитектурное следствие
+
+MatryoshkaQuantizer уже реализует Q4 гиперкуб с 16 hex-digits (2 пространственных + 2 временных ребра).
+PseudoRAG реализует те же 16 архетипов на 4 бинарных осях.
+ArchetypeLayer V2 теперь успешно маппирует hidden state → Q4 координаты → архетипы.
+
+**Следующий шаг — объединение**: заменить 6 экспертов NautilusMoME на **16 MatryoshkaExperts**,
+где каждый эксперт = один архетип PseudoRAG = одна вершина Q4.
+
+Но при этом нужно разделить экспертов на два вида:
+1. **Внутренние "рыцари"** (16 структурированных): MatryoshkaExperts, каждый = архетип Q4
+2. **Внешние "оруженосцы"** (подключаемые): для новой информации, которая будет
+   обработана и интегрирована в систему "рыцарей"
+
+Это создаёт двухуровневую систему: "чистилище" (оруженосцы обрабатывают сырые данные)
+→ "рыцарский зал" (MatryoshkaExperts классифицируют и структурируют).

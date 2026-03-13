@@ -668,22 +668,24 @@ PSEUDORAG_ARCHETYPES = {
 
 
 class ArchetypeLayer(nn.Module):
-    """Maps expert routing to PseudoRAG's 16 archetypes via Q4 hypercube.
+    """Maps hidden state + expert routing to PseudoRAG's 16 archetypes via Q4 hypercube.
 
-    The 6 MoME experts are "compressed" views of 16 archetypes.
-    This layer projects the expert-weighted representation into Q4 space
-    and finds which archetype(s) are active, adding archetype-aware
-    enrichment to the signal.
+    V2: Uses hidden state (rich, content-dependent) as primary signal,
+    with expert weights as auxiliary input. The hidden state already
+    differentiates content types (proven by working expert routing),
+    so an MLP on it can learn meaningful Q4 axis coordinates.
 
     Architecture:
-        expert_weights (B,T,6) → axis_projection → Q4 coordinates (B,T,4)
-        → soft assignment to 16 archetypes → archetype embedding → enrichment
+        hidden_state (B,T,D) → MLP → Q4 axes (B,T,4)
+        expert_weights (B,T,6) → linear → Q4 axes (auxiliary)
+        → combined axes → soft assignment to 16 archetypes
+        → archetype embedding → enrichment
 
-    The 4 axes emerge from expert pairs:
-        Axis M/A: MATH+CODE (abstract) vs SYS+RECON (material)
-        Axis S/D: INFO+RECON (static) vs CODE+HUMAN (dynamic)
-        Axis E/C: MATH+HUMAN (elementary) vs SYS+INFO (complex)
-        Axis O/F: MATH+SYS (ordered) vs HUMAN+INFO (fluid)
+    The 4 axes:
+        Axis M/A: Material (-1) vs Abstract (+1)
+        Axis S/D: Static (-1) vs Dynamic (+1)
+        Axis E/C: Elementary (-1) vs Complex (+1)
+        Axis O/F: Ordered (-1) vs Fluid (+1)
     """
 
     def __init__(self, d_model, n_experts=6):
@@ -691,8 +693,18 @@ class ArchetypeLayer(nn.Module):
         self.d_model = d_model
         self.n_archetypes = 16
 
-        # Project from expert-weighted space to 4 Q4 axes
+        # PRIMARY: Hidden state → 4 Q4 axes via MLP (content-rich signal)
+        self.hidden_to_axes = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.Linear(d_model // 2, 4),
+        )
+
+        # AUXILIARY: Expert weights → 4 Q4 axes (routing signal)
         self.expert_to_axes = nn.Linear(n_experts, 4, bias=True)
+
+        # Learnable blend between hidden-derived and expert-derived axes
+        self.axis_blend = nn.Parameter(torch.tensor(1.5))  # sigmoid(1.5)≈0.82, favors hidden
 
         # 16 archetype embeddings (learnable)
         self.archetype_emb = nn.Embedding(16, d_model)
@@ -703,8 +715,8 @@ class ArchetypeLayer(nn.Module):
         ], dtype=torch.float32)
         self.register_buffer('q4_codebook', q4)
 
-        # Temperature for soft assignment
-        self.temp = nn.Parameter(torch.tensor(1.0))
+        # Temperature for soft assignment (lower = sharper)
+        self.temp = nn.Parameter(torch.tensor(0.5))
 
         # Output gate (starts small)
         self.gate = nn.Parameter(torch.tensor(0.01))
@@ -724,20 +736,22 @@ class ArchetypeLayer(nn.Module):
         """
         B, T, D = x.shape
 
-        # Step 1: Project expert routing to 4 Q4 axes
-        # expert_weights: (B, T, 6) → axes: (B, T, 4)
-        axes = torch.tanh(self.expert_to_axes(expert_weights))  # in [-1, 1]
+        # Step 1a: Hidden state → axes (content-rich, per-token)
+        hidden_axes = torch.tanh(self.hidden_to_axes(x))  # (B, T, 4)
+
+        # Step 1b: Expert routing → axes (sparse, per-token)
+        expert_axes = torch.tanh(self.expert_to_axes(expert_weights))  # (B, T, 4)
+
+        # Step 1c: Blend (learnable, favors hidden state)
+        blend = torch.sigmoid(self.axis_blend)
+        axes = blend * hidden_axes + (1 - blend) * expert_axes  # (B, T, 4)
 
         # Step 2: Soft assignment to 16 archetypes
-        # Distance from each axis-point to each Q4 vertex
-        # axes: (B, T, 4), q4_codebook: (16, 4)
-        # similarity = dot product (higher = closer)
         sim = torch.einsum('btd,nd->btn', axes, self.q4_codebook)  # (B,T,16)
-        sim = sim / (self.temp.abs() + 0.1)
+        sim = sim / (self.temp.abs() + 0.05)
         archetype_probs = F.softmax(sim, dim=-1)  # (B, T, 16)
 
         # Step 3: Weighted sum of archetype embeddings
-        # archetype_emb: (16, D) → weighted: (B, T, D)
         archetype_signal = torch.einsum(
             'btn,nd->btd', archetype_probs, self.archetype_emb.weight
         )
@@ -758,6 +772,9 @@ class ArchetypeLayer(nn.Module):
             'entropy': -(archetype_probs * (archetype_probs + 1e-8).log()).sum(-1).mean().item(),
             'gate': self.gate.item(),
             'axis_means': axes.mean(dim=(0, 1)).tolist(),
+            'archetype_probs': archetype_probs,  # for loss computation
+            'axes': axes,  # (B, T, 4) for supervision loss
+            'blend': blend.item(),
         }
         return enriched_x, info
 
@@ -1589,6 +1606,223 @@ def phase5_synth_training(model, sp, train_data, val_data, args):
                   f"gate={s_info.get('gate', 0):.4f}")
 
     model.unfreeze_all()
+
+
+def phase9_archetype_differentiation(model, sp, train_data, val_data, args):
+    """Phase 9: Archetype Differentiation via hidden-state-based ArchetypeLayer V2.
+
+    Two-stage training:
+      Stage 1: Pure axis supervision (no LM loss) — trains hidden_to_axes MLP
+               to map hidden states to Q4 coordinates matching expert routing
+      Stage 2: Joint training (LM + axis supervision) — fine-tunes with LM loss
+               while maintaining archetype differentiation
+
+    Each expert has a semantic "home" in Q4 space:
+      MATH  → (-1,-1,-1,-1) Кристалл  (Material, Static, Elementary, Ordered)
+      CODE  → (-1,+1,+1,-1) Машина    (Material, Dynamic, Complex, Ordered)
+      HUMAN → (+1,+1,-1,+1) Интуиция  (Abstract, Dynamic, Elementary, Fluid)
+      SYS   → (-1,-1,+1,-1) Здание    (Material, Static, Complex, Ordered)
+      RECON → (+1,+1,+1,+1) Общество  (Abstract, Dynamic, Complex, Fluid)
+      INFO  → (+1,-1,+1,+1) Культура  (Abstract, Static, Complex, Fluid)
+    """
+    print("\n" + "=" * 70)
+    print("  Phase 9: Archetype Differentiation V2 (Two-Stage)")
+    print("=" * 70)
+
+    expert_targets = torch.tensor([
+        [-1., -1., -1., -1.],  # MATH → Кристалл
+        [-1.,  1.,  1., -1.],  # CODE → Машина
+        [ 1.,  1., -1.,  1.],  # HUMAN → Интуиция
+        [-1., -1.,  1., -1.],  # SYS → Здание
+        [ 1.,  1.,  1.,  1.],  # RECON → Общество
+        [ 1., -1.,  1.,  1.],  # INFO → Культура
+    ])
+
+    # ---- STAGE 1: Pure axis supervision (400 steps) ----
+    print("\n  Stage 1: Pure axis supervision (400 steps, no LM loss)")
+
+    for p in model.parameters():
+        p.requires_grad = False
+    for p in model.archetype_layer.hidden_to_axes.parameters():
+        p.requires_grad = True
+    model.archetype_layer.axis_blend.requires_grad = True
+
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=2e-3, weight_decay=args.wd,
+    )
+
+    for step in range(1, 401):
+        model.train()
+        x, y = get_batch(train_data, args.block_size, args.batch_size)
+        _, _, info = model(x, targets=y)
+
+        routing = info['routing']
+        pred_axes = info['archetype']['axes']
+        target_axes = torch.einsum(
+            'bte,ed->btd', routing,
+            expert_targets.to(routing.device)
+        )
+        target_axes = torch.tanh(target_axes * 2.0)
+        loss = F.mse_loss(pred_axes, target_axes.detach())
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        if step % 100 == 0:
+            a = info['archetype']
+            print(f"    Step {step}: axloss={loss.item():.4f} "
+                  f"arch={a['top_archetype']}({a['top_name']}) "
+                  f"H={a['entropy']:.2f} blend={a['blend']:.2f}")
+
+    # ---- STAGE 2: Joint training (800 steps) ----
+    print("\n  Stage 2: Joint training (LM + supervision, 800 steps)")
+
+    for p in model.parameters():
+        p.requires_grad = False
+    for p in model.archetype_layer.parameters():
+        p.requires_grad = True
+    for p in model.core_second.parameters():
+        p.requires_grad = True
+    for p in model.twilight.parameters():
+        p.requires_grad = True
+
+    arch_params = sum(p.numel() for p in model.archetype_layer.parameters() if p.requires_grad)
+    total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  Trainable: {total_trainable:,} (archetype: {arch_params:,})")
+
+    param_groups = [
+        {'params': list(model.archetype_layer.parameters()), 'lr': 3e-4},
+        {'params': list(model.core_second.parameters()), 'lr': 5e-6},
+        {'params': list(model.twilight.parameters()), 'lr': 1e-5},
+    ]
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=args.wd)
+
+    n_steps = 800
+    best_val = float('inf')
+    best_state = None
+
+    for step in range(1, n_steps + 1):
+        model.train()
+        cur_lr = get_lr_wsd(step, n_steps, 3e-4)
+        scale = cur_lr / 3e-4
+        for pg in param_groups:
+            if pg['lr'] >= 1e-4:
+                pg['lr'] = cur_lr
+            elif pg['lr'] >= 5e-6:
+                pg['lr'] = 5e-6 * scale
+            else:
+                pg['lr'] = 1e-5 * scale
+
+        x, y = get_batch(train_data, args.block_size, args.batch_size)
+        _, loss, info = model(x, targets=y)
+
+        routing = info['routing']
+        arch_info = info.get('archetype', {})
+        if 'axes' in arch_info:
+            pred_axes = arch_info['axes']
+            target_axes = torch.einsum(
+                'bte,ed->btd', routing,
+                expert_targets.to(routing.device)
+            )
+            target_axes = torch.tanh(target_axes * 2.0)
+            ax_loss = F.mse_loss(pred_axes, target_axes.detach())
+            loss = loss + 1.0 * ax_loss
+
+            arch_probs = arch_info['archetype_probs']
+            H = -(arch_probs * (arch_probs + 1e-8).log()).sum(-1).mean()
+            loss = loss + 0.3 * F.relu(H - 1.0)
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        if step % max(n_steps // 8, 1) == 0:
+            vl, ppl = evaluate(model, val_data, args.block_size, args.batch_size, n_eval=30)
+            a = info.get('archetype', {})
+            print(f"    Step {step:4d}/{n_steps}: val={vl:.4f} ppl={ppl:.2f} "
+                  f"arch={a.get('top_archetype', '?')}({a.get('top_name', '?')}) "
+                  f"H={a.get('entropy', 0):.2f} "
+                  f"axes={[f'{v:.2f}' for v in a.get('axis_means', [])]}")
+            if vl < best_val:
+                best_val = vl
+                best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                print(f"      ** best val={vl:.4f}")
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        print(f"\n  Restored best checkpoint (val={best_val:.4f})")
+
+    model.unfreeze_all()
+
+    # Final test
+    print("\n  --- Phase 9: Archetype Differentiation Test ---")
+    test_prompts = [
+        ("CODE", "def fibonacci(n):\n    if n <= 1:\n        return n"),
+        ("CODE", "class HttpServer:\n    def __init__(self, port=8080):"),
+        ("MATH", "∫ sin(x)dx = -cos(x) + C  формула"),
+        ("MATH", "f(x) = Σ aₙxⁿ  степенной ряд"),
+        ("HUMAN", "Добрый день! Как у вас дела? Расскажите"),
+        ("HUMAN", "Жизнь прекрасна когда понимаешь смысл"),
+        ("SYSTEM", "import os\nsys.path.insert(0, '/usr')"),
+        ("SYSTEM", "chmod 755 /etc/nginx/nginx.conf"),
+        ("INFO", "Нейронные сети используют обратное распространение"),
+        ("INFO", "Квантовая механика описывает поведение частиц"),
+        ("RECON", "Аналогия между нейросетью и биологическим мозгом"),
+        ("RECON", "Паттерны в природе повторяются на разных масштабах"),
+        ("ZARATHUSTRA", "Так говорил Заратустра: человек есть мост"),
+        ("TWILIGHT", "Закономерчивают системогенезные протоструктуры"),
+        ("MIXED", "def compute_love(heart, brain):\n    return harmony"),
+    ]
+
+    model.eval()
+    archetype_by_type = {}
+    with torch.no_grad():
+        for label, prompt in test_prompts:
+            tokens = sp.encode(prompt)
+            if len(tokens) < 4:
+                tokens = tokens + [0] * (4 - len(tokens))
+            idx = torch.tensor([tokens[:model.block_size]], dtype=torch.long)
+            _, _, info = model(idx)
+            a_info = info.get('archetype', {})
+            t_info = info.get('twilight', {})
+
+            arch = a_info.get('top_archetype', '?')
+            name = a_info.get('top_name', '?')
+            prob = a_info.get('top_prob', 0)
+            H = a_info.get('entropy', 0)
+            axes = a_info.get('axis_means', [])
+            twi = t_info.get('twilight_strength', 0)
+
+            if label not in archetype_by_type:
+                archetype_by_type[label] = []
+            archetype_by_type[label].append(arch)
+
+            axes_str = ','.join(f'{a:+.2f}' for a in axes)
+            print(f"    [{label:12s}] {arch}({name}) p={prob:.3f} H={H:.2f} "
+                  f"axes=[{axes_str}] twi={twi:.2f}")
+
+    unique_archetypes = set()
+    for archs in archetype_by_type.values():
+        unique_archetypes.update(archs)
+    print(f"\n  Unique archetypes used: {len(unique_archetypes)}/16")
+    for label, archs in sorted(archetype_by_type.items()):
+        print(f"    {label} → {set(archs)}")
+
+    # Save checkpoint
+    torch.save({
+        'step': 5000,
+        'model': model.state_dict(),
+        'best_ppl': best_val,
+        'args': vars(args),
+        'phase': 9,
+    }, CHECKPOINT_PATH)
+    print(f"\n  >> Saved Phase 9 checkpoint to {CHECKPOINT_PATH}")
+
+    return best_val
 
 
 # ==================== Main ====================
