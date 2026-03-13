@@ -17,6 +17,10 @@ Architecture:
   └───────┬───────┘
   ┌───────▼───────┐
   │ NAUTILUS BRIDGE │  ← hierarchical aggregation (from NautilusHierarchy)
+  └───────┬───────┘
+  ┌───────▼───────┐
+  │ CROSS-DOMAIN   │  ← inter-expert analogies (15 pairs for 6 experts)
+  │ ANALOGY        │     turns domain "collage" into structured insight
   └───────────────┘
 
 Key innovations:
@@ -31,11 +35,13 @@ Training phases:
   Phase 1: Train Core + all Experts end-to-end
   Phase 2: Fine-tune individual experts on domain-specific data
   Phase 3: Fine-tune Router on mixed data
+  Phase 4: Train CrossDomainAnalogy (inter-expert analogies)
 
 Usage:
   python train_nautilus_mome.py                    # Full pipeline
   python train_nautilus_mome.py --phase 1          # Skip tokenizer training
   python train_nautilus_mome.py --phase 2          # Expert fine-tuning only
+  python train_nautilus_mome.py --phase 4          # Analogy training only
   python train_nautilus_mome.py --resume ckpt.pt   # Resume training
 """
 
@@ -55,6 +61,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import itertools
 import sentencepiece as spm
 
 # ==================== Configuration ====================
@@ -494,6 +501,141 @@ class NautilusBridge(nn.Module):
         return output
 
 
+# ==================== Cross-Domain Analogy ====================
+
+
+class ProverbCondenser(nn.Module):
+    """Compresses expert output to a "proverb" — a concentrated formula.
+
+    Like a proverb is concentrated wisdom in few words, this module
+    distills an expert's output (B, T, D) into a single vector (B, 1, D)
+    that captures the essence of what the expert sees.
+    """
+
+    def __init__(self, d_model):
+        super().__init__()
+        self.query = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.key_proj = nn.Linear(d_model, d_model)
+        self.value_proj = nn.Linear(d_model, d_model)
+        self.scale = d_model ** -0.5
+
+    def forward(self, expert_output):
+        B, T, D = expert_output.shape
+        q = self.query.expand(B, -1, -1)
+        k = self.key_proj(expert_output)
+        v = self.value_proj(expert_output)
+        attn = torch.bmm(q, k.transpose(1, 2)) * self.scale
+        attn = F.softmax(attn, dim=-1)
+        return torch.bmm(attn, v)  # (B, 1, D)
+
+
+class AnalogyPair(nn.Module):
+    """A bridge between two domains for cross-domain analogy.
+
+    Like biophysics uses physics formulas to describe biology,
+    this module projects "proverbs" from two experts into a shared
+    analogy space and synthesizes cross-domain insight.
+    """
+
+    def __init__(self, d_model, d_analogy=None):
+        super().__init__()
+        d_analogy = d_analogy or d_model // 2
+        self.proj_a = nn.Linear(d_model, d_analogy)
+        self.proj_b = nn.Linear(d_model, d_analogy)
+        self.similarity_gate = nn.Sequential(
+            nn.Linear(d_analogy * 2, d_analogy),
+            nn.GELU(),
+            nn.Linear(d_analogy, 1),
+            nn.Sigmoid(),
+        )
+        self.synthesis = nn.Sequential(
+            nn.Linear(d_analogy * 2, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
+        )
+        self.gate = nn.Parameter(torch.tensor(0.01))
+
+    def forward(self, formula_a, formula_b):
+        a = self.proj_a(formula_a)
+        b = self.proj_b(formula_b)
+        combined = torch.cat([a, b], dim=-1)
+        strength = self.similarity_gate(combined)
+        insight = self.synthesis(combined) * self.gate
+        return insight, strength
+
+
+class CrossDomainAnalogy(nn.Module):
+    """Cross-domain analogy module: turns expert "collage" into structured insight.
+
+    For 6 experts creates C(6,2)=15 analogy pairs. Each pair can discover
+    and leverage cross-domain analogies (e.g. MATH↔HUMAN for psychotype math,
+    CODE↔SYSTEM for architecture patterns).
+
+    Analogies activate only when similarity exceeds threshold —
+    otherwise domains remain independent.
+    """
+
+    def __init__(self, d_model, n_experts=6, expert_names=None,
+                 d_analogy=None, threshold=0.3):
+        super().__init__()
+        self.n_experts = n_experts
+        self.threshold = threshold
+        names = expert_names or ['MATH', 'CODE', 'HUMAN', 'SYSTEM', 'RECON', 'INFO']
+        names = names[:n_experts]
+
+        self.condensers = nn.ModuleDict({
+            name: ProverbCondenser(d_model) for name in names
+        })
+
+        self.pairs = nn.ModuleDict()
+        self.pair_keys = []
+        for i, j in itertools.combinations(range(n_experts), 2):
+            key = f"{names[i]}_{names[j]}"
+            self.pairs[key] = AnalogyPair(d_model, d_analogy)
+            self.pair_keys.append((key, i, j))
+
+        self.output_proj = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+        )
+        self.analogy_gate = nn.Parameter(torch.tensor(0.05))
+
+    def forward(self, bridge_output, expert_outputs, expert_weights, expert_names):
+        B, T, D = bridge_output.shape
+        names = expert_names[:self.n_experts]
+
+        formulas = {}
+        for i, name in enumerate(names):
+            w = expert_weights[:, :, i:i+1]
+            weighted = expert_outputs[i] * w
+            formulas[name] = self.condensers[name](weighted)
+
+        total_insight = torch.zeros(B, 1, D, device=bridge_output.device)
+        analogy_strengths = {}
+        active_count = 0
+
+        for key, i, j in self.pair_keys:
+            insight, strength = self.pairs[key](formulas[names[i]], formulas[names[j]])
+            avg_str = strength.mean().item()
+            analogy_strengths[key] = avg_str
+            if avg_str > self.threshold:
+                total_insight = total_insight + insight * strength
+                active_count += 1
+
+        if active_count > 0:
+            total_insight = total_insight / max(active_count, 1)
+            projected = self.output_proj(total_insight)
+            output = bridge_output + projected.expand(B, T, D) * self.analogy_gate
+        else:
+            output = bridge_output
+
+        return output, {
+            'strengths': analogy_strengths,
+            'active_pairs': active_count,
+            'gate': self.analogy_gate.item(),
+        }
+
+
 class NautilusMoME(nn.Module):
     """Nautilus Mixture of Micro-Experts Language Model.
 
@@ -503,6 +645,7 @@ class NautilusMoME(nn.Module):
           → Router (selects top-2 experts)
           → Micro-Experts (6 domain specialists)
           → NautilusBridge (hierarchical merge)
+          → CrossDomainAnalogy (inter-expert analogies)
           → Core Layers (second half)
           → LM Head → Output
     """
@@ -544,6 +687,12 @@ class NautilusMoME(nn.Module):
 
         # NautilusBridge
         self.bridge = NautilusBridge(d_model, n_experts)
+
+        # CrossDomainAnalogy (inter-expert analogy module)
+        self.analogy = CrossDomainAnalogy(
+            d_model, n_experts,
+            expert_names=self.EXPERT_NAMES[:n_experts],
+        )
 
         # Output
         self.ln_f = nn.LayerNorm(d_model)
@@ -600,6 +749,13 @@ class NautilusMoME(nn.Module):
             for p in expert.parameters():
                 p.requires_grad = (name == expert_name)
 
+    def freeze_all_except_analogy(self):
+        """Freeze everything except the CrossDomainAnalogy module."""
+        for p in self.parameters():
+            p.requires_grad = False
+        for p in self.analogy.parameters():
+            p.requires_grad = True
+
     def forward(self, idx, targets=None):
         B, T = idx.shape
         tok = self.tok_emb(idx)
@@ -628,6 +784,12 @@ class NautilusMoME(nn.Module):
         # Bridge merges expert outputs with core
         x = self.bridge(x, expert_outputs, expert_weights)
 
+        # CrossDomainAnalogy: find inter-expert analogies
+        x, analogy_info = self.analogy(
+            x, expert_outputs, expert_weights,
+            self.EXPERT_NAMES[:self.n_experts],
+        )
+
         # Core second half
         for layer in self.core_second:
             x = layer(x)
@@ -641,7 +803,11 @@ class NautilusMoME(nn.Module):
             # Add routing auxiliary loss (small weight)
             loss = loss + 0.01 * aux_loss
 
-        return logits, loss, {'aux_loss': aux_loss.item(), 'routing': expert_weights.detach()}
+        return logits, loss, {
+            'aux_loss': aux_loss.item(),
+            'routing': expert_weights.detach(),
+            'analogy': analogy_info,
+        }
 
 
 # ==================== Training Utilities ====================
@@ -1006,6 +1172,100 @@ def phase3_router_finetune(model, sp, train_data, val_data, args):
     analyze_routing(model, val_data, sp, args.block_size)
 
 
+def phase4_analogy_training(model, sp, train_data, val_data, args):
+    """Phase 4: Train CrossDomainAnalogy on mixed data.
+
+    Trains the inter-expert analogy module to find meaningful
+    cross-domain connections. Everything else is frozen.
+
+    The analogy module learns to:
+    - Differentiate strong vs weak analogies between expert pairs
+    - Create context-dependent analogy activations
+    - Synthesize useful cross-domain insights
+    """
+    print("\n" + "=" * 70)
+    print("  Phase 4: Cross-Domain Analogy Training")
+    print("=" * 70)
+
+    # Freeze everything except analogy
+    model.freeze_all_except_analogy()
+
+    analogy_params = sum(p.numel() for p in model.analogy.parameters() if p.requires_grad)
+    total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  Trainable params: {total_trainable:,} (analogy: {analogy_params:,})")
+    print(f"  Analogy pairs: {len(model.analogy.pair_keys)}")
+
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=args.lr * 0.3, weight_decay=args.wd,
+    )
+
+    analogy_steps = args.analogy_steps
+    print(f"  Training analogy for {analogy_steps} steps...")
+
+    best_val = float('inf')
+    for step in range(1, analogy_steps + 1):
+        model.train()
+        cur_lr = get_lr_wsd(step, analogy_steps, args.lr * 0.3)
+        for pg in optimizer.param_groups:
+            pg['lr'] = cur_lr
+
+        x, y = get_batch(train_data, args.block_size, args.batch_size)
+        _, loss, info = model(x, targets=y)
+
+        # Analogy diversity loss: penalize uniform strengths
+        # (all pairs same strength = no differentiation = useless)
+        if info.get('analogy') and info['analogy'].get('strengths'):
+            strengths = list(info['analogy']['strengths'].values())
+            if strengths:
+                s_tensor = torch.tensor(strengths)
+                diversity_loss = -s_tensor.std()  # Maximize variance
+                loss = loss + 0.1 * diversity_loss
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        if step % max(analogy_steps // 10, 1) == 0:
+            vl, ppl = evaluate(model, val_data, args.block_size, args.batch_size, n_eval=30)
+            a_info = info.get('analogy', {})
+            active = a_info.get('active_pairs', 0)
+            gate = a_info.get('gate', 0)
+
+            # Top 3 strongest analogies
+            strengths = a_info.get('strengths', {})
+            top3 = sorted(strengths.items(), key=lambda x: -x[1])[:3]
+            top3_str = ', '.join(f"{k}={v:.3f}" for k, v in top3)
+
+            print(f"    Step {step:4d}/{analogy_steps}: val={vl:.4f} ppl={ppl:.2f} "
+                  f"active={active}/15 gate={gate:.4f}")
+            if top3_str:
+                print(f"      Top analogies: {top3_str}")
+
+            if vl < best_val:
+                best_val = vl
+
+    model.unfreeze_all()
+
+    # Analyze final analogy state
+    print("\n  --- Final Analogy Analysis ---")
+    model.eval()
+    with torch.no_grad():
+        x, y = get_batch(val_data, args.block_size, args.batch_size)
+        _, _, info = model(x, targets=y)
+        a_info = info.get('analogy', {})
+        strengths = a_info.get('strengths', {})
+
+        print(f"  Active pairs: {a_info.get('active_pairs', 0)}/15")
+        print(f"  Gate value: {a_info.get('gate', 0):.4f}")
+        print(f"  Analogy strengths:")
+        for pair, s in sorted(strengths.items(), key=lambda x: -x[1]):
+            bar = '█' * int(s * 40)
+            active = " ← ACTIVE" if s > model.analogy.threshold else ""
+            print(f"    {pair:15s}  {s:.3f}  {bar}{active}")
+
+
 # ==================== Main ====================
 
 def main():
@@ -1023,12 +1283,13 @@ def main():
     parser.add_argument('--steps', type=int, default=5000, help='Phase 1 training steps')
     parser.add_argument('--expert-steps', type=int, default=1000, help='Phase 2 steps per expert')
     parser.add_argument('--router-steps', type=int, default=500, help='Phase 3 router steps')
+    parser.add_argument('--analogy-steps', type=int, default=800, help='Phase 4 analogy steps')
     parser.add_argument('--batch-size', type=int, default=16, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--wd', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--eval-every', type=int, default=500, help='Eval interval')
     # Control
-    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3)')
+    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3/4)')
     parser.add_argument('--resume', type=str, default=None, help='Checkpoint to resume')
     args = parser.parse_args()
 
@@ -1083,6 +1344,10 @@ def main():
     if args.phase <= 3 and train_data is not None:
         phase3_router_finetune(model, sp, train_data, val_data, args)
 
+    # Phase 4: Cross-domain analogy training
+    if args.phase <= 4 and train_data is not None:
+        phase4_analogy_training(model, sp, train_data, val_data, args)
+
     # Final evaluation
     print("\n" + "=" * 70)
     print("  FINAL EVALUATION (all phases complete)")
@@ -1132,7 +1397,9 @@ def main():
                        if 'expert' not in n and 'router' not in n and 'bridge' not in n),
             'experts': sum(p.numel() for n, p in model.named_parameters() if 'expert' in n),
             'router': sum(p.numel() for n, p in model.named_parameters() if 'router' in n),
-            'bridge': sum(p.numel() for n, p in model.named_parameters() if 'bridge' in n),
+            'bridge': sum(p.numel() for n, p in model.named_parameters()
+                         if 'bridge' in n and 'analogy' not in n),
+            'analogy': sum(p.numel() for n, p in model.named_parameters() if 'analogy' in n),
         },
         'expert_domains': {k: v['name'] for k, v in EXPERT_DOMAINS.items()},
         'training': {
@@ -1143,6 +1410,7 @@ def main():
             'phase1_steps': args.steps,
             'phase2_expert_steps': args.expert_steps,
             'phase3_router_steps': args.router_steps,
+            'phase4_analogy_steps': args.analogy_steps,
         },
         'final_val': final_val,
         'final_ppl': final_ppl,
@@ -1164,7 +1432,7 @@ def main():
         'best_val': best_val,
         'best_ppl': best_ppl,
         'args': vars(args),
-        'phase': 3,
+        'phase': 4,
     }, CHECKPOINT_PATH)
     print(f"  >> Saved checkpoint to {CHECKPOINT_PATH}")
 
