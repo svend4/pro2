@@ -12,11 +12,13 @@
     "tokenizer": "BPE (sentencepiece)"
   },
   "params": {
-    "total": 1822797,
-    "core": 1350400,
-    "experts": 298758,
+    "total": 3024852,
+    "core": 2502634,
+    "experts": 348579,
     "router": 8902,
-    "bridge": 164737
+    "bridge": 164737,
+    "analogy": 1083551,
+    "synth": 545155
   },
   "expert_domains": {
     "MATH": "Mathematical Structures",
@@ -32,45 +34,16 @@
     "weight_decay": 0.01,
     "scheduler": "wsd",
     "phase1_steps": 5000,
-    "phase2_expert_steps": 500,
-    "phase3_router_steps": 500
+    "phase2_expert_steps": 1000,
+    "phase3_router_steps": 500,
+    "phase4_analogy_steps": 800,
+    "phase5_synth_steps": 500
   },
-  "final_val": 2.884617118835449,
-  "final_ppl": 17.89671396885549,
+  "final_val": 2.88613285779953,
+  "final_ppl": 17.923861284471624,
   "best_val": null,
   "best_ppl": null,
   "time_seconds": 0,
-  "expert_results": {
-    "MATH": {
-      "steps": 500,
-      "best_val": 3.396247756481171,
-      "train_tokens": 1800000
-    },
-    "CODE": {
-      "steps": 500,
-      "best_val": 2.865610146522522,
-      "train_tokens": 1800000
-    },
-    "HUMAN": {
-      "steps": 500,
-      "best_val": 3.450390267372131,
-      "train_tokens": 1800000
-    },
-    "SYSTEM": {
-      "steps": 500,
-      "best_val": 3.147226667404175,
-      "train_tokens": 1706653
-    },
-    "RECON": {
-      "steps": 500,
-      "best_val": 1.863604086637497,
-      "train_tokens": 1800000
-    },
-    "INFO": {
-      "steps": 500,
-      "best_val": 3.4865946173667908,
-      "train_tokens": 1800000
-    }
-  },
+  "expert_results": {},
   "history": []
 }
