@@ -166,6 +166,20 @@ def measure_hex_contribution(model):
 def train(args):
     device = torch.device(args.device)
 
+    # Предзагрузка корпуса svend4 ДО создания модели — нужен vocab_size
+    _svend4_corpus = None
+    if getattr(args, 'svend4', None):
+        try:
+            from data_utils.svend4_dataset import Svend4Corpus
+            _domains = args.svend4_domains.split(",") if getattr(args, 'svend4_domains', None) else None
+            _svend4_corpus = Svend4Corpus.from_directory(
+                args.svend4, block_size=args.block_size, domains=_domains
+            )
+            args.vocab_size = _svend4_corpus.get_vocab_size()
+        except Exception as _e:
+            print(f"Не удалось загрузить svend4 корпус ({_e}), используем synthetic")
+            args.svend4 = None
+
     # Glyph tokenizer подразумевает convergence bridge
     use_glyph = getattr(args, 'glyph_tokenizer', False)
 
@@ -269,25 +283,14 @@ def train(args):
     # Данные
     data_fn = None
 
-    if args.svend4:
-        try:
-            from data_utils.svend4_dataset import Svend4Corpus
-            domains = args.svend4_domains.split(",") if args.svend4_domains else None
-            corpus = Svend4Corpus.from_directory(
-                args.svend4, block_size=cfg.block_size, domains=domains
-            )
-            corpus.print_stats()
-            # Обновляем vocab_size из корпуса
-            cfg.vocab_size = corpus.get_vocab_size()
+    if _svend4_corpus is not None:
+        _svend4_corpus.print_stats()
 
-            def svend4_batch():
-                return corpus.get_batch(cfg.batch_size, device)
+        def svend4_batch():
+            return _svend4_corpus.get_batch(cfg.batch_size, device)
 
-            data_fn = svend4_batch
-            print(f"Using svend4 corpus: {corpus}")
-        except Exception as e:
-            print(f"Could not load svend4 corpus ({e}), falling back to synthetic data")
-            args.synthetic = True
+        data_fn = svend4_batch
+        print(f"Using svend4 corpus: {_svend4_corpus}")
 
     if not args.synthetic and data_fn is None:
         try:
