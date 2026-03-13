@@ -1,0 +1,34 @@
+{
+  "VanillaGPT": {
+    "params": 1835520,
+    "final_loss": 0.08906293660402298,
+    "convergence_auc": 0.8630898863325517,
+    "steps_per_sec": 11.981792537643997,
+    "routing_entropy": 0.0,
+    "bigram_diversity": 0.39746835443037976
+  },
+  "YiJingGPT": {
+    "params": 1824252,
+    "final_loss": 0.09229394048452377,
+    "convergence_auc": 0.9672609188407659,
+    "steps_per_sec": 9.865940741199918,
+    "routing_entropy": 0.0,
+    "bigram_diversity": 0.4177215189873418
+  },
+  "NautilusMoME": {
+    "params": 5135508,
+    "final_loss": 0.9967253804206848,
+    "convergence_auc": 1.8750569748878478,
+    "steps_per_sec": 5.7335593989744185,
+    "routing_entropy": 1.7867565989494323,
+    "bigram_diversity": 0.39746835443037976
+  },
+  "NautilusYiJing": {
+    "params": 2638167,
+    "final_loss": 0.09059786796569824,
+    "convergence_auc": 0.8074796802923083,
+    "steps_per_sec": 6.107600846160307,
+    "routing_entropy": 1.1538086891174317,
+    "bigram_diversity": 0.4151898734177215
+  }
+}
