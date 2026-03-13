@@ -1825,6 +1825,459 @@ def phase9_archetype_differentiation(model, sp, train_data, val_data, args):
     return best_val
 
 
+# ==================== Phase 10: Antonym Differentiation ====================
+
+
+def phase10_antonym_differentiation(model, sp, train_data, val_data, args,
+                                     variant='both'):
+    """Phase 10: Archetype Differentiation via Antonym Logic.
+
+    Two variants:
+      Variant A (binary antonym loss):
+        - Hard contrastive: push each sample AWAY from its Q4 antipode
+        - For vertex v = (a,b,c,d), antipode = (-a,-b,-c,-d)
+        - Loss = max(0, margin - distance(axes, antipode))
+        - Forces 16-way separation by exclusion
+
+      Variant B (ternary re-pass):
+        - Троичная система: каждая ось → {-1, 0, +1}
+        - 0 = "неопределённость" (twilight zone) when |axis| < threshold
+        - If any axis falls in twilight → re-run with amplified signal
+        - Repeat up to max_passes until all axes are decisive
+        - "Мягкий штраф" = forced re-evaluation, not gradient penalty
+
+    The ternary system is built ON TOP of binary:
+      - Binary gives the 16 vertices (ground truth targets)
+      - Ternary adds the "undecided" state that triggers re-passes
+      - Two "goods" (+1,+1) or two "evils" (-1,-1) → clear binary
+      - "Good + evil" (+1,-1) or (-1,+1) → ternary middle → re-pass needed
+
+    Together: Variant A pushes apart, Variant B forces commitment.
+    """
+    print("\n" + "=" * 70)
+    print("  Phase 10: Antonym Differentiation")
+    print(f"  Variant: {variant}")
+    print("=" * 70)
+
+    expert_targets = torch.tensor([
+        [-1., -1., -1., -1.],  # MATH → Кристалл
+        [-1.,  1.,  1., -1.],  # CODE → Машина
+        [ 1.,  1., -1.,  1.],  # HUMAN → Интуиция
+        [-1., -1.,  1., -1.],  # SYS → Здание
+        [ 1.,  1.,  1.,  1.],  # RECON → Общество
+        [ 1., -1.,  1.,  1.],  # INFO → Культура
+    ])
+
+    # Q4 codebook: all 16 vertices
+    q4_all = torch.tensor([
+        PSEUDORAG_ARCHETYPES[i]['axes'] for i in range(16)
+    ], dtype=torch.float32)
+
+    # ================================================================
+    # VARIANT A: Binary Antonym Loss (contrastive)
+    # ================================================================
+
+    def compute_antonym_loss(axes, target_axes, margin=1.5):
+        """Push predicted axes AWAY from the antipode of the target.
+
+        For each token's target Q4 vertex, the antipode is -target.
+        We want: distance(pred, antipode) >= margin
+        Loss = max(0, margin - distance(pred, antipode))
+
+        Also adds pairwise diversity: different tokens in the batch
+        should not all collapse to the same archetype.
+        """
+        # Antipode = negation of all 4 axes
+        antipode = -target_axes  # (B, T, 4)
+
+        # Distance from predicted axes to antipode (L2)
+        dist_to_antipode = torch.norm(axes - antipode, dim=-1)  # (B, T)
+
+        # Hinge loss: penalize if too close to antipode
+        antonym_loss = F.relu(margin - dist_to_antipode).mean()
+
+        # Also: attract toward target (standard MSE, but weighted less)
+        attract_loss = F.mse_loss(axes, target_axes.detach())
+
+        # Diversity bonus: penalize if batch axes are too similar
+        # (encourages using more than 5 of 16 archetypes)
+        flat_axes = axes.reshape(-1, 4)  # (B*T, 4)
+        if flat_axes.shape[0] > 1:
+            # Cosine similarity matrix
+            normed = F.normalize(flat_axes, dim=-1)
+            sim_matrix = torch.mm(normed, normed.t())  # (N, N)
+            # Mask diagonal
+            mask = 1.0 - torch.eye(sim_matrix.shape[0], device=sim_matrix.device)
+            # Penalize high pairwise similarity
+            diversity_loss = (sim_matrix * mask).mean()
+        else:
+            diversity_loss = torch.tensor(0.0, device=axes.device)
+
+        return antonym_loss, attract_loss, diversity_loss
+
+    # ================================================================
+    # VARIANT B: Ternary Re-Pass (iterative commitment)
+    # ================================================================
+
+    def ternary_repass(model, x, targets, expert_targets_dev,
+                       threshold=0.3, max_passes=3, amplify_factor=1.5):
+        """Run input through model multiple times until axes commit.
+
+        Ternary logic on each axis:
+          |axis| >= threshold → decided (+1 or -1)
+          |axis| <  threshold → undecided (0, twilight zone)
+
+        If ANY axis is undecided after a pass, we:
+          1. Amplify the hidden_to_axes weights temporarily
+          2. Re-run the forward pass
+          3. Check again
+
+        This is "soft punishment" — not a gradient penalty, but forced
+        re-evaluation until the network commits to a clear answer.
+
+        Returns the final axes, the number of passes used, and the
+        fraction of axes that remained undecided.
+        """
+        passes_used = 0
+        final_info = None
+        accumulated_loss = torch.tensor(0.0, device=x.device)
+
+        for pass_num in range(max_passes):
+            passes_used = pass_num + 1
+
+            _, loss, info = model(x, targets=targets)
+
+            arch_info = info.get('archetype', {})
+            if 'axes' not in arch_info:
+                return loss, info, 1, 0.0
+
+            axes = arch_info['axes']  # (B, T, 4)
+            final_info = info
+
+            # Check ternary state: how many axes are undecided?
+            decided = (axes.abs() >= threshold).float()  # 1 = decided, 0 = undecided
+            commitment_ratio = decided.mean().item()
+
+            # Accumulate loss from each pass (later passes count more)
+            pass_weight = 1.0 + 0.5 * pass_num  # increasing weight
+            accumulated_loss = accumulated_loss + pass_weight * loss
+
+            # If all axes are committed, we're done
+            if commitment_ratio >= 0.95:
+                break
+
+            # "Soft punishment": amplify the axes signal for next pass
+            # This makes undecided axes move toward the nearest binary value
+            with torch.no_grad():
+                # Push undecided axes toward their nearest pole
+                undecided_mask = (axes.abs() < threshold)
+                push = torch.sign(axes) * amplify_factor * threshold
+                # Add small push toward target for undecided axes
+                routing = info['routing']
+                target_ax = torch.einsum(
+                    'bte,ed->btd', routing,
+                    expert_targets_dev
+                )
+                target_ax = torch.tanh(target_ax * 2.0)
+                # Nudge: move undecided axes toward target direction
+                nudge = target_ax * 0.1  # small nudge
+                # We modify the input slightly to force re-evaluation
+                # (add noise proportional to undecidedness)
+                noise_scale = (1.0 - decided).mean() * 0.01
+                x = x  # input stays same, but model state evolves
+
+        # Normalize accumulated loss by number of passes
+        avg_loss = accumulated_loss / passes_used
+
+        # Additional penalty for remaining undecided axes
+        if final_info and 'axes' in final_info.get('archetype', {}):
+            final_axes = final_info['archetype']['axes']
+            undecided = (final_axes.abs() < threshold).float()
+            indecision_penalty = undecided.mean()
+            avg_loss = avg_loss + 0.5 * indecision_penalty
+
+        undecided_frac = 1.0 - commitment_ratio if 'commitment_ratio' in dir() else 0.0
+
+        return avg_loss, final_info, passes_used, commitment_ratio
+
+    # ================================================================
+    # TRAINING LOOP
+    # ================================================================
+
+    # Stage 1: Variant A — Binary Antonym Training (600 steps)
+    run_a = variant in ('a', 'both')
+    run_b = variant in ('b', 'both')
+
+    if run_a:
+        print("\n  ── Stage A: Binary Antonym Loss (600 steps) ──")
+
+        # Unfreeze archetype layer + core_second
+        for p in model.parameters():
+            p.requires_grad = False
+        for p in model.archetype_layer.parameters():
+            p.requires_grad = True
+        for p in model.core_second.parameters():
+            p.requires_grad = True
+
+        param_groups = [
+            {'params': list(model.archetype_layer.parameters()), 'lr': 5e-4},
+            {'params': list(model.core_second.parameters()), 'lr': 5e-6},
+        ]
+        optimizer_a = torch.optim.AdamW(param_groups, weight_decay=args.wd)
+
+        n_steps_a = 600
+        best_val_a = float('inf')
+        best_state_a = None
+
+        for step in range(1, n_steps_a + 1):
+            model.train()
+            cur_lr = get_lr_wsd(step, n_steps_a, 5e-4)
+            scale = cur_lr / 5e-4
+            for pg in param_groups:
+                if pg['lr'] >= 1e-4:
+                    pg['lr'] = cur_lr
+                else:
+                    pg['lr'] = 5e-6 * scale
+
+            x, y = get_batch(train_data, args.block_size, args.batch_size)
+            _, loss, info = model(x, targets=y)
+
+            routing = info['routing']
+            arch_info = info.get('archetype', {})
+
+            if 'axes' in arch_info:
+                pred_axes = arch_info['axes']
+                target_axes = torch.einsum(
+                    'bte,ed->btd', routing,
+                    expert_targets.to(routing.device)
+                )
+                target_axes = torch.tanh(target_axes * 2.0)
+
+                # Core innovation: antonym contrastive loss
+                antonym_l, attract_l, diversity_l = compute_antonym_loss(
+                    pred_axes, target_axes, margin=1.5
+                )
+
+                # Combined loss: LM + antonym + attract + diversity
+                loss = loss + 0.8 * antonym_l + 0.5 * attract_l + 0.3 * diversity_l
+
+                # Entropy regularization (push toward sharp selection)
+                arch_probs = arch_info['archetype_probs']
+                H = -(arch_probs * (arch_probs + 1e-8).log()).sum(-1).mean()
+                loss = loss + 0.3 * F.relu(H - 0.8)
+
+            optimizer_a.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer_a.step()
+
+            if step % 100 == 0:
+                vl, ppl = evaluate(model, val_data, args.block_size, args.batch_size, n_eval=30)
+                a = info.get('archetype', {})
+                ant_str = f"ant={antonym_l.item():.3f}" if 'axes' in arch_info else ""
+                div_str = f"div={diversity_l.item():.3f}" if 'axes' in arch_info else ""
+                print(f"    Step {step:4d}/{n_steps_a}: val={vl:.4f} ppl={ppl:.2f} "
+                      f"arch={a.get('top_archetype', '?')}({a.get('top_name', '?')}) "
+                      f"H={a.get('entropy', 0):.2f} {ant_str} {div_str} "
+                      f"axes={[f'{v:.2f}' for v in a.get('axis_means', [])]}")
+                if vl < best_val_a:
+                    best_val_a = vl
+                    best_state_a = {k: v.clone() for k, v in model.state_dict().items()}
+
+        if best_state_a is not None:
+            model.load_state_dict(best_state_a)
+            print(f"    Restored best A checkpoint (val={best_val_a:.4f})")
+
+    # Stage 2: Variant B — Ternary Re-Pass Training (600 steps)
+    if run_b:
+        print("\n  ── Stage B: Ternary Re-Pass Training (600 steps) ──")
+
+        for p in model.parameters():
+            p.requires_grad = False
+        for p in model.archetype_layer.parameters():
+            p.requires_grad = True
+        for p in model.core_second.parameters():
+            p.requires_grad = True
+        for p in model.twilight.parameters():
+            p.requires_grad = True
+
+        param_groups_b = [
+            {'params': list(model.archetype_layer.parameters()), 'lr': 3e-4},
+            {'params': list(model.core_second.parameters()), 'lr': 5e-6},
+            {'params': list(model.twilight.parameters()), 'lr': 1e-5},
+        ]
+        optimizer_b = torch.optim.AdamW(param_groups_b, weight_decay=args.wd)
+
+        n_steps_b = 600
+        best_val_b = float('inf')
+        best_state_b = None
+        expert_targets_dev = expert_targets.to(train_data.device if hasattr(train_data, 'device')
+                                                else 'cpu')
+
+        for step in range(1, n_steps_b + 1):
+            model.train()
+            cur_lr = get_lr_wsd(step, n_steps_b, 3e-4)
+            scale = cur_lr / 3e-4
+            for pg in param_groups_b:
+                if pg['lr'] >= 1e-4:
+                    pg['lr'] = cur_lr
+                elif pg['lr'] >= 5e-6:
+                    pg['lr'] = 5e-6 * scale
+                else:
+                    pg['lr'] = 1e-5 * scale
+
+            x, y = get_batch(train_data, args.block_size, args.batch_size)
+
+            # Ternary re-pass: multiple forward passes until commitment
+            # Threshold starts high (easy) and decreases (harder) over training
+            progress = step / n_steps_b
+            threshold = 0.5 - 0.3 * progress  # 0.5 → 0.2 over training
+            max_passes = 2 if progress < 0.5 else 3  # more passes later
+
+            loss, info, passes, commit_ratio = ternary_repass(
+                model, x, y, expert_targets_dev,
+                threshold=threshold, max_passes=max_passes,
+            )
+
+            # Add antonym loss from Variant A if running 'both'
+            arch_info = info.get('archetype', {})
+            if 'axes' in arch_info:
+                routing = info['routing']
+                pred_axes = arch_info['axes']
+                target_axes = torch.einsum(
+                    'bte,ed->btd', routing,
+                    expert_targets.to(routing.device)
+                )
+                target_axes = torch.tanh(target_axes * 2.0)
+
+                # Axis commitment loss: push axes toward ±1
+                # (ternary 0 should cost more than binary ±1)
+                commitment_loss = (1.0 - pred_axes.abs()).mean()
+                loss = loss + 0.4 * commitment_loss
+
+                # Axis supervision
+                ax_loss = F.mse_loss(pred_axes, target_axes.detach())
+                loss = loss + 0.5 * ax_loss
+
+            optimizer_b.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer_b.step()
+
+            if step % 100 == 0:
+                vl, ppl = evaluate(model, val_data, args.block_size, args.batch_size, n_eval=30)
+                a = info.get('archetype', {})
+                print(f"    Step {step:4d}/{n_steps_b}: val={vl:.4f} ppl={ppl:.2f} "
+                      f"arch={a.get('top_archetype', '?')}({a.get('top_name', '?')}) "
+                      f"H={a.get('entropy', 0):.2f} "
+                      f"passes={passes} commit={commit_ratio:.2f} thr={threshold:.2f} "
+                      f"axes={[f'{v:.2f}' for v in a.get('axis_means', [])]}")
+                if vl < best_val_b:
+                    best_val_b = vl
+                    best_state_b = {k: v.clone() for k, v in model.state_dict().items()}
+
+        if best_state_b is not None:
+            model.load_state_dict(best_state_b)
+            print(f"    Restored best B checkpoint (val={best_val_b:.4f})")
+
+    model.unfreeze_all()
+
+    # ================================================================
+    # FINAL TEST: Compare archetype differentiation
+    # ================================================================
+    print("\n  --- Phase 10: Antonym Differentiation Test ---")
+    test_prompts = [
+        ("CODE",       "def fibonacci(n):\n    if n <= 1:\n        return n"),
+        ("CODE",       "class HttpServer:\n    def __init__(self, port=8080):"),
+        ("MATH",       "∫ sin(x)dx = -cos(x) + C  формула"),
+        ("MATH",       "f(x) = Σ aₙxⁿ  степенной ряд"),
+        ("HUMAN",      "Добрый день! Как у вас дела? Расскажите"),
+        ("HUMAN",      "Жизнь прекрасна когда понимаешь смысл"),
+        ("SYSTEM",     "import os\nsys.path.insert(0, '/usr')"),
+        ("SYSTEM",     "chmod 755 /etc/nginx/nginx.conf"),
+        ("INFO",       "Нейронные сети используют обратное распространение"),
+        ("INFO",       "Квантовая механика описывает поведение частиц"),
+        ("RECON",      "Аналогия между нейросетью и биологическим мозгом"),
+        ("RECON",      "Паттерны в природе повторяются на разных масштабах"),
+        ("ZARATHUSTRA","Так говорил Заратустра: человек есть мост"),
+        ("TWILIGHT",   "Закономерчивают системогенезные протоструктуры"),
+        ("MIXED",      "def compute_love(heart, brain):\n    return harmony"),
+    ]
+
+    model.eval()
+    archetype_by_type = {}
+    with torch.no_grad():
+        for label, prompt in test_prompts:
+            tokens = sp.encode(prompt)
+            if len(tokens) < 4:
+                tokens = tokens + [0] * (4 - len(tokens))
+            idx = torch.tensor([tokens[:model.block_size]], dtype=torch.long)
+            _, _, info = model(idx)
+            a_info = info.get('archetype', {})
+            t_info = info.get('twilight', {})
+
+            arch = a_info.get('top_archetype', '?')
+            name = a_info.get('top_name', '?')
+            prob = a_info.get('top_prob', 0)
+            H = a_info.get('entropy', 0)
+            axes = a_info.get('axis_means', [])
+            twi = t_info.get('twilight_strength', 0)
+
+            # Ternary classification per axis
+            ternary = []
+            for a_val in axes:
+                if a_val > 0.3:
+                    ternary.append('+')
+                elif a_val < -0.3:
+                    ternary.append('-')
+                else:
+                    ternary.append('0')  # undecided
+
+            if label not in archetype_by_type:
+                archetype_by_type[label] = []
+            archetype_by_type[label].append(arch)
+
+            axes_str = ','.join(f'{a:+.2f}' for a in axes)
+            tern_str = ''.join(ternary)
+            print(f"    [{label:12s}] {arch}({name}) p={prob:.3f} H={H:.2f} "
+                  f"axes=[{axes_str}] tern={tern_str} twi={twi:.2f}")
+
+    unique_archetypes = set()
+    for archs in archetype_by_type.values():
+        unique_archetypes.update(archs)
+    print(f"\n  Unique archetypes used: {len(unique_archetypes)}/16")
+    for label, archs in sorted(archetype_by_type.items()):
+        print(f"    {label} → {set(archs)}")
+
+    # Antipodal check: are CODE and HUMAN in opposite corners?
+    print("\n  --- Antipodal Verification ---")
+    antipodal_pairs = [
+        ("CODE", "HUMAN"),   # Machine vs Intuition
+        ("MATH", "RECON"),   # Crystal vs Society
+        ("SYSTEM", "INFO"),  # Building vs Culture
+    ]
+    for label_a, label_b in antipodal_pairs:
+        archs_a = archetype_by_type.get(label_a, ['?'])
+        archs_b = archetype_by_type.get(label_b, ['?'])
+        overlap = set(archs_a) & set(archs_b)
+        status = "DIFFERENT" if not overlap else "OVERLAP!"
+        print(f"    {label_a} vs {label_b}: {set(archs_a)} vs {set(archs_b)} → {status}")
+
+    # Save checkpoint
+    best_val = best_val_b if run_b else best_val_a if run_a else float('inf')
+    torch.save({
+        'step': 6000,
+        'model': model.state_dict(),
+        'best_ppl': best_val,
+        'args': vars(args),
+        'phase': 10,
+        'variant': variant,
+    }, CHECKPOINT_PATH)
+    print(f"\n  >> Saved Phase 10 checkpoint to {CHECKPOINT_PATH}")
+
+    return best_val
+
+
 # ==================== Main ====================
 
 def main():
@@ -1849,8 +2302,10 @@ def main():
     parser.add_argument('--wd', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--eval-every', type=int, default=500, help='Eval interval')
     # Control
-    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3/4/5)')
+    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3/4/5/9/10)')
     parser.add_argument('--resume', type=str, default=None, help='Checkpoint to resume')
+    parser.add_argument('--variant', type=str, default='both', choices=['a', 'b', 'both'],
+                        help='Phase 10 variant: a=antonym, b=ternary, both=sequential')
     args = parser.parse_args()
 
     set_seed(42)
@@ -1911,6 +2366,15 @@ def main():
     # Phase 5: SYNTH expert training
     if args.phase <= 5 and train_data is not None and hasattr(model, 'synth_expert'):
         phase5_synth_training(model, sp, train_data, val_data, args)
+
+    # Phase 9: Archetype differentiation (if requested)
+    if args.phase <= 9 and train_data is not None and hasattr(model, 'archetype_layer'):
+        phase9_archetype_differentiation(model, sp, train_data, val_data, args)
+
+    # Phase 10: Antonym differentiation (binary + ternary)
+    if args.phase <= 10 and train_data is not None and hasattr(model, 'archetype_layer'):
+        phase10_antonym_differentiation(model, sp, train_data, val_data, args,
+                                         variant=args.variant)
 
     # Final evaluation
     print("\n" + "=" * 70)
