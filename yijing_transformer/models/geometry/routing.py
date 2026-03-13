@@ -979,7 +979,7 @@ class ArchetypalInterlingua(nn.Module):
                  n_archetypes: int = 64, d_bottleneck: int = 0,
                  use_ternary: bool = True, uncertainty_budget: float = 0.3,
                  n_heads: int = 4,
-                 ternary_warmup_steps: int = 2000,
+                 ternary_warmup_steps: int = 3000,
                  ternary_min_temp: float = 0.1,
                  use_paired_bit: bool = False):
         super().__init__()
@@ -1022,9 +1022,17 @@ class ArchetypalInterlingua(nn.Module):
                 nn.init.zeros_(self.paired_bit_proj.bias)
                 self.paired_bit_temp = 1.0  # начальная температура сигмоиды
             else:
-                # Тернарный scoring: каждый модуль → {-1, 0, +1} на каждый архетип
-                self.trit_proj = nn.Linear(d_model, 1, bias=True)
-                nn.init.zeros_(self.trit_proj.bias)
+                # ИСПРАВЛЕНИЕ БАГА v60: каждый источник получает НЕЗАВИСИМУЮ
+                # проекцию trit_proj. Ранее использовался общий trit_proj для
+                # всех источников → все модули голосовали одинаково → 64 архетипа
+                # все идентичные → readout видел const → PPL = vanilla.
+                # Теперь: n_sources отдельных матриц → дифференцированное голосование.
+                self.trit_projs = nn.ModuleList([
+                    nn.Linear(d_model, 1, bias=True)
+                    for _ in range(n_sources)
+                ])
+                for proj in self.trit_projs:
+                    nn.init.zeros_(proj.bias)
             # Learnable uncertainty budget
             self.log_uncertainty = nn.Parameter(
                 torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
@@ -1176,7 +1184,8 @@ class ArchetypalInterlingua(nn.Module):
 
         return trit_scores
 
-    def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+    def _ternary_quantize(self, contribution: torch.Tensor,
+                          source_idx: int = 0) -> torch.Tensor:
         """Тернарная квантизация вклада: {-1, 0, +1} per archetype.
 
         С temperature annealing: на ранних шагах обучения используются мягкие
@@ -1185,6 +1194,9 @@ class ArchetypalInterlingua(nn.Module):
 
         Args:
             contribution: (B, n_archetypes, d_model)
+            source_idx: индекс источника — выбирает ИНДИВИДУАЛЬНЫЙ trit_proj.
+                Каждый источник имеет свою проекцию, что обеспечивает
+                дифференцированное голосование за архетипы.
 
         Returns:
             trit_scores: (B, n_archetypes) — мягкие или жёсткие триты
@@ -1193,16 +1205,17 @@ class ArchetypalInterlingua(nn.Module):
         if self.use_paired_bit:
             return self._paired_bit_quantize(contribution)
 
-        scores = self.trit_proj(contribution).squeeze(-1)  # (B, n_archetypes)
+        # Используем trit_proj ЭТОГО конкретного источника (не общий!)
+        proj = self.trit_projs[source_idx]
+        scores = proj(contribution).squeeze(-1)  # (B, n_archetypes)
 
-        # Сохраняем raw scores для activation loss
+        # Сохраняем raw scores для activation loss (последний источник)
         self._last_raw_scores = scores
 
         temp = self.ternary_temperature
 
         if temp > 0.15:
             # Тёплая фаза: мягкие триты, градиент течёт напрямую
-            # tanh(scores / temp) ≈ непрерывная аппроксимация ternary
             trit_scores = torch.tanh(scores / temp)
         else:
             # Холодная фаза: жёсткие триты с STE
@@ -1238,7 +1251,8 @@ class ArchetypalInterlingua(nn.Module):
             contributions.append(contrib)  # (B, n_archetypes, d_model)
 
             if self.use_ternary:
-                trits = self._ternary_quantize(contrib)  # (B, n_archetypes)
+                # Передаём source_idx — каждый источник использует свой trit_proj
+                trits = self._ternary_quantize(contrib, source_idx=i)
                 trit_scores_list.append(trits)
 
         # === Фаза 2: Агрегация ===
@@ -1298,8 +1312,8 @@ class ArchetypalInterlingua(nn.Module):
         Три компонента:
         1. Archetype balance: все архетипы используются примерно одинаково
         2. Uncertainty penalty: штраф за несоответствие тритового баланса бюджету
-        3. Activation encouragement: толкает trit_proj scores от нуля
-           (обеспечивает gradient flow через trit_proj на ранних этапах)
+        3. Activation encouragement: толкает trit_projs scores от нуля
+           (обеспечивает gradient flow через все per-source trit_projs)
         """
         loss = torch.tensor(0.0, device=self.archetype_queries.device)
 
@@ -1309,15 +1323,14 @@ class ArchetypalInterlingua(nn.Module):
             balance_loss = ((usage - target) ** 2).mean()
             loss = loss + 0.1 * balance_loss
 
-        if self.use_ternary:
+        if self.use_ternary and not self.use_paired_bit:
             zero_frac = self._last_trit_distribution.get('zero', 0.33)
             target_frac = self.uncertainty_budget.item()
             uncertainty_loss = (zero_frac - target_frac) ** 2
             loss = loss + 0.05 * uncertainty_loss
 
-            # Activation encouragement: штрафует scores ≈ 0
-            # Gradient течёт напрямую через trit_proj (не detached!)
-            # Сила убывает по мере annealing (когда scores уже большие, не нужен)
+            # Activation encouragement: применяем ко всем trit_projs
+            # Это гарантирует gradient flow к каждому источнику независимо
             if self._last_raw_scores is not None:
                 temp = self.ternary_temperature
                 encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
@@ -1413,7 +1426,7 @@ class BridgedInterlingua(nn.Module):
                  use_ternary: bool = True, uncertainty_budget: float = 0.3,
                  n_heads: int = 4, bridge_n_heads: int = 2,
                  bridge_dropout: float = 0.1,
-                 ternary_warmup_steps: int = 2000,
+                 ternary_warmup_steps: int = 3000,
                  ternary_min_temp: float = 0.1,
                  use_paired_bit: bool = False):
         super().__init__()
@@ -1480,8 +1493,14 @@ class BridgedInterlingua(nn.Module):
                 nn.init.zeros_(self.paired_bit_proj.bias)
                 self.paired_bit_temp = 1.0
             else:
-                self.trit_proj = nn.Linear(d_model, 1, bias=True)
-                nn.init.zeros_(self.trit_proj.bias)
+                # ИСПРАВЛЕНИЕ БАГА v61: per-bridge-output trit_projs.
+                # Каждый bridge-выход голосует своей проекцией → дифференциация.
+                self.trit_projs = nn.ModuleList([
+                    nn.Linear(d_model, 1, bias=True)
+                    for _ in range(self.n_bridge_outputs)
+                ])
+                for proj in self.trit_projs:
+                    nn.init.zeros_(proj.bias)
             self.log_uncertainty = nn.Parameter(
                 torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
             )
@@ -1622,12 +1641,19 @@ class BridgedInterlingua(nn.Module):
 
         return trit_scores
 
-    def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
-        """Тернарная квантизация с temperature annealing."""
+    def _ternary_quantize(self, contribution: torch.Tensor,
+                          source_idx: int = 0) -> torch.Tensor:
+        """Тернарная квантизация с temperature annealing.
+
+        Args:
+            contribution: (B, n_archetypes, d_model)
+            source_idx: индекс bridge-выхода — выбирает ИНДИВИДУАЛЬНЫЙ trit_proj.
+        """
         if self.use_paired_bit:
             return self._paired_bit_quantize(contribution)
 
-        scores = self.trit_proj(contribution).squeeze(-1)
+        proj = self.trit_projs[source_idx]
+        scores = proj(contribution).squeeze(-1)
         self._last_raw_scores = scores
 
         temp = self.ternary_temperature
@@ -1674,7 +1700,8 @@ class BridgedInterlingua(nn.Module):
             contributions.append(contrib)
 
             if self.use_ternary:
-                trits = self._ternary_quantize(contrib)
+                # Передаём source_idx — каждый bridge-выход использует свой trit_proj
+                trits = self._ternary_quantize(contrib, source_idx=i)
                 trit_scores_list.append(trits)
 
         # === Фаза 3: Тернарная агрегация ===

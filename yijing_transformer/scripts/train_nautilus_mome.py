@@ -68,36 +68,71 @@ import sentencepiece as spm
 
 # ==================== Configuration ====================
 
+# ─── Гексаграммный слой экспертов ──────────────────────────────────────────
+# Каждый эксперт связан с одной из 64 гексаграмм И-Цзин (Q6 = {-1,+1}^6).
+# Гексаграмма — не декорация, а геометрический якорь в пространстве архетипов.
+# Номер гексаграммы → индекс вершины Q6 → 6-битный вектор (yin/yang линии).
+#
+#  乾 (Цянь)  — Небо, Творчество  →  структура, формализм, математика
+#  巽 (Сюнь)  — Ветер, Проникновение → алгоритм, реализация, код
+#  坤 (Кунь)  — Земля, Восприятие  →  гуманитарное, поведение, человек
+#  坎 (Кань)  — Вода, Поток       →  инфраструктура, система, опасность
+#  離 (Ли)    — Огонь, Ясность    →  распознавание, паттерн, ReConstructor
+#  兌 (Дуй)  — Озеро, Обмен      →  информация, каталоги, поиск
+#  革 (Гэ)   — Смена, Синтез     →  кросс-доменный, протоязык, SYNTH
+HEXAGRAM_MAP = {
+    'MATH':   {'gua': '乾', 'pinyin': 'Qián',  'num': 1,  'meaning': 'Творчество — Небо',
+               'q6_idx': 63, 'nature': 'Структура, формализм, чистая мысль'},
+    'CODE':   {'gua': '巽', 'pinyin': 'Xùn',   'num': 57, 'meaning': 'Проникновение — Ветер',
+               'q6_idx': 6,  'nature': 'Алгоритм, реализация, мягкое движение'},
+    'HUMAN':  {'gua': '坤', 'pinyin': 'Kūn',   'num': 2,  'meaning': 'Восприятие — Земля',
+               'q6_idx': 0,  'nature': 'Гуманитарное, поведение, принятие'},
+    'SYSTEM': {'gua': '坎', 'pinyin': 'Kǎn',   'num': 29, 'meaning': 'Поток — Вода',
+               'q6_idx': 18, 'nature': 'Инфраструктура, опасность, непрерывность'},
+    'RECON':  {'gua': '離', 'pinyin': 'Lí',    'num': 30, 'meaning': 'Ясность — Огонь',
+               'q6_idx': 45, 'nature': 'Распознавание, паттерн, реконструкция'},
+    'INFO':   {'gua': '兌', 'pinyin': 'Duì',   'num': 58, 'meaning': 'Обмен — Озеро',
+               'q6_idx': 27, 'nature': 'Информация, каталоги, коммуникация'},
+    'SYNTH':  {'gua': '革', 'pinyin': 'Gé',    'num': 49, 'meaning': 'Смена — Революция',
+               'q6_idx': 36, 'nature': 'Кросс-доменный синтез, протоязык, сумерки'},
+}
+
 EXPERT_DOMAINS = {
     'MATH': {
         'name': 'Mathematical Structures',
         'repos': ['meta', 'data2', 'pro2'],
         'description': 'Math, formulas, algorithms, hexagrams, transformers',
+        'hexagram': HEXAGRAM_MAP['MATH'],
     },
     'CODE': {
         'name': 'Software Engineering',
         'repos': ['daten3', 'daten2', 'data20'],
         'description': 'TypeScript, Flask, React, full-stack, KMS',
+        'hexagram': HEXAGRAM_MAP['CODE'],
     },
     'HUMAN': {
         'name': 'Humanitarian Knowledge',
         'repos': ['info3', 'daten22', 'info'],
         'description': 'Ethics, archetypes, MBTI, behavioral formulas',
+        'hexagram': HEXAGRAM_MAP['HUMAN'],
     },
     'SYSTEM': {
         'name': 'System Architecture',
         'repos': ['info7', 'daten', 'universal-file-storage-mcp'],
         'description': 'AI orchestration, DevOps, MCP, containers',
+        'hexagram': HEXAGRAM_MAP['SYSTEM'],
     },
     'RECON': {
         'name': 'Pattern Recognition',
         'repos': ['meta2'],
         'description': 'Document reconstruction, OCR, puzzle algorithms',
+        'hexagram': HEXAGRAM_MAP['RECON'],
     },
     'INFO': {
         'name': 'Information Management',
         'repos': ['info1', 'info4', 'info5', 'daten11', 'data30', 'in4'],
         'description': 'Knowledge bases, catalogs, search, automation',
+        'hexagram': HEXAGRAM_MAP['INFO'],
     },
 }
 
@@ -427,6 +462,94 @@ class ExpertRouter(nn.Module):
         aux_loss = F.mse_loss(avg_routing, target) * self.n_experts
 
         return expert_weights, aux_loss
+
+
+# ─── SOLAN Geometric Auxiliary Signal ─────────────────────────────────────────
+# Интеграция SOLAN-76 алфавита: каждый BPE-токен получает геометрический сигнал
+# из гиперкуба Q6 на основе символьного состава токена.
+#
+# Принцип:
+#   BPE-токен "def" → символы ['d','e','f'] → SOLAN-векторы → XOR/среднее → 6-битный вектор
+#   Этот вектор = координата в гиперкубе {-1,+1}^6 = 1 из 64 гексаграмм И-Цзин
+#
+# Зачем:
+#   - Токены с похожей геометрической структурой (малое расстояние Хэмминга)
+#     автоматически получают близкие сигналы → дополнительный геометрический инициализм
+#   - Twilight language: при кросс-доменном смешении символы из разных доменов
+#     дают разные Q6-координаты → новые слова имеют «геометрический отпечаток»
+#   - Связывает NautilusMoME с оригинальным YiJingGPT через общую Q6-структуру
+
+# Импортируем SOLAN карту напрямую (без создания GlyphTokenizer объекта)
+def _build_solan_table_for_bpe(sp_model_path: str, vocab_size: int = 4096) -> 'torch.Tensor':
+    """Строит SOLAN Q6-таблицу для BPE-словаря.
+
+    Для каждого из vocab_size BPE-токенов вычисляет 6-битный вектор {-1,+1}^6
+    на основе символов, из которых состоит этот токен.
+
+    Алгоритм:
+      1. Декодируем BPE-токен в строку символов
+      2. Для каждого символа берём его SOLAN-вектор из _SOLAN_MAP
+      3. Применяем XOR (знаковое перемножение) по всем символам токена
+         → токен "ab" = SOLAN("a") ⊗ SOLAN("b) в Z₂^6
+
+    Args:
+        sp_model_path: путь к файлу SentencePiece модели
+        vocab_size: размер словаря
+
+    Returns:
+        Tensor (vocab_size, 6), значения {-1.0, +1.0}
+        Возвращает None если sentencepiece недоступен.
+    """
+    try:
+        import sentencepiece as spm
+    except ImportError:
+        return None
+
+    # Импортируем SOLAN-маппинг
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
+        solan_available = True
+    except ImportError:
+        solan_available = False
+
+    try:
+        sp = spm.SentencePieceProcessor()
+        sp.Load(sp_model_path)
+    except Exception:
+        return None
+
+    table = torch.ones(vocab_size, 6)  # начинаем с (+1, +1, +1, +1, +1, +1)
+
+    for token_id in range(min(vocab_size, sp.GetPieceSize())):
+        token_str = sp.IdToPiece(token_id)
+        # Убираем специальный символ '▁' (пробел в начале слова у SentencePiece)
+        token_str = token_str.replace('▁', ' ').replace('<unk>', '?').replace('<s>', ' ').replace('</s>', '.')
+
+        if not token_str:
+            continue
+
+        # XOR (знаковое перемножение) SOLAN-векторов всех символов токена
+        # В Z₂^6: (-1)^(sum of bits) = XOR по всем символам
+        combined = [1, 1, 1, 1, 1, 1]  # нейтральный элемент (identity для XOR в {-1,+1})
+        for ch in token_str:
+            if solan_available:
+                bits = _SOLAN_MAP.get(ch)
+                if bits is None:
+                    code = hash(ch) % 64
+                    bits = tuple((code >> (5 - b)) & 1 for b in range(6))
+                vertex = _bits_to_vertex(bits)  # {-1, +1}^6
+            else:
+                # Fallback: простое хэширование символа
+                code = ord(ch) % 64
+                vertex = tuple(2 * ((code >> (5 - b)) & 1) - 1 for b in range(6))
+
+            # XOR = поэлементное умножение в {-1,+1}
+            combined = [combined[i] * vertex[i] for i in range(6)]
+
+        table[token_id] = torch.tensor(combined, dtype=torch.float32)
+
+    return table
 
 
 class NautilusBridge(nn.Module):
@@ -875,17 +998,43 @@ class NautilusMoME(nn.Module):
           → LM Head → Output
     """
 
+    # Имена экспертов с гексаграммными якорями (И-Цзин → Q6 {-1,+1}^6)
+    # 乾-Цянь  巽-Сюнь  坤-Кунь  坎-Кань  離-Ли  兌-Дуй  革-Гэ
     EXPERT_NAMES = ['MATH', 'CODE', 'HUMAN', 'SYSTEM', 'RECON', 'INFO', 'SYNTH']
 
     def __init__(self, vocab_size=4096, d_model=192, n_layers=4, n_heads=6,
                  block_size=512, d_expert=128, n_experts=6, top_k=2,
-                 dropout=0.05, enable_synth=True):
+                 dropout=0.05, enable_synth=True,
+                 solan_table: 'Optional[torch.Tensor]' = None):
         super().__init__()
         self.d_model = d_model
         self.block_size = block_size
         self.n_experts = n_experts
         self.vocab_size = vocab_size
         self.enable_synth = enable_synth
+
+        # ─── SOLAN Geometric Auxiliary Embedding ──────────────────────────
+        # Если передана solan_table (vocab_size, 6) — каждый токен получает
+        # дополнительный 6-битный сигнал из гиперкуба Q6 = И-Цзин.
+        # Это восстанавливает связь NautilusMoME с оригинальной идеей YiJingGPT.
+        #
+        # В forward(): tok_embedding += glyph_proj(solan_table[token_ids])
+        # Это мягкая интеграция: если solan_table=None, поведение не меняется.
+        self.use_solan = (solan_table is not None)
+        if self.use_solan:
+            # Регистрируем как буфер (не обучаемый): геометрическая константа Q6
+            self.register_buffer('solan_table', solan_table.float())
+            # Обучаемая проекция Q6 {-1,+1}^6 → d_model
+            # Инициализируем малыми весами: сначала геометрия почти не влияет,
+            # но gradient flow постепенно нарастает
+            self.glyph_proj = nn.Linear(6, d_model, bias=False)
+            nn.init.normal_(self.glyph_proj.weight, std=0.01)
+            # Gate: контролирует силу SOLAN-сигнала (начинаем с ~0.05)
+            self.solan_gate = nn.Parameter(torch.tensor(-3.0))  # sigmoid(-3) ≈ 0.047
+        else:
+            self.solan_table = None
+            self.glyph_proj = None
+            self.solan_gate = None
 
         # Embeddings
         self.tok_emb = nn.Embedding(vocab_size, d_model)
@@ -950,6 +1099,21 @@ class NautilusMoME(nn.Module):
         # Weight tying (embedding ↔ head)
         self.head.weight = self.tok_emb.weight
 
+        # ─── Гексаграммные якоря экспертов (И-Цзин → Q6) ──────────────────
+        # Каждый эксперт получает уникальный 6-битный вектор из гиперкуба Q6.
+        # Регистрируем как буфер (не обучаемый) — геометрическая константа.
+        # Цель: после обучения измерять корреляцию expert_output.mean() с якорем —
+        # подтверждает ли специализация геометрическую структуру И-Цзин.
+        expert_q6_indices = [
+            HEXAGRAM_MAP.get(name, {}).get('q6_idx', i * 9)
+            for i, name in enumerate(self.EXPERT_NAMES[:n_experts])
+        ]
+        q6_anchors = torch.zeros(n_experts, 6)
+        for j, idx in enumerate(expert_q6_indices):
+            for b in range(6):
+                q6_anchors[j, b] = float(2 * ((idx >> (5 - b)) & 1) - 1)
+        self.register_buffer('expert_q6_anchors', q6_anchors)
+
         # Proper initialization for stable start
         self._init_weights()
         self._step = 0
@@ -1009,7 +1173,23 @@ class NautilusMoME(nn.Module):
         B, T = idx.shape
         tok = self.tok_emb(idx)
         pos = self.pos_emb(torch.arange(T, device=idx.device))
-        x = self.drop(tok + pos)
+
+        # ─── SOLAN Q6 Geometric Auxiliary Signal ──────────────────────────
+        # Каждый BPE-токен несёт геометрический отпечаток из гиперкуба И-Цзин.
+        # solan_table[token_id] → 6-битный вектор {-1,+1}^6 → проекция в d_model
+        # Это связывает каждое слово с одной из 64 гексаграмм (или их комбинацией).
+        # Сила сигнала контролируется gate (начинается малым, растёт при обучении).
+        if self.use_solan and self.solan_table is not None:
+            # Безопасный lookup: clamp индексы к [0, vocab_size-1]
+            safe_idx = idx.clamp(0, self.solan_table.shape[0] - 1)
+            glyph_vecs = self.solan_table[safe_idx]  # (B, T, 6)
+            glyph_proj = self.glyph_proj(glyph_vecs)  # (B, T, d_model)
+            gate = torch.sigmoid(self.solan_gate)
+            x = tok + pos + gate * glyph_proj
+        else:
+            x = tok + pos
+
+        x = self.drop(x)
 
         # Core first half
         for layer in self.core_first:
