@@ -36,12 +36,14 @@ Training phases:
   Phase 2: Fine-tune individual experts on domain-specific data
   Phase 3: Fine-tune Router on mixed data
   Phase 4: Train CrossDomainAnalogy (inter-expert analogies)
+  Phase 5: Train SYNTH expert (cross-domain synthesizer)
 
 Usage:
   python train_nautilus_mome.py                    # Full pipeline
   python train_nautilus_mome.py --phase 1          # Skip tokenizer training
   python train_nautilus_mome.py --phase 2          # Expert fine-tuning only
   python train_nautilus_mome.py --phase 4          # Analogy training only
+  python train_nautilus_mome.py --phase 5          # SYNTH training only
   python train_nautilus_mome.py --resume ckpt.pt   # Resume training
 """
 
@@ -650,16 +652,17 @@ class NautilusMoME(nn.Module):
           → LM Head → Output
     """
 
-    EXPERT_NAMES = ['MATH', 'CODE', 'HUMAN', 'SYSTEM', 'RECON', 'INFO']
+    EXPERT_NAMES = ['MATH', 'CODE', 'HUMAN', 'SYSTEM', 'RECON', 'INFO', 'SYNTH']
 
     def __init__(self, vocab_size=4096, d_model=192, n_layers=4, n_heads=6,
                  block_size=512, d_expert=128, n_experts=6, top_k=2,
-                 dropout=0.05):
+                 dropout=0.05, enable_synth=True):
         super().__init__()
         self.d_model = d_model
         self.block_size = block_size
         self.n_experts = n_experts
         self.vocab_size = vocab_size
+        self.enable_synth = enable_synth
 
         # Embeddings
         self.tok_emb = nn.Embedding(vocab_size, d_model)
@@ -693,6 +696,22 @@ class NautilusMoME(nn.Module):
             d_model, n_experts,
             expert_names=self.EXPERT_NAMES[:n_experts],
         )
+
+        # SYNTH expert: 7th "surrealist" expert that activates when
+        # routing entropy is high (= router is uncertain = cross-domain input).
+        # Like surrealist poetry mixes domains, SYNTH synthesizes insights
+        # from multiple experts when no single expert dominates.
+        if enable_synth:
+            self.synth_expert = MicroExpert(d_model, d_expert, dropout)
+            # Entropy threshold: activate SYNTH when routing is uncertain
+            # With top-2 routing, max entropy = log(2) ≈ 0.693
+            # Median entropy ~0.45-0.55; use 0.55 to activate on
+            # above-average uncertainty (= genuine cross-domain content)
+            self.synth_entropy_threshold = nn.Parameter(
+                torch.tensor(0.55), requires_grad=False
+            )
+            # Learnable mixing weight for SYNTH contribution
+            self.synth_gate = nn.Parameter(torch.tensor(0.05))
 
         # Output
         self.ln_f = nn.LayerNorm(d_model)
@@ -790,6 +809,35 @@ class NautilusMoME(nn.Module):
             self.EXPERT_NAMES[:self.n_experts],
         )
 
+        # SYNTH expert: activate when routing entropy is high
+        synth_info = {}
+        if self.enable_synth:
+            # Compute per-token routing entropy
+            # High entropy = router uncertain = cross-domain token
+            ew_safe = expert_weights.clamp(min=1e-8)
+            token_entropy = -(ew_safe * ew_safe.log()).sum(dim=-1)  # (B, T)
+            avg_entropy = token_entropy.mean().item()
+
+            # SYNTH activates proportionally to how much entropy exceeds threshold
+            synth_activation = (token_entropy - self.synth_entropy_threshold).clamp(min=0)
+            synth_activation = synth_activation / (synth_activation.max() + 1e-8)  # normalize
+
+            if synth_activation.sum() > 0:
+                synth_out = self.synth_expert(x)  # (B, T, D)
+                synth_contribution = synth_out * synth_activation.unsqueeze(-1) * self.synth_gate
+                x = x + synth_contribution
+                synth_info = {
+                    'avg_entropy': avg_entropy,
+                    'activation_frac': (synth_activation > 0).float().mean().item(),
+                    'gate': self.synth_gate.item(),
+                }
+            else:
+                synth_info = {
+                    'avg_entropy': avg_entropy,
+                    'activation_frac': 0.0,
+                    'gate': self.synth_gate.item(),
+                }
+
         # Core second half
         for layer in self.core_second:
             x = layer(x)
@@ -807,6 +855,7 @@ class NautilusMoME(nn.Module):
             'aux_loss': aux_loss.item(),
             'routing': expert_weights.detach(),
             'analogy': analogy_info,
+            'synth': synth_info,
         }
 
 
@@ -1266,6 +1315,60 @@ def phase4_analogy_training(model, sp, train_data, val_data, args):
             print(f"    {pair:15s}  {s:.3f}  {bar}{active}")
 
 
+def phase5_synth_training(model, sp, train_data, val_data, args):
+    """Phase 5: Train SYNTH expert on mixed data.
+
+    The SYNTH expert is the "surrealist" — it activates when routing
+    entropy is high (router uncertain = cross-domain input).
+    Training only the SYNTH expert + its gate while everything else frozen.
+    """
+    print("\n" + "=" * 70)
+    print("  Phase 5: SYNTH Expert Training (Cross-Domain Synthesizer)")
+    print("=" * 70)
+
+    # Freeze everything except synth
+    for p in model.parameters():
+        p.requires_grad = False
+    for p in model.synth_expert.parameters():
+        p.requires_grad = True
+    model.synth_gate.requires_grad = True
+
+    synth_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  Trainable params: {synth_params:,} (SYNTH expert + gate)")
+
+    optimizer = torch.optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=args.lr * 0.3, weight_decay=args.wd,
+    )
+
+    synth_steps = args.synth_steps
+    print(f"  Training SYNTH for {synth_steps} steps...")
+
+    for step in range(1, synth_steps + 1):
+        model.train()
+        cur_lr = get_lr_wsd(step, synth_steps, args.lr * 0.3)
+        for pg in optimizer.param_groups:
+            pg['lr'] = cur_lr
+
+        x, y = get_batch(train_data, args.block_size, args.batch_size)
+        _, loss, info = model(x, targets=y)
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        if step % max(synth_steps // 10, 1) == 0:
+            vl, ppl = evaluate(model, val_data, args.block_size, args.batch_size, n_eval=30)
+            s_info = info.get('synth', {})
+            print(f"    Step {step:4d}/{synth_steps}: val={vl:.4f} ppl={ppl:.2f} "
+                  f"entropy={s_info.get('avg_entropy', 0):.4f} "
+                  f"synth_act={s_info.get('activation_frac', 0)*100:.1f}% "
+                  f"gate={s_info.get('gate', 0):.4f}")
+
+    model.unfreeze_all()
+
+
 # ==================== Main ====================
 
 def main():
@@ -1284,12 +1387,13 @@ def main():
     parser.add_argument('--expert-steps', type=int, default=1000, help='Phase 2 steps per expert')
     parser.add_argument('--router-steps', type=int, default=500, help='Phase 3 router steps')
     parser.add_argument('--analogy-steps', type=int, default=800, help='Phase 4 analogy steps')
+    parser.add_argument('--synth-steps', type=int, default=500, help='Phase 5 SYNTH expert steps')
     parser.add_argument('--batch-size', type=int, default=16, help='Batch size')
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--wd', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--eval-every', type=int, default=500, help='Eval interval')
     # Control
-    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3/4)')
+    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3/4/5)')
     parser.add_argument('--resume', type=str, default=None, help='Checkpoint to resume')
     args = parser.parse_args()
 
@@ -1348,6 +1452,10 @@ def main():
     if args.phase <= 4 and train_data is not None:
         phase4_analogy_training(model, sp, train_data, val_data, args)
 
+    # Phase 5: SYNTH expert training
+    if args.phase <= 5 and train_data is not None and hasattr(model, 'synth_expert'):
+        phase5_synth_training(model, sp, train_data, val_data, args)
+
     # Final evaluation
     print("\n" + "=" * 70)
     print("  FINAL EVALUATION (all phases complete)")
@@ -1400,6 +1508,7 @@ def main():
             'bridge': sum(p.numel() for n, p in model.named_parameters()
                          if 'bridge' in n and 'analogy' not in n),
             'analogy': sum(p.numel() for n, p in model.named_parameters() if 'analogy' in n),
+            'synth': sum(p.numel() for n, p in model.named_parameters() if 'synth' in n),
         },
         'expert_domains': {k: v['name'] for k, v in EXPERT_DOMAINS.items()},
         'training': {
@@ -1411,6 +1520,7 @@ def main():
             'phase2_expert_steps': args.expert_steps,
             'phase3_router_steps': args.router_steps,
             'phase4_analogy_steps': args.analogy_steps,
+            'phase5_synth_steps': args.synth_steps,
         },
         'final_val': final_val,
         'final_ppl': final_ppl,
@@ -1432,7 +1542,7 @@ def main():
         'best_val': best_val,
         'best_ppl': best_ppl,
         'args': vars(args),
-        'phase': 4,
+        'phase': 5,
     }, CHECKPOINT_PATH)
     print(f"  >> Saved checkpoint to {CHECKPOINT_PATH}")
 
