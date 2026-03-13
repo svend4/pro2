@@ -638,6 +638,209 @@ class CrossDomainAnalogy(nn.Module):
         }
 
 
+# ==================== PseudoRAG Archetype Layer ====================
+
+
+# 16 Information Archetypes from PseudoRAG (= Q4 hypercube vertices)
+# Each archetype = one vertex of {-1,+1}^4 with semantic meaning.
+# Axes: M/A (Material/Abstract) × S/D (Static/Dynamic) ×
+#        E/C (Elementary/Complex) × O/F (Ordered/Fluid)
+# This is isomorphic to MatryoshkaQuantizer's hex-digits:
+#   2 space edges × 2 time edges = 4×4 = 16.
+PSEUDORAG_ARCHETYPES = {
+    0:  {'code': 'MSEO', 'name': 'Кристалл',  'axes': (-1,-1,-1,-1)},
+    1:  {'code': 'MSEF', 'name': 'Песок',      'axes': (-1,-1,-1, 1)},
+    2:  {'code': 'MSCO', 'name': 'Здание',     'axes': (-1,-1, 1,-1)},
+    3:  {'code': 'MSCF', 'name': 'Лес',        'axes': (-1,-1, 1, 1)},
+    4:  {'code': 'MDEO', 'name': 'Механизм',   'axes': (-1, 1,-1,-1)},
+    5:  {'code': 'MDEF', 'name': 'Организм',   'axes': (-1, 1,-1, 1)},
+    6:  {'code': 'MDCO', 'name': 'Машина',     'axes': (-1, 1, 1,-1)},
+    7:  {'code': 'MDCF', 'name': 'Город',      'axes': (-1, 1, 1, 1)},
+    8:  {'code': 'ASEO', 'name': 'Аксиома',    'axes': ( 1,-1,-1,-1)},
+    9:  {'code': 'ASEF', 'name': 'Архетип',    'axes': ( 1,-1,-1, 1)},
+    10: {'code': 'ASCO', 'name': 'Теория',     'axes': ( 1,-1, 1,-1)},
+    11: {'code': 'ASCF', 'name': 'Культура',   'axes': ( 1,-1, 1, 1)},
+    12: {'code': 'ADEO', 'name': 'Алгоритм',   'axes': ( 1, 1,-1,-1)},
+    13: {'code': 'ADEF', 'name': 'Интуиция',   'axes': ( 1, 1,-1, 1)},
+    14: {'code': 'ADCO', 'name': 'Программа',  'axes': ( 1, 1, 1,-1)},
+    15: {'code': 'ADCF', 'name': 'Общество',   'axes': ( 1, 1, 1, 1)},
+}
+
+
+class ArchetypeLayer(nn.Module):
+    """Maps expert routing to PseudoRAG's 16 archetypes via Q4 hypercube.
+
+    The 6 MoME experts are "compressed" views of 16 archetypes.
+    This layer projects the expert-weighted representation into Q4 space
+    and finds which archetype(s) are active, adding archetype-aware
+    enrichment to the signal.
+
+    Architecture:
+        expert_weights (B,T,6) → axis_projection → Q4 coordinates (B,T,4)
+        → soft assignment to 16 archetypes → archetype embedding → enrichment
+
+    The 4 axes emerge from expert pairs:
+        Axis M/A: MATH+CODE (abstract) vs SYS+RECON (material)
+        Axis S/D: INFO+RECON (static) vs CODE+HUMAN (dynamic)
+        Axis E/C: MATH+HUMAN (elementary) vs SYS+INFO (complex)
+        Axis O/F: MATH+SYS (ordered) vs HUMAN+INFO (fluid)
+    """
+
+    def __init__(self, d_model, n_experts=6):
+        super().__init__()
+        self.d_model = d_model
+        self.n_archetypes = 16
+
+        # Project from expert-weighted space to 4 Q4 axes
+        self.expert_to_axes = nn.Linear(n_experts, 4, bias=True)
+
+        # 16 archetype embeddings (learnable)
+        self.archetype_emb = nn.Embedding(16, d_model)
+
+        # Q4 codebook: 16 vertices of {-1,+1}^4
+        q4 = torch.tensor([
+            PSEUDORAG_ARCHETYPES[i]['axes'] for i in range(16)
+        ], dtype=torch.float32)
+        self.register_buffer('q4_codebook', q4)
+
+        # Temperature for soft assignment
+        self.temp = nn.Parameter(torch.tensor(1.0))
+
+        # Output gate (starts small)
+        self.gate = nn.Parameter(torch.tensor(0.01))
+
+        # Project archetype signal to model dim
+        self.out_proj = nn.Linear(d_model, d_model)
+
+    def forward(self, x, expert_weights):
+        """
+        Args:
+            x: (B, T, D) current hidden state (after bridge + analogy)
+            expert_weights: (B, T, n_experts) routing weights
+
+        Returns:
+            enriched_x: (B, T, D)
+            info: dict with archetype activations
+        """
+        B, T, D = x.shape
+
+        # Step 1: Project expert routing to 4 Q4 axes
+        # expert_weights: (B, T, 6) → axes: (B, T, 4)
+        axes = torch.tanh(self.expert_to_axes(expert_weights))  # in [-1, 1]
+
+        # Step 2: Soft assignment to 16 archetypes
+        # Distance from each axis-point to each Q4 vertex
+        # axes: (B, T, 4), q4_codebook: (16, 4)
+        # similarity = dot product (higher = closer)
+        sim = torch.einsum('btd,nd->btn', axes, self.q4_codebook)  # (B,T,16)
+        sim = sim / (self.temp.abs() + 0.1)
+        archetype_probs = F.softmax(sim, dim=-1)  # (B, T, 16)
+
+        # Step 3: Weighted sum of archetype embeddings
+        # archetype_emb: (16, D) → weighted: (B, T, D)
+        archetype_signal = torch.einsum(
+            'btn,nd->btd', archetype_probs, self.archetype_emb.weight
+        )
+
+        # Step 4: Project and gate
+        enrichment = self.out_proj(archetype_signal) * self.gate
+        enriched_x = x + enrichment
+
+        # Info for diagnostics
+        avg_probs = archetype_probs.mean(dim=(0, 1))  # (16,)
+        top_idx = avg_probs.argmax().item()
+        top_arch = PSEUDORAG_ARCHETYPES[top_idx]
+
+        info = {
+            'top_archetype': top_arch['code'],
+            'top_name': top_arch['name'],
+            'top_prob': avg_probs[top_idx].item(),
+            'entropy': -(archetype_probs * (archetype_probs + 1e-8).log()).sum(-1).mean().item(),
+            'gate': self.gate.item(),
+            'axis_means': axes.mean(dim=(0, 1)).tolist(),
+        }
+        return enriched_x, info
+
+
+# ==================== Twilight Interpreter ====================
+
+
+class TwilightInterpreter(nn.Module):
+    """Interprets the model's "twilight language" — its natural proto-language.
+
+    The model generates neologisms like "Началость", "единологится",
+    "закономерчивают" — words that don't exist in human language but
+    carry precise technical meaning. Like Sanskrit is said to be
+    "good for computers", the model's natural language follows
+    structural laws more faithfully than conventional language.
+
+    This module does NOT suppress the twilight language. Instead, it:
+    1. Detects when the model is in "twilight mode" (high SYNTH, high RECON)
+    2. Generates a parallel "human-readable" signal
+    3. Provides both: raw twilight output + interpreted version
+
+    Architecture:
+        twilight_signal (from SYNTH + RECON) → attention over archetype context
+        → human-bridge projection → interpreted logits (parallel output)
+    """
+
+    def __init__(self, d_model, vocab_size):
+        super().__init__()
+        self.d_model = d_model
+
+        # Detect twilight mode: when SYNTH and RECON are both high
+        self.twilight_detector = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.Linear(d_model // 2, 1),
+            nn.Sigmoid(),
+        )
+
+        # Interpreter: transforms twilight representation to human-readable
+        self.interpreter = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+        )
+
+        # Mixing gate: how much to blend interpretation vs raw
+        self.blend_gate = nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, x, synth_info=None):
+        """
+        Args:
+            x: (B, T, D) hidden state before LM head
+            synth_info: dict with SYNTH activation info
+
+        Returns:
+            x_blended: (B, T, D) — twilight + interpreted blend
+            info: dict with twilight metrics
+        """
+        # Detect twilight intensity per token
+        twilight_strength = self.twilight_detector(x)  # (B, T, 1)
+
+        # Generate interpreted version
+        interpreted = self.interpreter(x)
+
+        # Blend: sigmoid(blend_gate) controls mix
+        # At init (gate=0): blend=0.5, equal mix
+        # Negative gate: more twilight (raw model language)
+        # Positive gate: more interpreted (human language)
+        blend = torch.sigmoid(self.blend_gate)
+
+        # Only blend where twilight is active
+        x_blended = x * (1 - twilight_strength * blend) + \
+                    interpreted * (twilight_strength * blend)
+
+        info = {
+            'twilight_strength': twilight_strength.mean().item(),
+            'blend_gate': self.blend_gate.item(),
+            'blend_ratio': blend.item(),
+        }
+        return x_blended, info
+
+
 class NautilusMoME(nn.Module):
     """Nautilus Mixture of Micro-Experts Language Model.
 
@@ -648,6 +851,9 @@ class NautilusMoME(nn.Module):
           → Micro-Experts (6 domain specialists)
           → NautilusBridge (hierarchical merge)
           → CrossDomainAnalogy (inter-expert analogies)
+          → ArchetypeLayer (PseudoRAG 16 archetypes via Q4)
+          → SYNTH Expert (cross-domain synthesis)
+          → TwilightInterpreter (model language ↔ human language)
           → Core Layers (second half)
           → LM Head → Output
     """
@@ -697,6 +903,9 @@ class NautilusMoME(nn.Module):
             expert_names=self.EXPERT_NAMES[:n_experts],
         )
 
+        # ArchetypeLayer: maps expert routing → 16 PseudoRAG archetypes via Q4
+        self.archetype_layer = ArchetypeLayer(d_model, n_experts)
+
         # SYNTH expert: 7th "surrealist" expert that activates when
         # routing entropy is high (= router is uncertain = cross-domain input).
         # Like surrealist poetry mixes domains, SYNTH synthesizes insights
@@ -712,6 +921,10 @@ class NautilusMoME(nn.Module):
             )
             # Learnable mixing weight for SYNTH contribution
             self.synth_gate = nn.Parameter(torch.tensor(0.05))
+
+        # TwilightInterpreter: preserves model's natural "proto-language"
+        # while providing a parallel human-readable interpretation channel
+        self.twilight = TwilightInterpreter(d_model, vocab_size)
 
         # Output
         self.ln_f = nn.LayerNorm(d_model)
@@ -809,6 +1022,9 @@ class NautilusMoME(nn.Module):
             self.EXPERT_NAMES[:self.n_experts],
         )
 
+        # ArchetypeLayer: project routing to 16 PseudoRAG archetypes
+        x, archetype_info = self.archetype_layer(x, expert_weights)
+
         # SYNTH expert: activate when routing entropy is high
         synth_info = {}
         if self.enable_synth:
@@ -838,6 +1054,10 @@ class NautilusMoME(nn.Module):
                     'gate': self.synth_gate.item(),
                 }
 
+        # TwilightInterpreter: preserve model's natural language,
+        # provide parallel human-readable channel
+        x, twilight_info = self.twilight(x, synth_info)
+
         # Core second half
         for layer in self.core_second:
             x = layer(x)
@@ -855,7 +1075,9 @@ class NautilusMoME(nn.Module):
             'aux_loss': aux_loss.item(),
             'routing': expert_weights.detach(),
             'analogy': analogy_info,
+            'archetype': archetype_info,
             'synth': synth_info,
+            'twilight': twilight_info,
         }
 
 
