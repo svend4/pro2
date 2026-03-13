@@ -268,7 +268,28 @@ def train(args):
 
     # Данные
     data_fn = None
-    if not args.synthetic:
+
+    if args.svend4:
+        try:
+            from data_utils.svend4_dataset import Svend4Corpus
+            domains = args.svend4_domains.split(",") if args.svend4_domains else None
+            corpus = Svend4Corpus.from_directory(
+                args.svend4, block_size=cfg.block_size, domains=domains
+            )
+            corpus.print_stats()
+            # Обновляем vocab_size из корпуса
+            cfg.vocab_size = corpus.get_vocab_size()
+
+            def svend4_batch():
+                return corpus.get_batch(cfg.batch_size, device)
+
+            data_fn = svend4_batch
+            print(f"Using svend4 corpus: {corpus}")
+        except Exception as e:
+            print(f"Could not load svend4 corpus ({e}), falling back to synthetic data")
+            args.synthetic = True
+
+    if not args.synthetic and data_fn is None:
         try:
             from data_utils.streaming_dataset import get_batch_streaming, create_train_val_iterators
             from tokenizer.tokenizer_utils import load_tokenizer
@@ -508,6 +529,12 @@ def main():
     parser.add_argument('--warmup', type=int, default=100)
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--synthetic', action='store_true', default=False)
+    parser.add_argument('--svend4', type=str, default=None,
+                        metavar='CORPUS_DIR',
+                        help='Путь к корпусу svend4 (data/svend4_corpus). '
+                             'Запустите scripts/fetch_svend4_corpus.py для загрузки.')
+    parser.add_argument('--svend4-domains', type=str, default=None,
+                        help='Домены через запятую: ai_agents,infosystems,knowledge,algorithms')
     parser.add_argument('--wandb', action='store_true', default=False)
     parser.add_argument('--tensorboard', action='store_true', default=False)
     parser.add_argument('--run-name', type=str, default=None)
