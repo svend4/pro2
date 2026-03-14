@@ -5,3 +5,4 @@ runs/
 results/
 *.pt
 .pytest_cache/
+data/

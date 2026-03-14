@@ -325,6 +325,12 @@ class YiJingConfig:
     moe_top_k: int = 2           # сколько экспертов активировать
     n_experts: int = 8           # число экспертов (= число триграмм)
 
+    # DomainMoE: эксперты по доменам корпуса (ai_agents, infosystems, ...)
+    use_domain_moe: bool = False          # включить доменную MoE вместо SwiGLU/TrigramMoE
+    domain_moe_n_experts: int = 6        # один эксперт на домен
+    domain_moe_top_k: int = 2            # активных экспертов за forward
+    domain_supervision_weight: float = 0.1  # вес loss доменной специализации
+
     # v51 геометрия: интеграция шести источников
     codebook_order: str = 'fuxi'         # 'fuxi' (binary), 'wenwang' (traditional), 'learned'
     use_palace_attention: bool = False   # block-sparse attention по 8 дворцам (Склярова)

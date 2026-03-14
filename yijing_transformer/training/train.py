@@ -129,13 +129,18 @@ def estimate_val_loss(model, cfg, device, num_batches=20, data_fn=None):
     model.eval()
     losses = []
     for _ in range(num_batches):
+        domain_ids = None
         if data_fn:
-            xb, yb = data_fn()
+            batch = data_fn()
+            if len(batch) == 3:
+                xb, yb, domain_ids = batch
+            else:
+                xb, yb = batch
         else:
             xb, yb = generate_synthetic_batch(
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
             )
-        _, loss, _ = model(xb, yb)
+        _, loss, _ = model(xb, yb, domain_ids=domain_ids)
         losses.append(loss.item())
     model.train()
     return sum(losses) / len(losses) if losses else float('nan')
@@ -166,6 +171,20 @@ def measure_hex_contribution(model):
 def train(args):
     device = torch.device(args.device)
 
+    # Предзагрузка корпуса svend4 ДО создания модели — нужен vocab_size
+    _svend4_corpus = None
+    if getattr(args, 'svend4', None):
+        try:
+            from data_utils.svend4_dataset import Svend4Corpus
+            _domains = args.svend4_domains.split(",") if getattr(args, 'svend4_domains', None) else None
+            _svend4_corpus = Svend4Corpus.from_directory(
+                args.svend4, block_size=args.block_size, domains=_domains
+            )
+            args.vocab_size = _svend4_corpus.get_vocab_size()
+        except Exception as _e:
+            print(f"Не удалось загрузить svend4 корпус ({_e}), используем synthetic")
+            args.svend4 = None
+
     # Glyph tokenizer подразумевает convergence bridge
     use_glyph = getattr(args, 'glyph_tokenizer', False)
 
@@ -182,6 +201,10 @@ def train(args):
         use_swiglu=args.swiglu,
         use_bian_gua=args.bian_gua,
         use_hex_moe=args.moe,
+        use_domain_moe=getattr(args, 'domain_moe', False),
+        domain_moe_n_experts=getattr(args, 'domain_moe_experts', 6),
+        domain_moe_top_k=getattr(args, 'domain_moe_top_k', 2),
+        domain_supervision_weight=getattr(args, 'domain_supervision_weight', 0.1),
         adaptive_temp=args.adaptive_temp,
         use_wandb=args.wandb,
         use_tensorboard=args.tensorboard,
@@ -261,14 +284,53 @@ def train(args):
     start_step = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        ckpt_vocab = ckpt['model_state_dict']['tok_emb.weight'].shape[0]
+        cur_vocab = cfg.vocab_size
+        if ckpt_vocab != cur_vocab:
+            # Расширяем/обрезаем embedding до нового vocab_size
+            import torch.nn as nn
+            old_emb = ckpt['model_state_dict']['tok_emb.weight']   # (ckpt_vocab, d)
+            new_emb = model.tok_emb.weight.data.clone()              # (cur_vocab, d)
+            copy_rows = min(ckpt_vocab, cur_vocab)
+            new_emb[:copy_rows] = old_emb[:copy_rows]
+            ckpt['model_state_dict']['tok_emb.weight'] = new_emb
+            # Аналогично для lm_head / head (разные имена в разных версиях)
+            for head_key in ('lm_head.weight', 'head.weight'):
+                if head_key in ckpt['model_state_dict']:
+                    old_head = ckpt['model_state_dict'][head_key]
+                    head_mod = model
+                    for part in head_key.split('.')[:-1]:
+                        head_mod = getattr(head_mod, part)
+                    new_head = head_mod.weight.data.clone()
+                    new_head[:copy_rows] = old_head[:copy_rows]
+                    ckpt['model_state_dict'][head_key] = new_head
+            print(f"Vocab extended: {ckpt_vocab} → {cur_vocab} "
+                  f"({cur_vocab - ckpt_vocab:+d} новых токенов)")
         model.load_state_dict(ckpt['model_state_dict'])
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        if ckpt_vocab == cur_vocab:
+            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        else:
+            print("Optimizer state сброшен (vocab изменился, начинаем с нуля)")
         start_step = ckpt['step']
         print(f"Resumed from step {start_step}")
 
     # Данные
     data_fn = None
-    if not args.synthetic:
+
+    if _svend4_corpus is not None:
+        _svend4_corpus.print_stats()
+
+        _use_domain_moe = getattr(cfg, 'use_domain_moe', False)
+
+        def svend4_batch():
+            if _use_domain_moe and hasattr(_svend4_corpus, 'get_batch_with_domain'):
+                return _svend4_corpus.get_batch_with_domain(cfg.batch_size, device)
+            return _svend4_corpus.get_batch(cfg.batch_size, device) + (None,)
+
+        data_fn = svend4_batch
+        print(f"Using svend4 corpus: {_svend4_corpus}")
+
+    if not args.synthetic and data_fn is None:
         try:
             from data_utils.streaming_dataset import get_batch_streaming, create_train_val_iterators
             from tokenizer.tokenizer_utils import load_tokenizer
@@ -314,8 +376,13 @@ def train(args):
         for pg in optimizer.param_groups:
             pg['lr'] = lr
 
+        domain_ids_batch = None
         if data_fn:
-            xb, yb = data_fn()
+            batch = data_fn()
+            if len(batch) == 3:
+                xb, yb, domain_ids_batch = batch
+            else:
+                xb, yb = batch
         else:
             xb, yb = generate_synthetic_batch(
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
@@ -329,7 +396,7 @@ def train(args):
             model.nautilus.set_step(step)
 
         with autocast('cuda', enabled=use_amp, dtype=amp_dtype):
-            logits, loss, _ = model(xb, yb)
+            logits, loss, _ = model(xb, yb, domain_ids=domain_ids_batch)
             # Bridge: модификаторы loss (Z-Loss, Entropy Reg, etc.)
             loss = bridge.before_backward(logits, yb, loss)
             loss = loss / cfg.grad_accum_steps
@@ -502,12 +569,26 @@ def main():
     parser.add_argument('--bian-gua', action='store_true', default=True)
     parser.add_argument('--no-bian-gua', dest='bian_gua', action='store_false')
     parser.add_argument('--moe', action='store_true', default=False)
+    parser.add_argument('--domain-moe', action='store_true', default=False,
+                        help='DomainMoE: эксперты специализируются по доменам корпуса')
+    parser.add_argument('--domain-moe-experts', type=int, default=6,
+                        help='Число экспертов DomainMoE (по умолчанию 6 = число доменов)')
+    parser.add_argument('--domain-moe-top-k', type=int, default=2,
+                        help='Число активных экспертов за forward')
+    parser.add_argument('--domain-supervision-weight', type=float, default=0.1,
+                        help='Вес loss доменной специализации')
     parser.add_argument('--adaptive-temp', action='store_true', default=True)
     parser.add_argument('--steps', type=int, default=500)
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--warmup', type=int, default=100)
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--synthetic', action='store_true', default=False)
+    parser.add_argument('--svend4', type=str, default=None,
+                        metavar='CORPUS_DIR',
+                        help='Путь к корпусу svend4 (data/svend4_corpus). '
+                             'Запустите scripts/fetch_svend4_corpus.py для загрузки.')
+    parser.add_argument('--svend4-domains', type=str, default=None,
+                        help='Домены через запятую: ai_agents,infosystems,knowledge,algorithms')
     parser.add_argument('--wandb', action='store_true', default=False)
     parser.add_argument('--tensorboard', action='store_true', default=False)
     parser.add_argument('--run-name', type=str, default=None)
