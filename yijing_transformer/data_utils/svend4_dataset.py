@@ -202,6 +202,24 @@ class Svend4Corpus:
         y = torch.stack([self.data[i + 1:i + self.block_size + 1] for i in ix]).to(device)
         return x, y
 
+    def get_batch_with_domain(self, batch_size: int, device: str = "cpu"):
+        """Возвращает батч (x, y, domain_ids) где domain_ids — индекс домена каждого сэмпла."""
+        n = self.n_tokens - self.block_size - 1
+        if n <= 0:
+            raise ValueError(f"Корпус слишком мал для block_size={self.block_size}")
+        ix = torch.randint(0, n, (batch_size,))
+        x = torch.stack([self.data[i:i + self.block_size] for i in ix]).to(device)
+        y = torch.stack([self.data[i + 1:i + self.block_size + 1] for i in ix]).to(device)
+
+        # Определяем домен для каждого сэмпла по позиции в корпусе
+        domain_ids = torch.zeros(batch_size, dtype=torch.long, device=device)
+        for sample_idx, pos in enumerate(ix.tolist()):
+            for dom_idx, (start, end, _name) in enumerate(self.domain_map):
+                if start <= pos < end:
+                    domain_ids[sample_idx] = dom_idx
+                    break
+        return x, y, domain_ids
+
     def get_domain_batch(
         self,
         domain: str,

@@ -27,6 +27,7 @@ from .geometry import (
     ALiBi,
     SwiGLU,
     TrigramMoE,
+    DomainMoE,
     GatedPathSelector,
     GeometricAttention,
     GeometricFFN,
@@ -575,9 +576,19 @@ class YiJingTransformerLayer(nn.Module):
 
         # FFN или MoE
         self.use_moe = cfg.use_hex_moe
+        self.use_domain_moe = getattr(cfg, 'use_domain_moe', False)
         self.ln_ffn = nn.LayerNorm(cfg.d_model)
 
-        if cfg.use_hex_moe:
+        if self.use_domain_moe:
+            self.ffn = DomainMoE(
+                d_model=cfg.d_model,
+                n_experts=getattr(cfg, 'domain_moe_n_experts', 6),
+                top_k=getattr(cfg, 'domain_moe_top_k', 2),
+                ffn_hidden=cfg.ffn_hidden,
+                dropout=cfg.dropout,
+                domain_supervision_weight=getattr(cfg, 'domain_supervision_weight', 0.1),
+            )
+        elif cfg.use_hex_moe:
             self.ffn = TrigramMoE(
                 d_model=cfg.d_model,
                 n_experts=cfg.n_experts,
@@ -595,7 +606,7 @@ class YiJingTransformerLayer(nn.Module):
                 nn.Dropout(cfg.dropout),
             )
 
-    def forward(self, x, kv_cache=None):
+    def forward(self, x, kv_cache=None, domain_ids=None):
         B, T, C = x.shape
 
         # 1. Attention (standard or v51 module)
@@ -741,7 +752,11 @@ class YiJingTransformerLayer(nn.Module):
 
         # 5. FFN или MoE
         h_ffn = self.ln_ffn(x)
-        if self.use_moe:
+        if self.use_domain_moe:
+            ffn_out, aux_loss = self.ffn(h_ffn, domain_ids=domain_ids)
+            x = x + ffn_out
+            self._aux_loss = aux_loss
+        elif self.use_moe:
             ffn_out, aux_loss = self.ffn(h_ffn)
             x = x + ffn_out
             self._aux_loss = aux_loss
@@ -791,7 +806,7 @@ class YiJingTransformer(nn.Module):
         else:
             self.mod_routers = None
 
-    def forward(self, x, kv_cache=None):
+    def forward(self, x, kv_cache=None, domain_ids=None):
         new_kv_cache = []
         for i, layer in enumerate(self.layers):
             layer_cache = kv_cache[i] if kv_cache is not None else None
@@ -811,7 +826,7 @@ class YiJingTransformer(nn.Module):
                 x_selected = x[batch_idx, top_idx_sorted]  # (B, k, D)
 
                 # Прогоняем через слой (без KV-cache при MoD)
-                out_selected, new_kv = layer(x_selected, kv_cache=None)
+                out_selected, new_kv = layer(x_selected, kv_cache=None, domain_ids=domain_ids)
 
                 # Записываем обратно (residual для пропущенных токенов = identity)
                 x_out = x.clone()
@@ -827,7 +842,7 @@ class YiJingTransformer(nn.Module):
                         layer, x, layer_cache, use_reentrant=False
                     )
                 else:
-                    x, new_kv = layer(x, kv_cache=layer_cache)
+                    x, new_kv = layer(x, kv_cache=layer_cache, domain_ids=domain_ids)
                 new_kv_cache.append(new_kv)
         return self.final_norm(x), new_kv_cache
 
@@ -1014,7 +1029,7 @@ class YiJingGPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.trunc_normal_(module.weight, std=0.02)
 
-    def forward(self, idx, targets=None, kv_cache=None, glyph_vertices=None):
+    def forward(self, idx, targets=None, kv_cache=None, glyph_vertices=None, domain_ids=None):
         b, t = idx.size()
         x = self.tok_emb(idx)
 
@@ -1068,7 +1083,7 @@ class YiJingGPT(nn.Module):
         if self.use_nautilus:
             x, nautilus_info = self.nautilus(x)
 
-        hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
+        hidden, new_kv_cache = self.core(x, kv_cache=kv_cache, domain_ids=domain_ids)
         logits = self.head(hidden)
 
         loss = None

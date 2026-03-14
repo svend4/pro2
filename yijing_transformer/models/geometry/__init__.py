@@ -129,6 +129,7 @@ from .routing import (
 from .ffn import (
     SwiGLU,
     TrigramMoE,
+    DomainMoE,
     GeometricFFN,
     MultiScaleHypercubeLayer,
 )

@@ -22,6 +22,86 @@ class SwiGLU(nn.Module):
         return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
 
 
+class DomainMoE(nn.Module):
+    """
+    Mixture of Experts с доменной специализацией.
+
+    Каждый эксперт соответствует домену корпуса (ai_agents, infosystems, ...).
+    Маршрутизация — по представлению (top-k softmax).
+    Во время обучения добавляется domain_supervision_loss: эксперт домена D
+    поощряется активироваться для токенов из домена D.
+    """
+    DOMAINS = ["ai_agents", "infosystems", "knowledge", "algorithms", "data2", "meta"]
+
+    def __init__(self, d_model: int, n_experts: int = 6, top_k: int = 2,
+                 ffn_hidden: int = None, dropout: float = 0.0,
+                 domain_supervision_weight: float = 0.1):
+        super().__init__()
+        self.n_experts = n_experts
+        self.top_k = min(top_k, n_experts)
+        self.domain_supervision_weight = domain_supervision_weight
+
+        if ffn_hidden is None:
+            ffn_hidden = 4 * d_model
+
+        self.router = nn.Linear(d_model, n_experts, bias=False)
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(d_model, ffn_hidden, bias=False),
+                nn.GELU(),
+                nn.Linear(ffn_hidden, d_model, bias=False),
+                nn.Dropout(dropout),
+            )
+            for _ in range(n_experts)
+        ])
+        self.aux_loss_coeff = 0.01
+
+    def forward(self, x, domain_ids=None):
+        """
+        Args:
+            x          : (B, T, D)
+            domain_ids : (B,) — индекс домена каждого сэмпла, или None
+        Returns:
+            output : (B, T, D)
+            aux_loss : скаляр
+        """
+        B, T, D = x.shape
+        x_flat = x.view(-1, D)  # (B*T, D)
+
+        router_logits = self.router(x_flat)          # (B*T, n_experts)
+        router_probs = F.softmax(router_logits, dim=-1)
+
+        top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
+        top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
+
+        output = torch.zeros_like(x_flat)
+        for k in range(self.top_k):
+            expert_indices = top_k_indices[:, k]
+            expert_weights = top_k_probs[:, k]
+            for e in range(self.n_experts):
+                mask = (expert_indices == e)
+                if mask.any():
+                    output[mask] += expert_weights[mask].unsqueeze(-1) * self.experts[e](x_flat[mask])
+
+        # Балансировочный aux loss (эксперты загружены равномерно)
+        tokens_per_expert = router_probs.mean(dim=0)
+        uniform = torch.ones_like(tokens_per_expert) / self.n_experts
+        aux_loss = self.aux_loss_coeff * F.mse_loss(tokens_per_expert, uniform)
+
+        # Domain supervision loss: эксперт e должен активироваться для домена e
+        if domain_ids is not None and self.training and self.domain_supervision_weight > 0:
+            # domain_ids: (B,) -> expand to (B*T,)
+            domain_flat = domain_ids.unsqueeze(1).expand(B, T).reshape(-1)  # (B*T,)
+            domain_flat = domain_flat.clamp(0, self.n_experts - 1)
+            # Вероятность «правильного» эксперта для каждого токена
+            correct_expert_prob = router_probs[torch.arange(B * T, device=x.device), domain_flat]
+            # Максимизируем её → минимизируем отрицательный лог
+            supervision_loss = -torch.log(correct_expert_prob + 1e-8).mean()
+            aux_loss = aux_loss + self.domain_supervision_weight * supervision_loss
+
+        return output.view(B, T, D), aux_loss
+
+
 class TrigramMoE(nn.Module):
     """Mixture of Experts, где каждый эксперт соответствует триграмме."""
     def __init__(self, d_model: int, n_experts: int = 8, top_k: int = 2,

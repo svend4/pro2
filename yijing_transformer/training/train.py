@@ -129,13 +129,18 @@ def estimate_val_loss(model, cfg, device, num_batches=20, data_fn=None):
     model.eval()
     losses = []
     for _ in range(num_batches):
+        domain_ids = None
         if data_fn:
-            xb, yb = data_fn()
+            batch = data_fn()
+            if len(batch) == 3:
+                xb, yb, domain_ids = batch
+            else:
+                xb, yb = batch
         else:
             xb, yb = generate_synthetic_batch(
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
             )
-        _, loss, _ = model(xb, yb)
+        _, loss, _ = model(xb, yb, domain_ids=domain_ids)
         losses.append(loss.item())
     model.train()
     return sum(losses) / len(losses) if losses else float('nan')
@@ -196,6 +201,10 @@ def train(args):
         use_swiglu=args.swiglu,
         use_bian_gua=args.bian_gua,
         use_hex_moe=args.moe,
+        use_domain_moe=getattr(args, 'domain_moe', False),
+        domain_moe_n_experts=getattr(args, 'domain_moe_experts', 6),
+        domain_moe_top_k=getattr(args, 'domain_moe_top_k', 2),
+        domain_supervision_weight=getattr(args, 'domain_supervision_weight', 0.1),
         adaptive_temp=args.adaptive_temp,
         use_wandb=args.wandb,
         use_tensorboard=args.tensorboard,
@@ -311,8 +320,12 @@ def train(args):
     if _svend4_corpus is not None:
         _svend4_corpus.print_stats()
 
+        _use_domain_moe = getattr(cfg, 'use_domain_moe', False)
+
         def svend4_batch():
-            return _svend4_corpus.get_batch(cfg.batch_size, device)
+            if _use_domain_moe and hasattr(_svend4_corpus, 'get_batch_with_domain'):
+                return _svend4_corpus.get_batch_with_domain(cfg.batch_size, device)
+            return _svend4_corpus.get_batch(cfg.batch_size, device) + (None,)
 
         data_fn = svend4_batch
         print(f"Using svend4 corpus: {_svend4_corpus}")
@@ -363,8 +376,13 @@ def train(args):
         for pg in optimizer.param_groups:
             pg['lr'] = lr
 
+        domain_ids_batch = None
         if data_fn:
-            xb, yb = data_fn()
+            batch = data_fn()
+            if len(batch) == 3:
+                xb, yb, domain_ids_batch = batch
+            else:
+                xb, yb = batch
         else:
             xb, yb = generate_synthetic_batch(
                 cfg.batch_size, cfg.block_size, cfg.vocab_size, device
@@ -378,7 +396,7 @@ def train(args):
             model.nautilus.set_step(step)
 
         with autocast('cuda', enabled=use_amp, dtype=amp_dtype):
-            logits, loss, _ = model(xb, yb)
+            logits, loss, _ = model(xb, yb, domain_ids=domain_ids_batch)
             # Bridge: модификаторы loss (Z-Loss, Entropy Reg, etc.)
             loss = bridge.before_backward(logits, yb, loss)
             loss = loss / cfg.grad_accum_steps
@@ -551,6 +569,14 @@ def main():
     parser.add_argument('--bian-gua', action='store_true', default=True)
     parser.add_argument('--no-bian-gua', dest='bian_gua', action='store_false')
     parser.add_argument('--moe', action='store_true', default=False)
+    parser.add_argument('--domain-moe', action='store_true', default=False,
+                        help='DomainMoE: эксперты специализируются по доменам корпуса')
+    parser.add_argument('--domain-moe-experts', type=int, default=6,
+                        help='Число экспертов DomainMoE (по умолчанию 6 = число доменов)')
+    parser.add_argument('--domain-moe-top-k', type=int, default=2,
+                        help='Число активных экспертов за forward')
+    parser.add_argument('--domain-supervision-weight', type=float, default=0.1,
+                        help='Вес loss доменной специализации')
     parser.add_argument('--adaptive-temp', action='store_true', default=True)
     parser.add_argument('--steps', type=int, default=500)
     parser.add_argument('--batch-size', type=int, default=4)
