@@ -660,18 +660,304 @@ def run_stage2(model, sp, rag_buf):
 # САМОГЕНЕРАЦИЯ — модель диалогирует сама с собой
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Нечётные длины серий — по Крюкову: {1, 3, 5, 7}
+_ODD_SERIES = [1, 3, 5, 7]
+
+# Порог резонанса (|LCI - π| < этого → масштаб не трогаем)
+_LCI_EPSILON = 0.5
+
+
+def _lci(start_emb: torch.Tensor, end_emb: torch.Tensor) -> float:
+    """
+    Loop Closure Index (LCI) — степень замкнутости петли.
+
+    По Крюкову: оптимум достигается когда LCI → π.
+    Формула: LCI = arccos(cos_sim) × 4  → диапазон [0, 2π]
+    При полном совпадении start==end:  cos=1  → acos(1)=0  → LCI=0  (нет расхождения)
+    При полной противоположности:      cos=-1 → acos(-1)=π → LCI=4π
+    Рабочий оптимум ≈ π (90°-расхождение — не слишком близко, не слишком далеко).
+    """
+    s = F.normalize(start_emb.float().cpu().unsqueeze(0), dim=-1)
+    e = F.normalize(end_emb.float().cpu().unsqueeze(0), dim=-1)
+    cos = F.cosine_similarity(s, e).clamp(-1.0, 1.0).item()
+    return math.acos(cos) * 4.0
+
+
+def _generate(model, prompt_ids, block_size, temperature, n_tokens):
+    """Авторегрессивная генерация n_tokens токенов."""
+    generated = prompt_ids.clone()
+    model.eval()
+    with torch.no_grad():
+        for _ in range(n_tokens):
+            out = model(generated)
+            logits = out[0] if isinstance(out, tuple) else out
+            next_logit = logits[0, -1] / max(temperature, 0.1)
+            probs = F.softmax(next_logit, dim=-1)
+            next_tok = torch.multinomial(probs, 1)
+            generated = torch.cat([generated, next_tok.unsqueeze(0)], dim=1)
+            generated = generated[:, -block_size:]
+    return generated
+
+
+def _ids_to_text(ids: torch.Tensor) -> str:
+    try:
+        return bytes([b % 256 for b in ids[0].tolist()]).decode("utf-8", errors="replace")
+    except Exception:
+        return " ".join(str(b) for b in ids[0].tolist()[:20])
+
+
+def _emb_of(model, ids: torch.Tensor) -> torch.Tensor:
+    """Усреднённый скрытый вектор последнего слоя."""
+    with torch.no_grad():
+        h = model.tok_emb(ids)
+        for block in model.blocks:
+            h = block(h)
+    return h.mean(dim=1).squeeze(0)  # (D,)
+
+
+def _scale_temperature(temperature: float, lci: float) -> float:
+    """Масштабировать температуру по отклонению LCI от π."""
+    delta = lci - math.pi
+    if abs(delta) < _LCI_EPSILON:
+        return temperature                      # резонанс — не трогаем
+    elif delta < 0:
+        return min(temperature + 0.1, 2.5)     # LCI < π → zoom out (расширить)
+    else:
+        return max(temperature - 0.1, 0.3)     # LCI > π → zoom in  (сузить)
+
+
+def figure8_dialog(model, rag_buf, block_size, n_cycles=4, temperature=1.2,
+                   lci_target=math.pi, do_train=True):
+    """
+    Само-диалог по паттерну ФИГУРЫ-8 (алгоритм Скарабея, Крюков).
+
+    Структура одного цикла:
+    ──────────────────────────────────────────────────────────────────
+    [Точка X — пересечение]   ← старт, общее состояние обеих петель
+         ↓ n_a шагов (нечётное из {1,3,5,7})
+    [Петля A  ⇓ сжатие]       generate → quality_filter → RAG.add
+                               → micro-train если принято
+         ↓
+    [Точка X — LCI_A]         cos(start_emb, end_emb) → масштаб
+         ↓ n_b шагов (следующее нечётное)
+    [Петля B  ⇑ расширение]   RAG.retrieve(end_emb) → new_prompt
+                               → generate → update buffer
+         ↓
+    [Точка X — LCI_B]         обновить temperature на следующий цикл
+    ──────────────────────────────────────────────────────────────────
+
+    Anti-circle: гексаграмма не повторяется > 4 раз подряд → форс-смена.
+    Anti-line:   домен не меняется > 3 шагов → форс-поворот (45°).
+
+    Масштабирование (свойство восьмёрки по Крюкову):
+    - LCI < π - ε  → zoom out: temperature ↑  (петли расширяются)
+    - LCI > π + ε  → zoom in:  temperature ↓  (петли сжимаются)
+    - |LCI - π| < ε → резонанс: оптимальный масштаб
+    """
+    print(f"\n{'═'*72}")
+    print(f"  САМО-ДИАЛОГ ∞ ФИГУРА-8  (алгоритм Скарабея, Крюков)")
+    print(f"{'═'*72}")
+    print(f"  Циклов     : {n_cycles}")
+    print(f"  Температура: {temperature:.2f}  (авто-масштаб по LCI → π)")
+    print(f"  Серии      : {_ODD_SERIES}  (нечётные, Крюков)")
+    print(f"  Anti-circle: гекс не повторяется > 4 раз подряд")
+    print(f"  Anti-line  : домен не меняется > 3 шагов")
+    print()
+
+    # Стартовый промпт — случайная гексаграмма
+    start_hex = random.randint(0, 63)
+    bits = hexagrams[start_hex].tolist()
+    prompt_ids = torch.tensor(
+        [int(b > 0) for b in bits] * 4, dtype=torch.long
+    ).unsqueeze(0)[:, :block_size]
+
+    # Состояние на точке пересечения X
+    x_emb = _emb_of(model, prompt_ids)   # эмбеддинг в точке X
+    x_ids = prompt_ids                    # токены в точке X
+
+    # Anti-circle / Anti-line счётчики
+    hex_history   = collections.deque(maxlen=5)
+    domain_history = collections.deque(maxlen=4)
+
+    # Скользящий индекс в ODD_SERIES (отскок: 0→1→2→3→2→1→0→1→...)
+    series_idx = 0
+    series_dir = +1   # направление движения по массиву серий
+
+    total_accepted = 0
+    lci_log = []
+
+    for cycle in range(1, n_cycles + 1):
+
+        n_a = _ODD_SERIES[series_idx]          # длина петли A (нечётное)
+        n_b = _ODD_SERIES[(series_idx + 1) % len(_ODD_SERIES)]  # петля B
+
+        print(f"  Цикл {cycle}/{n_cycles}  temp={temperature:.2f}  "
+              f"серия=[{n_a},{n_b}]")
+
+        # ── ПЕТЛЯ A: ⇓ сжатие (generate → filter → accept) ─────────────────
+        print(f"    Петля A ⇓ (сжатие, {n_a} {'шаг' if n_a==1 else 'шага' if n_a<5 else 'шагов'}):")
+
+        a_accepted = 0
+        a_ids = x_ids
+        for step_a in range(n_a):
+            generated = _generate(model, a_ids, block_size, temperature,
+                                  n_tokens=block_size // 2)
+            gen_text = _ids_to_text(generated)
+            score, emb = compute_text_quality(model, gen_text, block_size)
+            accepted = rag_buf.add(gen_text, emb, score)
+
+            h_idx = get_dominant_hex(model, generated)
+            d_idx = 0
+            with torch.no_grad():
+                out = model(generated)
+                info = out[2] if isinstance(out, tuple) and len(out) > 2 else {}
+                dw = info.get("domain_weights")
+                if dw is not None:
+                    d_idx = (dw.mean(dim=1)[0].argmax().item()
+                             if dw.dim() == 3 else dw[0].argmax().item())
+
+            # Anti-circle: форс-смена если один гекс > 4 раз подряд
+            hex_history.append(h_idx)
+            if hex_history.count(h_idx) > 4:
+                force_hex = (h_idx + random.randint(1, 7)) % 64
+                bits2 = hexagrams[force_hex].tolist()
+                a_ids = torch.tensor(
+                    [int(b > 0) for b in bits2] * 4, dtype=torch.long
+                ).unsqueeze(0)[:, :block_size]
+                print(f"      ⊙ anti-circle: гекс[{h_idx}] → [{force_hex}]")
+            else:
+                a_ids = generated[:, -block_size//2:]
+
+            # Anti-line: форс-поворот если домен > 3 шагов не меняется
+            domain_history.append(d_idx)
+            if len(domain_history) >= 3 and len(set(list(domain_history)[-3:])) == 1:
+                # Найти в буфере текст из другого домена
+                alt_domain = (d_idx + 1) % len(DOMAINS)
+                alt_texts = [t for t in rag_buf.texts if DOMAINS[alt_domain].lower() in t.lower()]
+                if alt_texts:
+                    alt_text = random.choice(alt_texts)
+                    a_ids = text_to_ids(alt_text, block_size).unsqueeze(0)
+                    print(f"      ⟳ anti-line: поворот к домену {DOMAINS[alt_domain]}")
+
+            status = "✓" if accepted else "·"
+            print(f"      A{step_a+1}: {status} score={score:.3f}  "
+                  f"гекс=[{h_idx:2d}] '{gen_text[:35].strip()}'…")
+            if accepted:
+                a_accepted += 1
+                total_accepted += 1
+
+            # Micro-train на принятом тексте (только если do_train)
+            if accepted and do_train and len(gen_text) > 4:
+                model.train()
+                opt_micro = torch.optim.AdamW(model.parameters(), lr=1e-5)
+                ids_mt = text_to_ids(gen_text, block_size + 1)
+                if len(ids_mt) >= 2:
+                    xm = ids_mt[:-1].unsqueeze(0)
+                    ym = ids_mt[1:].unsqueeze(0)
+                    out_m = model(xm, ym)
+                    loss_m = out_m[1]
+                    if loss_m is None:
+                        lg = out_m[0]
+                        loss_m = F.cross_entropy(lg.view(-1, lg.size(-1)), ym.view(-1))
+                    opt_micro.zero_grad()
+                    loss_m.backward()
+                    nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    opt_micro.step()
+                model.eval()
+
+        # Эмбеддинг конца петли A
+        a_end_emb = _emb_of(model, a_ids)
+        lci_a = _lci(x_emb, a_end_emb)
+        temperature = _scale_temperature(temperature, lci_a)
+        res_a = "резонанс" if abs(lci_a - math.pi) < _LCI_EPSILON else (
+                "zoom-out" if lci_a < math.pi else "zoom-in")
+        print(f"    → Точка X  LCI_A={lci_a:.3f}  (π={math.pi:.3f})  {res_a}")
+
+        # ── ПЕТЛЯ B: ⇑ расширение (retrieve → new prompt → generate) ────────
+        print(f"    Петля B ⇑ (расширение, {n_b} {'шаг' if n_b==1 else 'шага' if n_b<5 else 'шагов'}):")
+
+        b_ids = a_ids
+        for step_b in range(n_b):
+            # Получить промпт из буфера (расширение: берём из буфера, не из себя)
+            b_emb = _emb_of(model, b_ids)
+            retrieved = rag_buf.retrieve(b_emb, k=1)
+            if retrieved:
+                src_text, sim = retrieved[0]
+                b_ids = text_to_ids(src_text, block_size).unsqueeze(0)
+                src_label = f"src=[{src_text[:25].strip()}…] sim={sim:.3f}"
+            else:
+                src_label = "src=буфер пуст, генерируем из себя"
+
+            generated = _generate(model, b_ids, block_size, temperature,
+                                  n_tokens=block_size // 2)
+            gen_text = _ids_to_text(generated)
+            score, emb = compute_text_quality(model, gen_text, block_size)
+            accepted = rag_buf.add(gen_text, emb, score)
+            if accepted:
+                total_accepted += 1
+
+            h_idx = get_dominant_hex(model, generated)
+            status = "✓" if accepted else "·"
+            print(f"      B{step_b+1}: {status} score={score:.3f}  "
+                  f"гекс=[{h_idx:2d}]  {src_label}")
+
+            b_ids = generated[:, -block_size//2:]
+
+        # Эмбеддинг конца петли B — это новая точка X для следующего цикла
+        b_end_emb = _emb_of(model, b_ids)
+        lci_b = _lci(x_emb, b_end_emb)
+        temperature = _scale_temperature(temperature, lci_b)
+        res_b = "резонанс" if abs(lci_b - math.pi) < _LCI_EPSILON else (
+                "zoom-out" if lci_b < math.pi else "zoom-in")
+        print(f"    → Точка X  LCI_B={lci_b:.3f}  {res_b}  temp→{temperature:.2f}")
+
+        lci_log.append({"cycle": cycle, "lci_a": lci_a, "lci_b": lci_b,
+                        "temperature": temperature,
+                        "buffer_size": len(rag_buf)})
+
+        # Обновляем точку пересечения X
+        x_emb = b_end_emb
+        x_ids = b_ids
+
+        # Шаг по ODD_SERIES (отскок: 0→1→2→3→2→1→0...)
+        series_idx += series_dir
+        if series_idx >= len(_ODD_SERIES) - 1:
+            series_dir = -1
+        elif series_idx <= 0:
+            series_dir = +1
+
+        print(f"    Буфер: {len(rag_buf)} текстов  принято в цикле: {a_accepted}\n")
+
+    # Итоговое LCI-отклонение от π
+    if lci_log:
+        avg_lci = sum(
+            (x["lci_a"] + x["lci_b"]) / 2 for x in lci_log
+        ) / len(lci_log)
+        resonance = abs(avg_lci - math.pi) < _LCI_EPSILON
+        res_mark = "✓ РЕЗОНАНС" if resonance else f"δ={avg_lci - math.pi:+.3f}"
+
+    print(f"  ∞ Фигура-8 завершена:")
+    print(f"  Принято в буфер : {total_accepted} текстов")
+    print(f"  Буфер итого     : {len(rag_buf)} текстов")
+    print(f"  Ср. LCI         : {avg_lci:.3f}  (цель=π={math.pi:.3f})  {res_mark}")
+    print(f"  Финал. temp     : {temperature:.2f}")
+    return lci_log
+
+
 def self_dialog(model, rag_buf, block_size, n_turns=5, temperature=1.2):
     """
-    Модель генерирует текст → текст идёт в RAG-буфер если качественный →
-    следующий промпт = конкатенация предыдущего ответа.
+    Круговой само-диалог (устаревший вариант — оставлен для сравнения).
+    Рекомендуется использовать figure8_dialog() вместо этого.
 
-    Это "петля самообучения": модель пополняет свой же обучающий корпус.
+    Ограничения круга по Крюкову:
+    - нет масштабирования (ни zoom-in, ни zoom-out)
+    - нет LCI-контроля замкнутости
+    - вырождается в фиксированную точку или хаос
     """
     print(f"\n{'─'*72}")
-    print(f"  САМО-ДИАЛОГ: модель учит саму себя")
+    print(f"  САМО-ДИАЛОГ (круг) — устаревший. Для восьмёрки: figure8_dialog()")
     print(f"{'─'*72}")
 
-    # Стартовый промпт — случайная гексаграмма в байтах
     start_hex = random.randint(0, 63)
     bits = hexagrams[start_hex].tolist()
     prompt_ids = torch.tensor(
@@ -681,7 +967,6 @@ def self_dialog(model, rag_buf, block_size, n_turns=5, temperature=1.2):
     accepted = 0
     for turn in range(1, n_turns + 1):
         model.eval()
-        # Генерация токенов
         generated = prompt_ids.clone()
         with torch.no_grad():
             for _ in range(block_size // 2):
@@ -693,23 +978,19 @@ def self_dialog(model, rag_buf, block_size, n_turns=5, temperature=1.2):
                 generated = torch.cat([generated, next_tok.unsqueeze(0)], dim=1)
                 generated = generated[:, -block_size:]
 
-        # Декодируем (байтовое декодирование с fallback)
         gen_bytes = generated[0].tolist()
         try:
             gen_text = bytes([b % 256 for b in gen_bytes]).decode("utf-8", errors="replace")
         except Exception:
             gen_text = " ".join(str(b) for b in gen_bytes[:20])
 
-        # Оцениваем качество и пробуем добавить в буфер
         score, emb = compute_text_quality(model, gen_text, block_size)
         accepted_this = rag_buf.add(gen_text, emb, score)
         if accepted_this:
             accepted += 1
 
-        # Следующий промпт = конец сгенерированного текста
         prompt_ids = generated[:, -block_size//2:]
 
-        # Короткий лог
         status = "✓ принято" if accepted_this else "✗ отклонено"
         print(f"  Ход {turn:2d}: score={score:.3f} {status}  "
               f"гекс=[{get_dominant_hex(model, generated):.0f}]  "
@@ -747,8 +1028,8 @@ def main():
     # СТАДИЯ 2 — широкий мир через RAG-фильтр
     log2 = run_stage2(model, STAGE_PARAMS[2], rag_buf)
 
-    # САМО-ДИАЛОГ — модель пополняет свой буфер
-    self_dialog(model, rag_buf, CFG.block_size, n_turns=8)
+    # САМО-ДИАЛОГ — модель по паттерну ФИГУРЫ-8 пополняет свой буфер
+    lci_log = figure8_dialog(model, rag_buf, CFG.block_size, n_cycles=4)
 
     # ФИНАЛЬНАЯ ОЦЕНКА
     print(f"\n{'═'*72}")
@@ -786,22 +1067,33 @@ def main():
               f"домен={top_dom:6s} (ожид.={expected})")
 
     # Сохраняем лог
+    avg_lci = (sum((x["lci_a"] + x["lci_b"]) / 2 for x in lci_log) / len(lci_log)
+               if lci_log else 0.0)
     full_log = {
         "stage0_steps": len(log0),
         "stage1_steps": len(log1),
         "stage2_steps": len(log2),
         "rag_buffer_final_size": len(rag_buf),
         "final_rag_mean_score": rag_buf.mean_score(),
+        "figure8_cycles": len(lci_log),
+        "figure8_avg_lci": round(avg_lci, 4),
+        "figure8_lci_target_pi": round(math.pi, 4),
+        "figure8_resonance": abs(avg_lci - math.pi) < _LCI_EPSILON,
     }
     with open("self_train_log.json", "w") as f:
-        json.dump({"summary": full_log, "stage0": log0, "stage1": log1, "stage2": log2}, f, indent=2)
+        json.dump({"summary": full_log, "stage0": log0, "stage1": log1,
+                   "stage2": log2, "figure8_lci": lci_log}, f, indent=2)
 
     print(f"\n  Лог сохранён: self_train_log.json")
-    print(f"\n  ИДЕЯ РЕАЛИЗОВАНА:")
+    resonance_mark = "✓ РЕЗОНАНС" if full_log["figure8_resonance"] else f"δ={avg_lci-math.pi:+.3f}"
+    print(f"\n  РЕАЛИЗОВАНО:")
     print(f"  1. Модель познала себя (Q6-топология без внешних данных)")
     print(f"  2. RAG-буфер = промежуточный уровень (качественные тексты)")
     print(f"  3. Дикие данные только через RAG-фильтр (косинусный порог)")
-    print(f"  4. Само-диалог пополняет буфер из собственной генерации")
+    print(f"  4. Само-диалог по ФИГУРЕ-8 (Крюков): не круг — восьмёрка")
+    print(f"     Петля A ⇓ сжатие → Точка X → Петля B ⇑ расширение → X")
+    print(f"     LCI ср.={avg_lci:.3f}  цель=π={math.pi:.3f}  {resonance_mark}")
+    print(f"     Масштабируется: zoom-in/zoom-out по отклонению LCI от π")
     print(f"  5. Критерии остановки — по метрикам, не по числу шагов")
     print(f"\n  Следующий шаг: запустить на реальных данных (ваш корпус)")
     print(f"  Заменить QUALITY_CORPUS_RAW и WILD_CORPUS на настоящие тексты.")
