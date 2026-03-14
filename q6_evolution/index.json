@@ -5,6 +5,24 @@
       "timestamp": "2026-03-14T17:43:40",
       "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
       "n_concepts": 25
+    },
+    {
+      "label": "fed_before_1773510338",
+      "timestamp": "2026-03-14T17:47:56",
+      "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
+      "n_concepts": 25
+    },
+    {
+      "label": "self_cycle_1_before",
+      "timestamp": "2026-03-14T17:51:06",
+      "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
+      "n_concepts": 25
+    },
+    {
+      "label": "selfloop_cycle1_start",
+      "timestamp": "2026-03-14T17:57:57",
+      "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
+      "n_concepts": 25
     }
   ]
 }
