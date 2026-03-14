@@ -1,6 +1,6 @@
 {
   "name": "pro2",
-  "version": "2.0",
+  "version": "2.1",
   "format": "pro2",
   "description": "Нейросемантическая система с Q6-пространством и замкнутым циклом обучения",
   "native_unit": "Концепт с Q6-координатой [b0..b5]",
@@ -10,14 +10,27 @@
     "concepts": "yijing_transformer/",
     "training_log": "bidir_train_v2_log.json",
     "checkpoint": "checkpoint_bidir_v2.pt",
-    "corpus": "data/"
+    "corpus": "data/",
+    "bidir_cycle": "bidir_train.py"
   },
   "bridges": {
     "info1": "α-уровни ↔ Q6-глубина (α=-4..+4 → dim=0..5)",
-    "meta": "гексаграмма-ID ↔ CA-правило (hex_id-1 → Q6-bits → rule)"
+    "meta": "гексаграмма-ID ↔ CA-правило (hex_id-1 → Q6-bits → rule)",
+    "data7": "knowledge_transformation_theory ↔ bidir_train.py (реализует НЕДОСТАЮЩУЮ ПЕТЛЮ data7)"
+  },
+  "self_improvement": {
+    "report": "data/svend4_corpus/infosystems/info1/self_improvement_report.txt",
+    "metrics": ["CD", "VT", "CR", "DB"],
+    "last_cycle": 10,
+    "status": {
+      "CD": "43.25% ⚠️ (цель: 20%)",
+      "VT": "34.65% ⚠️ (цель: 50%)",
+      "CR": "1.14 ✅",
+      "DB": "21.63% ✅"
+    }
   },
   "nautilus_compatibility": 3,
-  "tags": ["neural", "embeddings", "q6", "hexagram", "bidirectional", "knowledge-graph", "yijing"],
+  "tags": ["neural", "embeddings", "q6", "hexagram", "bidirectional", "knowledge-graph", "yijing", "data7"],
   "passport": "PASSPORT.md",
   "protocol": "PORTAL-PROTOCOL.md"
 }
