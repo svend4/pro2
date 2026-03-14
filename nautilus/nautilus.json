@@ -1,0 +1,37 @@
+{
+  "name": "nautilus",
+  "version": "1.0",
+  "description": "Единая точка входа для экосистемы svend4. Читает все форматы, строит связи, показывает консенсус.",
+  "registry": [
+    {
+      "repo": "svend4/info1",
+      "adapter": "info1",
+      "format": "info1",
+      "compatibility": 1,
+      "passport": "passports/info1.md"
+    },
+    {
+      "repo": "svend4/pro2",
+      "adapter": "pro2",
+      "format": "pro2",
+      "compatibility": 3,
+      "passport": "passports/pro2.md"
+    },
+    {
+      "repo": "svend4/meta",
+      "adapter": "meta",
+      "format": "meta",
+      "compatibility": 1,
+      "passport": "passports/meta.md"
+    },
+    {
+      "repo": "svend4/data2",
+      "adapter": "data2",
+      "format": "data2",
+      "compatibility": 1,
+      "passport": "passports/data2.md"
+    }
+  ],
+  "consensus_threshold": 1.0,
+  "github_pages": "svend4.github.io/nautilus"
+}

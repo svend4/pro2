@@ -1,0 +1,463 @@
+{
+  "summary": {
+    "stage0_steps": 21,
+    "stage1_steps": 21,
+    "stage2_steps": 14,
+    "rag_buffer_final_size": 38,
+    "final_rag_mean_score": 0.4838560811783138
+  },
+  "stage0": [
+    {
+      "step": 1,
+      "loss": 5.565810680389404,
+      "hex_entropy": 5.998184680938721,
+      "biangua_coverage": 1.0,
+      "hamming_entropy_ratio": 0.9996974468231201,
+      "domain_coherence": 0.16742263734340668
+    },
+    {
+      "step": 20,
+      "loss": 4.5337815284729,
+      "hex_entropy": 5.992743015289307,
+      "biangua_coverage": 1.0,
+      "hamming_entropy_ratio": 0.998790442943573,
+      "domain_coherence": 0.16979126632213593
+    },
+    {
+      "step": 40,
+      "loss": 3.926560640335083,
+      "hex_entropy": 5.986595153808594,
+      "biangua_coverage": 0.9991455078125,
+      "hamming_entropy_ratio": 0.997765839099884,
+      "domain_coherence": 0.17196054756641388
+    },
+    {
+      "step": 60,
+      "loss": 3.4738595485687256,
+      "hex_entropy": 5.978035926818848,
+      "biangua_coverage": 0.9908447265625,
+      "hamming_entropy_ratio": 0.9963392019271851,
+      "domain_coherence": 0.1733180731534958
+    },
+    {
+      "step": 80,
+      "loss": 3.1308727264404297,
+      "hex_entropy": 5.978259086608887,
+      "biangua_coverage": 0.99169921875,
+      "hamming_entropy_ratio": 0.9963764548301697,
+      "domain_coherence": 0.17216859757900238
+    },
+    {
+      "step": 100,
+      "loss": 2.8708276748657227,
+      "hex_entropy": 5.970730304718018,
+      "biangua_coverage": 0.979736328125,
+      "hamming_entropy_ratio": 0.9951216578483582,
+      "domain_coherence": 0.1737370491027832
+    },
+    {
+      "step": 120,
+      "loss": 2.6501355171203613,
+      "hex_entropy": 5.962646007537842,
+      "biangua_coverage": 0.963623046875,
+      "hamming_entropy_ratio": 0.9937742352485657,
+      "domain_coherence": 0.1750422716140747
+    },
+    {
+      "step": 140,
+      "loss": 2.5177502632141113,
+      "hex_entropy": 5.955624103546143,
+      "biangua_coverage": 0.950439453125,
+      "hamming_entropy_ratio": 0.9926040172576904,
+      "domain_coherence": 0.1759079396724701
+    },
+    {
+      "step": 160,
+      "loss": 2.375800848007202,
+      "hex_entropy": 5.950345516204834,
+      "biangua_coverage": 0.9410400390625,
+      "hamming_entropy_ratio": 0.9917242527008057,
+      "domain_coherence": 0.17674946784973145
+    },
+    {
+      "step": 180,
+      "loss": 2.282984495162964,
+      "hex_entropy": 5.9496870040893555,
+      "biangua_coverage": 0.9364013671875,
+      "hamming_entropy_ratio": 0.9916144013404846,
+      "domain_coherence": 0.17729461193084717
+    },
+    {
+      "step": 200,
+      "loss": 2.230982542037964,
+      "hex_entropy": 5.950714111328125,
+      "biangua_coverage": 0.941162109375,
+      "hamming_entropy_ratio": 0.9917855858802795,
+      "domain_coherence": 0.17747682332992554
+    },
+    {
+      "step": 220,
+      "loss": 2.1610543727874756,
+      "hex_entropy": 5.945226669311523,
+      "biangua_coverage": 0.927734375,
+      "hamming_entropy_ratio": 0.9908711314201355,
+      "domain_coherence": 0.17654846608638763
+    },
+    {
+      "step": 240,
+      "loss": 2.126966714859009,
+      "hex_entropy": 5.944140911102295,
+      "biangua_coverage": 0.9246826171875,
+      "hamming_entropy_ratio": 0.9906902313232422,
+      "domain_coherence": 0.17659534513950348
+    },
+    {
+      "step": 260,
+      "loss": 2.0688586235046387,
+      "hex_entropy": 5.942290306091309,
+      "biangua_coverage": 0.922119140625,
+      "hamming_entropy_ratio": 0.9903817772865295,
+      "domain_coherence": 0.1777040958404541
+    },
+    {
+      "step": 280,
+      "loss": 2.061776638031006,
+      "hex_entropy": 5.942290782928467,
+      "biangua_coverage": 0.9217529296875,
+      "hamming_entropy_ratio": 0.9903819561004639,
+      "domain_coherence": 0.17598856985569
+    },
+    {
+      "step": 300,
+      "loss": 2.031050443649292,
+      "hex_entropy": 5.943763256072998,
+      "biangua_coverage": 0.9246826171875,
+      "hamming_entropy_ratio": 0.9906271696090698,
+      "domain_coherence": 0.17627765238285065
+    },
+    {
+      "step": 320,
+      "loss": 2.0441203117370605,
+      "hex_entropy": 5.943536281585693,
+      "biangua_coverage": 0.9263916015625,
+      "hamming_entropy_ratio": 0.9905893802642822,
+      "domain_coherence": 0.1763702780008316
+    },
+    {
+      "step": 340,
+      "loss": 2.043741226196289,
+      "hex_entropy": 5.938228607177734,
+      "biangua_coverage": 0.9141845703125,
+      "hamming_entropy_ratio": 0.9897048473358154,
+      "domain_coherence": 0.1753537803888321
+    },
+    {
+      "step": 360,
+      "loss": 2.0351345539093018,
+      "hex_entropy": 5.940701961517334,
+      "biangua_coverage": 0.9154052734375,
+      "hamming_entropy_ratio": 0.9901169538497925,
+      "domain_coherence": 0.1795307695865631
+    },
+    {
+      "step": 380,
+      "loss": 2.018172264099121,
+      "hex_entropy": 5.944828987121582,
+      "biangua_coverage": 0.9266357421875,
+      "hamming_entropy_ratio": 0.9908047914505005,
+      "domain_coherence": 0.17667487263679504
+    },
+    {
+      "step": 400,
+      "loss": 2.0201776027679443,
+      "hex_entropy": 5.941064357757568,
+      "biangua_coverage": 0.919189453125,
+      "hamming_entropy_ratio": 0.99017733335495,
+      "domain_coherence": 0.17778319120407104
+    }
+  ],
+  "stage1": [
+    {
+      "step": 1,
+      "loss": 6.034421443939209,
+      "hex_entropy": 5.993342876434326,
+      "biangua_coverage": 0.9996337890625,
+      "hamming_entropy_ratio": 0.9988905191421509,
+      "domain_coherence": 0.1718219369649887
+    },
+    {
+      "step": 30,
+      "loss": 4.191573143005371,
+      "hex_entropy": 5.98554801940918,
+      "biangua_coverage": 1.0,
+      "hamming_entropy_ratio": 0.9975914359092712,
+      "domain_coherence": 0.17333802580833435
+    },
+    {
+      "step": 60,
+      "loss": 3.5935208797454834,
+      "hex_entropy": 5.986575126647949,
+      "biangua_coverage": 0.9996337890625,
+      "hamming_entropy_ratio": 0.9977625608444214,
+      "domain_coherence": 0.17153288424015045
+    },
+    {
+      "step": 90,
+      "loss": 3.232416868209839,
+      "hex_entropy": 5.990059852600098,
+      "biangua_coverage": 1.0,
+      "hamming_entropy_ratio": 0.998343288898468,
+      "domain_coherence": 0.17139768600463867
+    },
+    {
+      "step": 120,
+      "loss": 2.8595244884490967,
+      "hex_entropy": 5.990443229675293,
+      "biangua_coverage": 1.0,
+      "hamming_entropy_ratio": 0.9984071850776672,
+      "domain_coherence": 0.1708294004201889
+    },
+    {
+      "step": 150,
+      "loss": 2.711216449737549,
+      "hex_entropy": 5.989993572235107,
+      "biangua_coverage": 0.999755859375,
+      "hamming_entropy_ratio": 0.9983323216438293,
+      "domain_coherence": 0.17027440667152405
+    },
+    {
+      "step": 180,
+      "loss": 2.483508825302124,
+      "hex_entropy": 5.991021633148193,
+      "biangua_coverage": 0.99951171875,
+      "hamming_entropy_ratio": 0.998503565788269,
+      "domain_coherence": 0.16907042264938354
+    },
+    {
+      "step": 210,
+      "loss": 2.313356876373291,
+      "hex_entropy": 5.990747451782227,
+      "biangua_coverage": 0.999755859375,
+      "hamming_entropy_ratio": 0.9984579086303711,
+      "domain_coherence": 0.1696823537349701
+    },
+    {
+      "step": 240,
+      "loss": 2.2409496307373047,
+      "hex_entropy": 5.991292953491211,
+      "biangua_coverage": 0.9989013671875,
+      "hamming_entropy_ratio": 0.9985489249229431,
+      "domain_coherence": 0.16820375621318817
+    },
+    {
+      "step": 270,
+      "loss": 2.0541136264801025,
+      "hex_entropy": 5.9904303550720215,
+      "biangua_coverage": 0.9979248046875,
+      "hamming_entropy_ratio": 0.9984050393104553,
+      "domain_coherence": 0.16864672303199768
+    },
+    {
+      "step": 300,
+      "loss": 1.8098719120025635,
+      "hex_entropy": 5.99033260345459,
+      "biangua_coverage": 0.9990234375,
+      "hamming_entropy_ratio": 0.9983887672424316,
+      "domain_coherence": 0.16882097721099854
+    },
+    {
+      "step": 330,
+      "loss": 1.7436798810958862,
+      "hex_entropy": 5.991647243499756,
+      "biangua_coverage": 0.998779296875,
+      "hamming_entropy_ratio": 0.9986079335212708,
+      "domain_coherence": 0.1684264987707138
+    },
+    {
+      "step": 360,
+      "loss": 1.6854946613311768,
+      "hex_entropy": 5.98781681060791,
+      "biangua_coverage": 0.9947509765625,
+      "hamming_entropy_ratio": 0.9979694485664368,
+      "domain_coherence": 0.1680561602115631
+    },
+    {
+      "step": 390,
+      "loss": 1.648667335510254,
+      "hex_entropy": 5.988496780395508,
+      "biangua_coverage": 0.9959716796875,
+      "hamming_entropy_ratio": 0.9980827569961548,
+      "domain_coherence": 0.16816207766532898
+    },
+    {
+      "step": 420,
+      "loss": 1.4930685758590698,
+      "hex_entropy": 5.98783540725708,
+      "biangua_coverage": 0.9969482421875,
+      "hamming_entropy_ratio": 0.9979726076126099,
+      "domain_coherence": 0.16880513727664948
+    },
+    {
+      "step": 450,
+      "loss": 1.403807282447815,
+      "hex_entropy": 5.987369537353516,
+      "biangua_coverage": 0.99560546875,
+      "hamming_entropy_ratio": 0.9978949427604675,
+      "domain_coherence": 0.16921527683734894
+    },
+    {
+      "step": 480,
+      "loss": 1.4672415256500244,
+      "hex_entropy": 5.987070083618164,
+      "biangua_coverage": 0.9931640625,
+      "hamming_entropy_ratio": 0.9978450536727905,
+      "domain_coherence": 0.16832640767097473
+    },
+    {
+      "step": 510,
+      "loss": 1.3999083042144775,
+      "hex_entropy": 5.987502574920654,
+      "biangua_coverage": 0.994873046875,
+      "hamming_entropy_ratio": 0.9979170560836792,
+      "domain_coherence": 0.16842792928218842
+    },
+    {
+      "step": 540,
+      "loss": 1.4226458072662354,
+      "hex_entropy": 5.988595008850098,
+      "biangua_coverage": 0.99560546875,
+      "hamming_entropy_ratio": 0.998099148273468,
+      "domain_coherence": 0.1687922477722168
+    },
+    {
+      "step": 570,
+      "loss": 1.460610270500183,
+      "hex_entropy": 5.986398220062256,
+      "biangua_coverage": 0.9932861328125,
+      "hamming_entropy_ratio": 0.9977330565452576,
+      "domain_coherence": 0.16901671886444092
+    },
+    {
+      "step": 600,
+      "loss": 1.3416615724563599,
+      "hex_entropy": 5.985766887664795,
+      "biangua_coverage": 0.9927978515625,
+      "hamming_entropy_ratio": 0.997627854347229,
+      "domain_coherence": 0.16812270879745483
+    }
+  ],
+  "stage2": [
+    {
+      "step": 1,
+      "loss": 1.99703049659729,
+      "hex_entropy": 5.988273620605469,
+      "biangua_coverage": 0.9970703125,
+      "hamming_entropy_ratio": 0.9980455636978149,
+      "domain_coherence": 0.16920149326324463
+    },
+    {
+      "step": 30,
+      "loss": 1.8012096881866455,
+      "hex_entropy": 5.988653182983398,
+      "biangua_coverage": 0.9971923828125,
+      "hamming_entropy_ratio": 0.9981089234352112,
+      "domain_coherence": 0.16887447237968445
+    },
+    {
+      "step": 60,
+      "loss": 1.7882201671600342,
+      "hex_entropy": 5.990008354187012,
+      "biangua_coverage": 0.997802734375,
+      "hamming_entropy_ratio": 0.9983347058296204,
+      "domain_coherence": 0.1694849133491516
+    },
+    {
+      "step": 90,
+      "loss": 1.4957071542739868,
+      "hex_entropy": 5.988453388214111,
+      "biangua_coverage": 0.9976806640625,
+      "hamming_entropy_ratio": 0.9980756044387817,
+      "domain_coherence": 0.1691923290491104
+    },
+    {
+      "step": 120,
+      "loss": 1.6952139139175415,
+      "hex_entropy": 5.987298488616943,
+      "biangua_coverage": 0.9949951171875,
+      "hamming_entropy_ratio": 0.9978832006454468,
+      "domain_coherence": 0.16872215270996094
+    },
+    {
+      "step": 150,
+      "loss": 1.5254608392715454,
+      "hex_entropy": 5.987083911895752,
+      "biangua_coverage": 0.99560546875,
+      "hamming_entropy_ratio": 0.997847318649292,
+      "domain_coherence": 0.16921964287757874
+    },
+    {
+      "step": 180,
+      "loss": 1.413345456123352,
+      "hex_entropy": 5.988461971282959,
+      "biangua_coverage": 0.9967041015625,
+      "hamming_entropy_ratio": 0.9980770349502563,
+      "domain_coherence": 0.16828106343746185
+    },
+    {
+      "step": 210,
+      "loss": 1.5481812953948975,
+      "hex_entropy": 5.9874043464660645,
+      "biangua_coverage": 0.9952392578125,
+      "hamming_entropy_ratio": 0.9979008436203003,
+      "domain_coherence": 0.16848483681678772
+    },
+    {
+      "step": 240,
+      "loss": 1.7332569360733032,
+      "hex_entropy": 5.98786735534668,
+      "biangua_coverage": 0.9951171875,
+      "hamming_entropy_ratio": 0.9979779124259949,
+      "domain_coherence": 0.16905450820922852
+    },
+    {
+      "step": 270,
+      "loss": 1.5041359663009644,
+      "hex_entropy": 5.98539400100708,
+      "biangua_coverage": 0.994140625,
+      "hamming_entropy_ratio": 0.9975656867027283,
+      "domain_coherence": 0.16901895403862
+    },
+    {
+      "step": 300,
+      "loss": 1.111461877822876,
+      "hex_entropy": 5.989109039306641,
+      "biangua_coverage": 0.9962158203125,
+      "hamming_entropy_ratio": 0.9981848001480103,
+      "domain_coherence": 0.16881094872951508
+    },
+    {
+      "step": 330,
+      "loss": 1.1210044622421265,
+      "hex_entropy": 5.983992576599121,
+      "biangua_coverage": 0.99267578125,
+      "hamming_entropy_ratio": 0.997331976890564,
+      "domain_coherence": 0.169724702835083
+    },
+    {
+      "step": 360,
+      "loss": 1.6162222623825073,
+      "hex_entropy": 5.986025810241699,
+      "biangua_coverage": 0.9947509765625,
+      "hamming_entropy_ratio": 0.9976710081100464,
+      "domain_coherence": 0.1698634922504425
+    },
+    {
+      "step": 390,
+      "loss": 1.0887142419815063,
+      "hex_entropy": 5.981660842895508,
+      "biangua_coverage": 0.9874267578125,
+      "hamming_entropy_ratio": 0.9969435334205627,
+      "domain_coherence": 0.16977742314338684
+    }
+  ]
+}

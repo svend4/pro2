@@ -1,0 +1,22 @@
+{
+  "name": "info1",
+  "version": "1.0",
+  "format": "info1",
+  "description": "Методологическая система параллельного двунаправленного развития (⇑⇓↔). 74 документа, 1156 связей.",
+  "native_unit": "Markdown-документ с α-уровнем (-4..+4)",
+  "abstraction_model": "alpha_levels",
+  "portal_adapter": "portal.py::Info1Adapter",
+  "entry_points": {
+    "methodology": "README.md",
+    "concepts": "02-Информационная-система/",
+    "corpus": null
+  },
+  "bridges": {
+    "pro2": "α-уровни ↔ Q6-глубина (α+4)/8 * 6 → dim",
+    "meta": "α-иерархия ↔ CA-энтропия (высокий α → высокий порядок)"
+  },
+  "nautilus_compatibility": 1,
+  "tags": ["methodology", "documentation", "cards", "alpha-levels", "bidirectional"],
+  "passport": "PASSPORT.md",
+  "install_instructions": "Скопировать этот файл как nautilus.json в корень svend4/info1"
+}

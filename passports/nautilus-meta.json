@@ -1,0 +1,28 @@
+{
+  "name": "meta",
+  "version": "1.0",
+  "format": "meta",
+  "description": "Система символьной верификации: 256 CA-правил → 64 гексаграммы → Q6-координаты.",
+  "native_unit": "CA-правило (0..255) с классом Вольфрама",
+  "abstraction_model": "ca_rules",
+  "portal_adapter": "portal.py::MetaAdapter",
+  "entry_points": {
+    "rules": "rules/",
+    "hexagrams": "hexagrams/",
+    "mappings": "mappings.json"
+  },
+  "bridges": {
+    "pro2": "CA-правило N → Q6-биты bin(N % 64, 6)",
+    "info1": "CA-класс (I–IV) ↔ α-уровень (-4..+4)"
+  },
+  "ca_classes": {
+    "I": "простой порядок (α=-4..-2)",
+    "II": "периодический (α=-2..0)",
+    "III": "хаотичный (α=0..+2)",
+    "IV": "граница хаос/порядок (α=+2..+4)"
+  },
+  "nautilus_compatibility": 1,
+  "tags": ["cellular-automata", "wolfram", "hexagram", "yijing", "symbolic", "patterns"],
+  "passport": "PASSPORT.md",
+  "install_instructions": "Скопировать этот файл как nautilus.json в корень svend4/meta"
+}

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>⬡ Nautilus Portal — info1 · pro2 · meta · data2</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0 }
+  body { font-family: monospace; background: #0d0d0d; color: #d0d0d0; min-height: 100vh }
+
+  /* Header */
+  .header { padding: 24px 32px 16px; border-bottom: 1px solid #1e1e1e }
+  .header h1 { font-size: 22px; color: #e8e8e8; letter-spacing: -0.5px }
+  .header .sub { color: #555; font-size: 12px; margin-top: 4px }
+
+  /* Search */
+  .search-bar { padding: 20px 32px; display: flex; gap: 10px; align-items: center }
+  .search-bar input {
+    background: #161616; border: 1px solid #2a2a2a; color: #e0e0e0;
+    padding: 10px 14px; border-radius: 5px; font-family: monospace;
+    font-size: 14px; width: 340px; outline: none;
+    transition: border-color 0.2s
+  }
+  .search-bar input:focus { border-color: #444 }
+  .search-bar button {
+    background: #1e1e1e; color: #d0d0d0; border: 1px solid #2a2a2a;
+    padding: 10px 18px; border-radius: 5px; cursor: pointer;
+    font-family: monospace; font-size: 13px;
+    transition: background 0.15s
+  }
+  .search-bar button:hover { background: #252525 }
+
+  /* Layout */
+  .main { display: grid; grid-template-columns: 220px 1fr 220px; gap: 0;
+          height: calc(100vh - 130px) }
+
+  /* Left sidebar — adapters */
+  .sidebar { padding: 16px; border-right: 1px solid #1a1a1a; overflow-y: auto }
+  .sidebar-title { color: #3a3a3a; font-size: 10px; text-transform: uppercase;
+                   letter-spacing: 2px; margin-bottom: 12px }
+  .adapter-card {
+    border: 1px solid #1e1e1e; border-radius: 5px; padding: 10px;
+    margin-bottom: 8px; background: #111
+  }
+  .adapter-name { font-size: 12px; font-weight: bold; margin-bottom: 3px }
+  .adapter-desc { font-size: 10px; color: #444; line-height: 1.4 }
+  .adapter-badge {
+    display: inline-block; font-size: 9px; padding: 1px 5px;
+    border-radius: 3px; margin-top: 5px; border: 1px solid
+  }
+
+  /* Center — results */
+  .results { padding: 16px 20px; overflow-y: auto }
+  .results-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px }
+  .consensus-badge {
+    font-size: 11px; padding: 3px 10px; border-radius: 4px; border: 1px solid
+  }
+  .entry {
+    border-left: 3px solid; padding: 10px 14px; margin-bottom: 10px;
+    background: #111; border-radius: 0 5px 5px 0
+  }
+  .entry-repo { font-size: 10px; font-weight: bold; text-transform: uppercase;
+                letter-spacing: 1px; margin-bottom: 3px }
+  .entry-title { font-size: 14px; color: #e0e0e0; margin-bottom: 4px }
+  .entry-content { font-size: 11px; color: #666; line-height: 1.5 }
+  .entry-links { font-size: 10px; color: #3a3a3a; margin-top: 5px }
+  .entry-meta { font-size: 10px; color: #3a3a3a; margin-top: 3px }
+
+  /* Right sidebar — cross-links */
+  .links-panel { padding: 16px; border-left: 1px solid #1a1a1a; overflow-y: auto }
+  .link-item { font-size: 10px; color: #444; padding: 4px 0;
+               border-bottom: 1px solid #1a1a1a; line-height: 1.5 }
+  .link-from { color: #4a90d9 }
+  .link-to { color: #7b68ee }
+
+  /* Empty state */
+  .empty { color: #2a2a2a; font-size: 12px; padding: 20px 0 }
+
+  /* Loading */
+  .loading { color: #333; font-size: 12px }
+
+  /* Colors per repo */
+  .c-info1 { color: #4a90d9 }
+  .c-pro2  { color: #7b68ee }
+  .c-meta  { color: #e8a838 }
+  .c-data2 { color: #5cb85c }
+  .b-info1 { border-color: #4a90d9 }
+  .b-pro2  { border-color: #7b68ee }
+  .b-meta  { border-color: #e8a838 }
+  .b-data2 { border-color: #5cb85c }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⬡ Nautilus Portal</h1>
+  <div class="sub">Единая точка входа · info1 · pro2 · meta · data2</div>
+</div>
+
+<div class="search-bar">
+  <input type="text" id="q" placeholder="концепт..." value="knowledge" />
+  <button onclick="search()">Найти</button>
+  <span id="status" style="font-size:11px;color:#444"></span>
+</div>
+
+<div class="main">
+
+  <!-- Левая панель: адаптеры -->
+  <div class="sidebar">
+    <div class="sidebar-title">Форматы</div>
+    <div class="adapter-card">
+      <div class="adapter-name c-info1">info1</div>
+      <div class="adapter-desc">svend4/info1<br>Документы с α-уровнями (-4..+4)<br>74 документа · 1156 связей</div>
+      <div class="adapter-badge c-info1 b-info1">.info1</div>
+    </div>
+    <div class="adapter-card">
+      <div class="adapter-name c-pro2">pro2</div>
+      <div class="adapter-desc">svend4/pro2<br>Q6-концепты · граф знаний<br>64 состояния · 6D пространство</div>
+      <div class="adapter-badge c-pro2 b-pro2">.pro2</div>
+    </div>
+    <div class="adapter-card">
+      <div class="adapter-name c-meta">meta</div>
+      <div class="adapter-desc">svend4/meta<br>256 CA-правил · гексаграммы<br>Символьная верификация</div>
+      <div class="adapter-badge c-meta b-meta">.meta</div>
+    </div>
+    <div class="adapter-card">
+      <div class="adapter-name c-data2">data2</div>
+      <div class="adapter-desc">svend4/data2<br>310+ томов ЕТД · 12 архетипов<br>Крюков · 7 аксиом · LCI</div>
+      <div class="adapter-badge c-data2 b-data2">.data2</div>
+    </div>
+  </div>
+
+  <!-- Центр: результаты -->
+  <div class="results" id="results">
+    <div class="empty">введите концепт для поиска</div>
+  </div>
+
+  <!-- Правая панель: межрепозиторные связи -->
+  <div class="links-panel">
+    <div class="sidebar-title">Связи</div>
+    <div id="links"><div class="empty">—</div></div>
+  </div>
+
+</div>
+
+<script>
+// ────────────────────────────────────
+// Встроенные данные (работает без сервера)
+// ────────────────────────────────────
+
+const STATIC_DATA = {
+  info1: [
+    { id: "info1:methodology", title: "Методология ⇑⇓↔", format: "document",
+      content: "Параллельное двунаправленное развитие. 8 уровней абстракции (α=-4..+4). 74 документа, 1156 связей.",
+      meta: { alpha: 2 }, links: ["pro2:bidir_train", "meta:hexagram:50"] },
+    { id: "info1:cards", title: "Карточная система", format: "document",
+      content: "Карточки как атомарные единицы знания. 8 типов карточек. Аналог концептов Q6 в pro2.",
+      meta: { alpha: -1 }, links: ["pro2:concept:knowledge"] },
+    { id: "info1:alpha", title: "Система α-уровней", format: "document",
+      content: "9 уровней: онтология (+4) → код (-4). Каждый документ живёт на своём уровне.",
+      meta: { alpha: 2 }, links: ["meta:ca_class:II", "pro2:q6:dim"] },
+  ],
+  pro2: [
+    { id: "pro2:q6", title: "Q6 Семантическое пространство", format: "concept",
+      content: "64 состояния (6-битное пространство). Каждый концепт = координата Q6[b0..b5]. Соответствует 64 гексаграммам И-Цзин.",
+      meta: { dims: 6, states: 64 }, links: ["meta:hexagram:all", "info1:alpha:0"] },
+    { id: "pro2:bidir", title: "Bidirectional Training ⇑⇓", format: "concept",
+      content: "⇓ генерация текста из концептов, ⇑ извлечение концептов из текста. Аналог ⇑⇓ методологии info1.",
+      meta: { method: "bidirectional" }, links: ["info1:methodology"] },
+    { id: "pro2:graph", title: "Граф знаний", format: "concept",
+      content: "TSP-порядок обхода концептов. Адаптивный выбор следующего концепта по пробелам знаний.",
+      meta: { algo: "TSP" }, links: ["info1:cards", "meta:hexagram:63"] },
+  ],
+  data2: [
+    { id: "data2:etd", title: "ЕТД — Единая Теория Движения", format: "volume",
+      content: "12 архетипов движения × 7 аксиом Крюкова. 310+ томов в 5 сериях. LCI как метрика замкнутости системы.",
+      meta: { type: "overview", volumes: "1-310" }, links: ["info1:methodology", "meta:hexagram:50", "pro2:bidir"] },
+    { id: "data2:scarab", title: "Scarab Algorithm (фигура-8)", format: "volume",
+      content: "scarab_algorithm.py — обход Q6-пространства по траектории фигуры-8. Прямой мост к семантическому пространству pro2.",
+      meta: { type: "algorithm", file: "scarab_algorithm.py" }, links: ["pro2:q6", "meta:hexagram:63"] },
+    { id: "data2:arch:три_сферы", title: "Архетип: Три Сферы (МВС/СВС/БВС)", format: "archetype",
+      content: "МВС (малая) / СВС (средняя) / БВС (большая) — вложенные сферы. Резонанс трёх сфер → максимальная эффективность.",
+      meta: { archetype: "три сферы", ca_class: "II", alpha: -1 }, links: ["meta:ca_class:II", "info1:alpha:-1"] },
+    { id: "data2:arch:резонанс", title: "Архетип: Резонанс (ω_МВС = ω_СВС = ω_БВС)", format: "archetype",
+      content: "Когда три сферы работают в унисон — система достигает максимальной эффективности. CA-класс IV.",
+      meta: { archetype: "резонанс", ca_class: "IV", q6: "110011", alpha: 3 }, links: ["meta:ca_class:IV", "pro2:q6:110011"] },
+  ],
+  meta: [
+    { id: "meta:hexagram:50", title: "[50] 鼎 Котёл", format: "rule",
+      content: "Трансформация через огонь. CA-класс IV (граница хаос/порядок).",
+      meta: { hexagram_id: 50, ca_class: "IV", q6: "110001" }, links: ["pro2:q6:110001", "info1:alpha:3"] },
+    { id: "meta:hexagram:63", title: "[63] 既濟 После завершения", format: "rule",
+      content: "Равновесие достигнуто. CA-класс IV.",
+      meta: { hexagram_id: 63, ca_class: "IV", q6: "111110" }, links: ["pro2:q6:111110", "info1:alpha:0"] },
+    { id: "meta:hexagram:1", title: "[1] 乾 Творчество", format: "rule",
+      content: "Чистая созидательная сила. CA-класс I (простой порядок).",
+      meta: { hexagram_id: 1, ca_class: "I", q6: "000000" }, links: ["pro2:q6:000000", "info1:alpha:-4"] },
+    { id: "meta:hexagram:24", title: "[24] 復 Возврат", format: "rule",
+      content: "Поворотная точка, начало нового цикла. CA-класс IV.",
+      meta: { hexagram_id: 24, ca_class: "IV", q6: "010111" }, links: ["pro2:q6:010111", "info1:alpha:2"] },
+  ],
+};
+
+const COLORS = { info1: "#4a90d9", pro2: "#7b68ee", meta: "#e8a838", data2: "#5cb85c" };
+
+function search() {
+  const q = document.getElementById("q").value.trim().toLowerCase() || "knowledge";
+  document.getElementById("status").textContent = `поиск: "${q}"`;
+
+  // собираем все записи из всех репо
+  const entries = [
+    ...STATIC_DATA.info1,
+    ...STATIC_DATA.pro2,
+    ...STATIC_DATA.meta,
+    ...STATIC_DATA.data2,
+  ];
+
+  // строим межрепозиторные связи
+  const crossLinks = [];
+  const seen = new Set();
+  for (const e of entries) {
+    for (const linkId of (e.links || [])) {
+      const key = [e.id, linkId].sort().join("|");
+      if (!seen.has(key)) {
+        seen.add(key);
+        const sr = e.id.split(":")[0];
+        const tr = linkId.split(":")[0];
+        if (sr !== tr) crossLinks.push({ from: e.id, to: linkId, from_repo: sr, to_repo: tr });
+      }
+    }
+  }
+
+  // консенсус
+  const present = new Set(entries.map(e => e.id.split(":")[0]));
+  const all = new Set(["info1", "pro2", "meta", "data2"]);
+  const coverage = present.size / all.size;
+
+  renderResults(entries, crossLinks, coverage, present, q);
+  document.getElementById("status").textContent = `${entries.length} записей · консенсус ${Math.round(coverage * 100)}%`;
+}
+
+function renderResults(entries, crossLinks, coverage, present, q) {
+  // результаты
+  const resultsEl = document.getElementById("results");
+  const agreedColor = coverage >= 1.0 ? "#4caf50" : "#ff9800";
+  const agreedText = coverage >= 1.0 ? "✓ консенсус" : "~ частичный";
+
+  let html = `<div class="results-header">
+    <span style="font-size:13px;color:#666">"${q}"</span>
+    <span class="consensus-badge" style="border-color:${agreedColor};color:${agreedColor}">
+      ${agreedText} ${Math.round(coverage * 100)}%
+    </span>
+  </div>`;
+
+  for (const e of entries) {
+    const repo = e.id.split(":")[0];
+    const color = COLORS[repo] || "#888";
+    const alpha = e.meta?.alpha !== undefined ? `α=${e.meta.alpha}` : "";
+    const q6 = e.meta?.q6 ? `Q6[${e.meta.q6}]` : "";
+    const caClass = e.meta?.ca_class ? `CA-${e.meta.ca_class}` : "";
+    const metaStr = [alpha, q6, caClass].filter(Boolean).join(" · ");
+
+    html += `<div class="entry" style="border-color:${color}">
+      <div class="entry-repo" style="color:${color}">${repo} · ${e.format}</div>
+      <div class="entry-title">${e.title}</div>
+      <div class="entry-content">${e.content}</div>
+      ${metaStr ? `<div class="entry-meta">${metaStr}</div>` : ""}
+      ${e.links?.length ? `<div class="entry-links">→ ${e.links.slice(0,3).join(", ")}</div>` : ""}
+    </div>`;
+  }
+
+  resultsEl.innerHTML = html;
+
+  // связи
+  const linksEl = document.getElementById("links");
+  if (!crossLinks.length) {
+    linksEl.innerHTML = '<div class="empty">нет связей</div>';
+    return;
+  }
+  linksEl.innerHTML = crossLinks.map(lnk => {
+    const fc = COLORS[lnk.from_repo] || "#888";
+    const tc = COLORS[lnk.to_repo] || "#888";
+    return `<div class="link-item">
+      <span style="color:${fc}">${lnk.from}</span>
+      <span style="color:#2a2a2a"> ⟷ </span>
+      <span style="color:${tc}">${lnk.to}</span>
+    </div>`;
+  }).join("");
+}
+
+// Поиск по Enter
+document.getElementById("q").addEventListener("keydown", e => {
+  if (e.key === "Enter") search();
+});
+
+// Запустить при загрузке
+window.onload = () => search();
+</script>
+</body>
+</html>

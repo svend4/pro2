@@ -1,0 +1,26 @@
+{
+  "stage0_steps": 17,
+  "stage1_steps": 21,
+  "stage2_steps": 13,
+  "stage3_rounds": [
+    {
+      "round": 1,
+      "accepted": 6,
+      "buffer_size": 36,
+      "fine_loss": 1.604785192012787
+    },
+    {
+      "round": 2,
+      "accepted": 5,
+      "buffer_size": 41,
+      "fine_loss": 1.6508675765991212
+    },
+    {
+      "round": 3,
+      "accepted": 6,
+      "buffer_size": 47,
+      "fine_loss": 1.66079843044281
+    }
+  ],
+  "final_buffer": 47
+}
