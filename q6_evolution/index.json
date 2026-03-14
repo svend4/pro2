@@ -1,0 +1,10 @@
+{
+  "snapshots": [
+    {
+      "label": "initial",
+      "timestamp": "2026-03-14T17:43:40",
+      "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
+      "n_concepts": 25
+    }
+  ]
+}
