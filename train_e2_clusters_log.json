@@ -1,0 +1,289 @@
+[
+  {
+    "cycle": 1,
+    "cluster": "Scripts",
+    "domain": "HYDRO",
+    "alpha": -4,
+    "e2_phase": 1,
+    "texts": 55,
+    "steps": 20,
+    "lr": 0.0003,
+    "ppl_before": 284.07,
+    "ppl_after": 176.6,
+    "ppl_delta": 37.83,
+    "final_loss": 5.3026,
+    "log": [
+      {
+        "step": 4,
+        "loss": 5.562130928039551,
+        "hex_idx": 21
+      },
+      {
+        "step": 8,
+        "loss": 5.4746816754341125,
+        "hex_idx": 21
+      },
+      {
+        "step": 12,
+        "loss": 5.402368505795796,
+        "hex_idx": 41
+      },
+      {
+        "step": 16,
+        "loss": 5.343155920505524,
+        "hex_idx": 41
+      },
+      {
+        "step": 20,
+        "loss": 5.302577424049377,
+        "hex_idx": 41
+      }
+    ]
+  },
+  {
+    "cycle": 1,
+    "cluster": "Benchmarks",
+    "domain": "GEO",
+    "alpha": -2,
+    "e2_phase": 2,
+    "texts": 38,
+    "steps": 20,
+    "lr": 0.0002,
+    "ppl_before": 205.74,
+    "ppl_after": 128.34,
+    "ppl_delta": 37.62,
+    "final_loss": 4.9833,
+    "log": [
+      {
+        "step": 4,
+        "loss": 5.276018857955933,
+        "hex_idx": 1
+      },
+      {
+        "step": 8,
+        "loss": 5.150895476341248,
+        "hex_idx": 29
+      },
+      {
+        "step": 12,
+        "loss": 5.083526968955994,
+        "hex_idx": 23
+      },
+      {
+        "step": 16,
+        "loss": 5.023882627487183,
+        "hex_idx": 29
+      },
+      {
+        "step": 20,
+        "loss": 4.983280444145203,
+        "hex_idx": 43
+      }
+    ]
+  },
+  {
+    "cycle": 1,
+    "cluster": "Training",
+    "domain": "AERO",
+    "alpha": 0,
+    "e2_phase": 3,
+    "texts": 60,
+    "steps": 20,
+    "lr": 0.0002,
+    "ppl_before": 205.34,
+    "ppl_after": 127.87,
+    "ppl_delta": 37.73,
+    "final_loss": 4.9572,
+    "log": [
+      {
+        "step": 4,
+        "loss": 5.117558717727661,
+        "hex_idx": 21
+      },
+      {
+        "step": 8,
+        "loss": 5.068741202354431,
+        "hex_idx": 29
+      },
+      {
+        "step": 12,
+        "loss": 5.025260766347249,
+        "hex_idx": 29
+      },
+      {
+        "step": 16,
+        "loss": 4.9794371128082275,
+        "hex_idx": 29
+      },
+      {
+        "step": 20,
+        "loss": 4.9571595907211305,
+        "hex_idx": 29
+      }
+    ]
+  },
+  {
+    "cycle": 1,
+    "cluster": "Self",
+    "domain": "METHOD",
+    "alpha": 0,
+    "e2_phase": 3,
+    "texts": 25,
+    "steps": 20,
+    "lr": 0.0002,
+    "ppl_before": 146.12,
+    "ppl_after": 110.85,
+    "ppl_delta": 24.14,
+    "final_loss": 4.8389,
+    "log": [
+      {
+        "step": 4,
+        "loss": 4.820669770240784,
+        "hex_idx": 41
+      },
+      {
+        "step": 8,
+        "loss": 4.874188542366028,
+        "hex_idx": 43
+      },
+      {
+        "step": 12,
+        "loss": 4.81213625272115,
+        "hex_idx": 41
+      },
+      {
+        "step": 16,
+        "loss": 4.805909156799316,
+        "hex_idx": 41
+      },
+      {
+        "step": 20,
+        "loss": 4.838865733146667,
+        "hex_idx": 41
+      }
+    ]
+  },
+  {
+    "cycle": 1,
+    "cluster": "Models",
+    "domain": "PYRO",
+    "alpha": 2,
+    "e2_phase": 4,
+    "texts": 25,
+    "steps": 20,
+    "lr": 0.0001,
+    "ppl_before": 135.2,
+    "ppl_after": 111.65,
+    "ppl_delta": 17.42,
+    "final_loss": 4.7558,
+    "log": [
+      {
+        "step": 4,
+        "loss": 4.913679599761963,
+        "hex_idx": 21
+      },
+      {
+        "step": 8,
+        "loss": 4.8923057317733765,
+        "hex_idx": 29
+      },
+      {
+        "step": 12,
+        "loss": 4.8228529294331866,
+        "hex_idx": 29
+      },
+      {
+        "step": 16,
+        "loss": 4.786941349506378,
+        "hex_idx": 29
+      },
+      {
+        "step": 20,
+        "loss": 4.755826950073242,
+        "hex_idx": 29
+      }
+    ]
+  },
+  {
+    "cycle": 1,
+    "cluster": "Portal",
+    "domain": "COSMO",
+    "alpha": 2,
+    "e2_phase": 4,
+    "texts": 14,
+    "steps": 20,
+    "lr": 0.0001,
+    "ppl_before": 119.68,
+    "ppl_after": 108.11,
+    "ppl_delta": 9.67,
+    "final_loss": 4.6069,
+    "log": [
+      {
+        "step": 4,
+        "loss": 4.502803325653076,
+        "hex_idx": 29
+      },
+      {
+        "step": 8,
+        "loss": 4.564916908740997,
+        "hex_idx": 29
+      },
+      {
+        "step": 12,
+        "loss": 4.585785071055095,
+        "hex_idx": 29
+      },
+      {
+        "step": 16,
+        "loss": 4.631905227899551,
+        "hex_idx": 29
+      },
+      {
+        "step": 20,
+        "loss": 4.606932687759399,
+        "hex_idx": 37
+      }
+    ]
+  },
+  {
+    "cycle": 1,
+    "cluster": "Theory",
+    "domain": "NOOS",
+    "alpha": 4,
+    "e2_phase": 5,
+    "texts": 18,
+    "steps": 20,
+    "lr": 5e-05,
+    "ppl_before": 117.03,
+    "ppl_after": 106.95,
+    "ppl_delta": 8.61,
+    "final_loss": 4.6922,
+    "log": [
+      {
+        "step": 4,
+        "loss": 4.727581024169922,
+        "hex_idx": 41
+      },
+      {
+        "step": 8,
+        "loss": 4.707944452762604,
+        "hex_idx": 41
+      },
+      {
+        "step": 12,
+        "loss": 4.693345904350281,
+        "hex_idx": 41
+      },
+      {
+        "step": 16,
+        "loss": 4.693303644657135,
+        "hex_idx": 41
+      },
+      {
+        "step": 20,
+        "loss": 4.69215157032013,
+        "hex_idx": 41
+      }
+    ]
+  }
+]
