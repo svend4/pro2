@@ -23,6 +23,13 @@
       "format": "meta",
       "compatibility": 1,
       "passport": "passports/meta.md"
+    },
+    {
+      "repo": "svend4/data2",
+      "adapter": "data2",
+      "format": "data2",
+      "compatibility": 1,
+      "passport": "passports/data2.md"
     }
   ],
   "consensus_threshold": 1.0,

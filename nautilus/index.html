@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>⬡ Nautilus Portal</title>
+<title>⬡ Nautilus Portal — info1 · pro2 · meta · data2</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0 }
   body { font-family: monospace; background: #0d0d0d; color: #d0d0d0; min-height: 100vh }
@@ -83,16 +83,18 @@
   .c-info1 { color: #4a90d9 }
   .c-pro2  { color: #7b68ee }
   .c-meta  { color: #e8a838 }
+  .c-data2 { color: #5cb85c }
   .b-info1 { border-color: #4a90d9 }
   .b-pro2  { border-color: #7b68ee }
   .b-meta  { border-color: #e8a838 }
+  .b-data2 { border-color: #5cb85c }
 </style>
 </head>
 <body>
 
 <div class="header">
   <h1>⬡ Nautilus Portal</h1>
-  <div class="sub">Единая точка входа · info1 · pro2 · meta</div>
+  <div class="sub">Единая точка входа · info1 · pro2 · meta · data2</div>
 </div>
 
 <div class="search-bar">
@@ -120,6 +122,11 @@
       <div class="adapter-name c-meta">meta</div>
       <div class="adapter-desc">svend4/meta<br>256 CA-правил · гексаграммы<br>Символьная верификация</div>
       <div class="adapter-badge c-meta b-meta">.meta</div>
+    </div>
+    <div class="adapter-card">
+      <div class="adapter-name c-data2">data2</div>
+      <div class="adapter-desc">svend4/data2<br>310+ томов ЕТД · 12 архетипов<br>Крюков · 7 аксиом · LCI</div>
+      <div class="adapter-badge c-data2 b-data2">.data2</div>
     </div>
   </div>
 
@@ -164,6 +171,20 @@ const STATIC_DATA = {
       content: "TSP-порядок обхода концептов. Адаптивный выбор следующего концепта по пробелам знаний.",
       meta: { algo: "TSP" }, links: ["info1:cards", "meta:hexagram:63"] },
   ],
+  data2: [
+    { id: "data2:etd", title: "ЕТД — Единая Теория Движения", format: "volume",
+      content: "12 архетипов движения × 7 аксиом Крюкова. 310+ томов в 5 сериях. LCI как метрика замкнутости системы.",
+      meta: { type: "overview", volumes: "1-310" }, links: ["info1:methodology", "meta:hexagram:50", "pro2:bidir"] },
+    { id: "data2:scarab", title: "Scarab Algorithm (фигура-8)", format: "volume",
+      content: "scarab_algorithm.py — обход Q6-пространства по траектории фигуры-8. Прямой мост к семантическому пространству pro2.",
+      meta: { type: "algorithm", file: "scarab_algorithm.py" }, links: ["pro2:q6", "meta:hexagram:63"] },
+    { id: "data2:arch:три_сферы", title: "Архетип: Три Сферы (МВС/СВС/БВС)", format: "archetype",
+      content: "МВС (малая) / СВС (средняя) / БВС (большая) — вложенные сферы. Резонанс трёх сфер → максимальная эффективность.",
+      meta: { archetype: "три сферы", ca_class: "II", alpha: -1 }, links: ["meta:ca_class:II", "info1:alpha:-1"] },
+    { id: "data2:arch:резонанс", title: "Архетип: Резонанс (ω_МВС = ω_СВС = ω_БВС)", format: "archetype",
+      content: "Когда три сферы работают в унисон — система достигает максимальной эффективности. CA-класс IV.",
+      meta: { archetype: "резонанс", ca_class: "IV", q6: "110011", alpha: 3 }, links: ["meta:ca_class:IV", "pro2:q6:110011"] },
+  ],
   meta: [
     { id: "meta:hexagram:50", title: "[50] 鼎 Котёл", format: "rule",
       content: "Трансформация через огонь. CA-класс IV (граница хаос/порядок).",
@@ -180,7 +201,7 @@ const STATIC_DATA = {
   ],
 };
 
-const COLORS = { info1: "#4a90d9", pro2: "#7b68ee", meta: "#e8a838" };
+const COLORS = { info1: "#4a90d9", pro2: "#7b68ee", meta: "#e8a838", data2: "#5cb85c" };
 
 function search() {
   const q = document.getElementById("q").value.trim().toLowerCase() || "knowledge";
@@ -191,6 +212,7 @@ function search() {
     ...STATIC_DATA.info1,
     ...STATIC_DATA.pro2,
     ...STATIC_DATA.meta,
+    ...STATIC_DATA.data2,
   ];
 
   // строим межрепозиторные связи
@@ -210,7 +232,7 @@ function search() {
 
   // консенсус
   const present = new Set(entries.map(e => e.id.split(":")[0]));
-  const all = new Set(["info1", "pro2", "meta"]);
+  const all = new Set(["info1", "pro2", "meta", "data2"]);
   const coverage = present.size / all.size;
 
   renderResults(entries, crossLinks, coverage, present, q);

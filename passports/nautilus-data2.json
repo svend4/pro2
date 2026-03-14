@@ -1,0 +1,36 @@
+{
+  "name": "data2",
+  "version": "1.0",
+  "format": "data2",
+  "description": "Корпус 310+ томов ЕТД (Единая Теория Движения) В.В. Крюкова. 12 архетипов, 7 аксиом, LCI-индекс.",
+  "native_unit": "Том (Markdown с номером серии и доменом)",
+  "abstraction_model": "series_levels",
+  "portal_adapter": "portal.py::Data2Adapter",
+  "entry_points": {
+    "series_i":   "SERIES_INDEX.md",
+    "series_ii":  "SERIES_II_INDEX.md",
+    "training":   "TSB_Annual_Training_Plan.md",
+    "algorithm":  "scarab_algorithm.py"
+  },
+  "series_map": {
+    "I":   { "volumes": "1-20",   "topic": "Базовые архетипы",           "alpha": -1 },
+    "II":  { "volumes": "21-40",  "topic": "Прикладная ЕТД",             "alpha":  0 },
+    "III": { "volumes": "41-80",  "topic": "Математика и физика",        "alpha": +1 },
+    "IV":  { "volumes": "81-150", "topic": "Четвёртая Сфера / Роботика", "alpha": +2 },
+    "V+":  { "volumes": "150-310","topic": "Кватернионы, топология, синтез", "alpha": +3 }
+  },
+  "archetypes_12": [
+    "Петля", "Три Сферы", "Закон нечётности", "7±2",
+    "Шахматка", "ОБД", "Три курса", "Резонанс",
+    "LCI", "Три такта", "Ката", "Синтез"
+  ],
+  "bridges": {
+    "pro2": "scarab_algorithm.py → Q6-траектория (фигура-8)",
+    "info1": "Серия (I→V) → α-уровень (-1..+3)",
+    "meta": "Архетип → CA-класс (Петля→II, Резонанс→IV)"
+  },
+  "nautilus_compatibility": 1,
+  "tags": ["ETD", "kryukov", "archetypes", "movement", "corpus", "quaternion", "TSB"],
+  "passport": "PASSPORT.md",
+  "install_instructions": "Скопировать этот файл как nautilus.json в корень svend4/data2"
+}
