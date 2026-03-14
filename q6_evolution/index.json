@@ -23,6 +23,18 @@
       "timestamp": "2026-03-14T17:57:57",
       "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
       "n_concepts": 25
+    },
+    {
+      "label": "self_cycle_1_after",
+      "timestamp": "2026-03-14T18:08:14",
+      "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
+      "n_concepts": 25
+    },
+    {
+      "label": "self_cycle_2_before",
+      "timestamp": "2026-03-14T18:11:11",
+      "checkpoint": "/home/user/pro2/checkpoint_e2_improved.pt",
+      "n_concepts": 25
     }
   ]
 }
