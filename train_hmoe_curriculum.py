@@ -387,6 +387,8 @@ def main():
                         help="Куда сохранять чекпоинт (default: hmoe_curriculum.pt)")
     parser.add_argument("--no-corpus",      action="store_true",
                         help="Не использовать RepoCorpusLoader (только синтетические тексты)")
+    parser.add_argument("--force",          action="store_true",
+                        help="Принудительно запустить фазу даже если уже пройдена")
     parser.add_argument("--log_every",      type=int, default=25,
                         help="Логировать каждые N шагов (default: 25)")
     args = parser.parse_args()
@@ -472,7 +474,7 @@ def main():
     results: Dict[int, Dict[str, float]] = {}
 
     for phase_cfg in phases_to_run:
-        if phase_cfg.phase < start_phase:
+        if phase_cfg.phase < start_phase and not args.force:
             print(f"  Пропускаем фазу {phase_cfg.phase} (уже пройдена)")
             continue
 

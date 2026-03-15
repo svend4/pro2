@@ -261,7 +261,7 @@ def _make_recommendations(d: DiagResult, ckpt_path: str) -> List[Recommendation]
     if abs(w_a - w_b) > 0.15:
         dominant = "ABSTRACT" if w_a > w_b else "CONCRETE"
         weak     = "CONCRETE" if w_a > w_b else "ABSTRACT"
-        clust    = ["Models", "Theory"] if dominant == "ABSTRACT" else ["Scripts", "Data"]
+        clust    = ["Models", "Theory"] if weak == "ABSTRACT" else ["Scripts", "Data"]
         phase    = 3 if weak == "ABSTRACT" else 1
         recs.append(Recommendation(
             priority = 1,
