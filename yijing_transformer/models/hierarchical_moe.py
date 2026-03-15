@@ -1,29 +1,41 @@
 """
 hierarchical_moe.py — Иерархическая Mixture-of-Experts архитектура.
 
-Схема:
+Полная 4-уровневая схема:
     Input
       │
       ▼
-    [Global Router]   ← Q6-сигнал → группа экспертов (NOOS, AERO, GEO...)
+    [MultiScaleGlobalRouter]  ← Matryoshka Q2→Q3→Q6 → группа (ABSTRACT/DYNAMIC/CONCRETE)
       │
-      ├─► [Group Router A]  ──► MicroExpert_Theory
-      │                     ──► MicroExpert_Self
-      │                     ──► MicroExpert_Models
+      ├─► [GroupRouter A]  ──► MicroExpert_Theory
+      │                    ──► MicroExpert_Models
       │
-      ├─► [Group Router B]  ──► MicroExpert_Scripts
-      │                     ──► MicroExpert_Math
+      ├─► [GroupRouter B]  ──► MicroExpert_Self
+      │                    ──► MicroExpert_Training
       │
-      └─► [Bridge Experts]  ← соединяют группы (межгрупповые мосты)
-           ├── Bridge_NOOS↔AERO
-           ├── Bridge_GEO↔HYDRO
-           └── Bridge_Universal
+      ├─► [GroupRouter C]  ──► MicroExpert_Scripts
+      │                    ──► MicroExpert_Data
+      │
+      ├─► [BridgeExperts]   ← синтез межгрупповых связей
+      │    ├── Bridge_ABSTRACT↔DYNAMIC
+      │    ├── Bridge_DYNAMIC↔CONCRETE
+      │    └── Bridge_ABSTRACT↔CONCRETE
+      │
+      └─► [Q6ExpertBank]   ← 4-й уровень: 64 Q6-эксперта (векторизованный)
+           (активируется только для топ-1 группы, use_hex_tier=True)
+
+Иерархия роутинга (Matryoshka):
+    Q2 (4 вершины)  → выбор группы (ABSTRACT / DYNAMIC / CONCRETE)
+    Q3 (8 вершин)   → уточнение доменов внутри группы
+    Q6 (64 вершины) → точный Q6-сигнал для HexagramMoE 4-го уровня
 
 Обучение поэтапно:
     Stage 1: только MicroExperts (по одному на кластер, остальные заморожены)
     Stage 2: GroupRouters + MicroExperts
-    Stage 3: GlobalRouter + всё вместе
+    Stage 3: MultiScaleGlobalRouter + всё вместе
     Stage 4: BridgeExperts (межгрупповые мосты)
+    Stage 5: JointFinetune (всё вместе)
+    Stage 6: Q6ExpertBank (4-й уровень, опционально)
 """
 
 from __future__ import annotations
@@ -85,6 +97,70 @@ def _make_hexagrams() -> torch.Tensor:
     import itertools
     verts = list(itertools.product([-1.0, 1.0], repeat=6))
     return torch.tensor(verts, dtype=torch.float32)  # (64, 6)
+
+
+def _make_sub_hypercube(dims: int) -> torch.Tensor:
+    import itertools
+    verts = list(itertools.product([-1.0, 1.0], repeat=dims))
+    return torch.tensor(verts, dtype=torch.float32)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Q6ExpertBank — 4-й уровень: 64 Q6-эксперта (векторизованный bank)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class Q6ExpertBank(nn.Module):
+    """Векторизованный банк 64 экспертов — по одному на каждую гексаграмму.
+
+    Эксперт i вычисляет: FFN_i(x) = W_out[i] · SiLU(W_in[i] · x + b_in[i])
+    Роутинг через hex_weights (B, T, 64) из MultiScaleGlobalRouter.
+    """
+
+    def __init__(self, d_model: int, d_ff: int, top_k: int = 4):
+        super().__init__()
+        self.top_k = top_k
+        # Векторизованные банки: (64, d_ff, d_model)
+        self.W_in   = nn.Parameter(torch.randn(64, d_ff, d_model) * (d_model ** -0.5))
+        self.b_in   = nn.Parameter(torch.zeros(64, d_ff))
+        self.W_out  = nn.Parameter(torch.randn(64, d_model, d_ff) * (d_ff ** -0.5))
+        self.b_out  = nn.Parameter(torch.zeros(64, d_model))
+        self.norm   = nn.LayerNorm(d_model)
+
+    def forward(self, x: torch.Tensor,
+                hex_weights: torch.Tensor) -> torch.Tensor:
+        """
+        x:           (B, T, d_model)
+        hex_weights: (B, T, 64)  — из MultiScaleGlobalRouter
+        Returns:     (B, T, d_model)
+        """
+        B, T, D = x.shape
+        x_n = self.norm(x)
+
+        top_w, top_idx = hex_weights.topk(self.top_k, dim=-1)     # (B, T, K)
+        top_w = top_w / (top_w.sum(dim=-1, keepdim=True) + 1e-8)  # ренорм
+
+        x_flat  = x_n.view(B * T, D)
+        output  = torch.zeros_like(x_flat)
+
+        for k in range(self.top_k):
+            idx_k  = top_idx[:, :, k].reshape(B * T)
+            w_k    = top_w[:, :, k].reshape(B * T, 1)
+            W_in_k = self.W_in[idx_k]    # (B*T, d_ff, D)
+            b_in_k = self.b_in[idx_k]    # (B*T, d_ff)
+            W_out_k = self.W_out[idx_k]  # (B*T, D, d_ff)
+            b_out_k = self.b_out[idx_k]  # (B*T, D)
+
+            h    = torch.bmm(W_in_k, x_flat.unsqueeze(-1)).squeeze(-1) + b_in_k
+            h    = F.silu(h)
+            out_k = torch.bmm(W_out_k, h.unsqueeze(-1)).squeeze(-1) + b_out_k
+            output = output + w_k * out_k
+
+        return output.view(B, T, D)
+
+    def load_balance_loss(self, hex_weights: torch.Tensor) -> torch.Tensor:
+        """Вспомогательный loss для равномерной нагрузки экспертов."""
+        mean_w = hex_weights.mean(dim=[0, 1])             # (64,)
+        return (mean_w * torch.log(mean_w + 1e-8)).sum().neg()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -185,13 +261,12 @@ class GroupRouter(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# GlobalRouter — роутер верхнего уровня (группа → group_weights)
+# GlobalRouter (legacy, оставлен для совместимости)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class GlobalRouter(nn.Module):
-    """Q6-based роутер верхнего уровня: определяет веса по группам.
-
-    Использует гексаграммные якоря доменов для мягкого routing.
+    """Q6-based роутер верхнего уровня (одномасштабный).
+    Оставлен для обратной совместимости. Новый код использует MultiScaleGlobalRouter.
     """
 
     def __init__(self, d_model: int, group_names: List[str]):
@@ -203,46 +278,170 @@ class GlobalRouter(nn.Module):
 
         self.q6_proj  = nn.Linear(d_model, 6, bias=False)
         self.log_temp = nn.Parameter(torch.log(torch.tensor(0.5)))
-        self.group_proj = nn.Linear(6, n_groups, bias=True)
-        self.norm = nn.LayerNorm(d_model)
+        self.norm     = nn.LayerNorm(d_model)
 
-        # Q6 якоря для каждой группы (среднее по доменам группы)
         group_anchors = []
         for g in group_names:
             domain_vecs = torch.stack([
                 hexagrams[DOMAIN_Q6_IDX[d]] for d in DOMAIN_GROUPS[g]
             ])
             group_anchors.append(domain_vecs.mean(0))
-        self.register_buffer('group_anchors',
-                             torch.stack(group_anchors))  # (n_groups, 6)
+        self.register_buffer('group_anchors', torch.stack(group_anchors))
+
+    @property
+    def temperature(self) -> torch.Tensor:
+        return self.log_temp.exp().clamp(0.1, 5.0)
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        h        = self.norm(x)
+        soft_bits = torch.tanh(self.q6_proj(h))
+        sim       = soft_bits @ self.hexagrams.T
+        hex_w     = F.softmax(sim / self.temperature, dim=-1)
+        soft_hex  = hex_w @ self.hexagrams
+        group_scores  = soft_hex @ self.group_anchors.T
+        group_weights = F.softmax(group_scores, dim=-1)
+        mean_w  = group_weights.mean(dim=(0, 1))
+        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum().neg()
+        return group_weights, lb_loss
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MultiScaleGlobalRouter — Matryoshka Q2→Q3→Q6 роутер
+# ──────────────────────────────────────────────────────────────────────────────
+
+class MultiScaleGlobalRouter(nn.Module):
+    """Matryoshka роутер: Q2→Q3→Q6 три масштаба, обучаемое смешивание.
+
+    Иерархия:
+        Q2 (4 вершины, 2 бита)  → грубый выбор группы (3 группы из 4 Q2-вершин)
+        Q3 (8 вершин,  3 бита)  → средний масштаб, уточнение доменов
+        Q6 (64 вершины, 6 бит)  → точный Q6-сигнал + hex_weights для HexMoE
+
+    Смешивание:
+        group_weights = softmax(w2·score_q2 + w3·score_q3 + w6·score_q6)
+        hex_weights   = softmax(Q6-сходство / T)  — для Q6ExpertBank
+
+    Q2→группа маппинг:
+        Q2 вершина (-1,-1) → ABSTRACT  (отрицание×2 = углублённость)
+        Q2 вершина (-1,+1) → DYNAMIC   (контраст = движение)
+        Q2 вершина (+1,-1) → CONCRETE  (контраст = осязаемость)
+        Q2 вершина (+1,+1) → среднее ABSTRACT+CONCRETE (оба позитивны)
+    """
+
+    # Маппинг Q2-вершин на группы (вершина 0..3 → group_idx)
+    _Q2_TO_GROUP: List[int] = [0, 1, 2, 0]  # (−−)→ABS, (−+)→DYN, (+−)→CON, (++)→ABS
+
+    def __init__(self, d_model: int, group_names: List[str]):
+        super().__init__()
+        hexagrams = _make_hexagrams()
+        self.register_buffer('hexagrams', hexagrams)          # (64, 6)
+        self.register_buffer('q2_verts', _make_sub_hypercube(2))  # (4, 2)
+        self.register_buffer('q3_verts', _make_sub_hypercube(3))  # (8, 3)
+        self.group_names = group_names
+        n_groups = len(group_names)
+
+        # Масштаб-специфичные проекции
+        self.norm     = nn.LayerNorm(d_model)
+        self.proj_q2  = nn.Linear(d_model, 2, bias=False)
+        self.proj_q3  = nn.Linear(d_model, 3, bias=False)
+        self.proj_q6  = nn.Linear(d_model, 6, bias=False)
+        self.log_temp = nn.Parameter(torch.log(torch.tensor(0.5)))
+
+        # Обучаемые веса смешивания масштабов (log-domain для устойчивости)
+        self.log_scale_mix = nn.Parameter(torch.zeros(3))   # [w_Q2, w_Q3, w_Q6]
+
+        # Q2 → group matrix (фиксированный маппинг, не обучаемый)
+        q2_to_group = torch.zeros(4, n_groups)
+        for v_idx, g_idx in enumerate(self._Q2_TO_GROUP):
+            if g_idx < n_groups:
+                q2_to_group[v_idx, g_idx] = 1.0
+        self.register_buffer('q2_to_group', q2_to_group)    # (4, n_groups)
+
+        # Q3 якоря: каждая из 8 Q3-вершин → ближайший домен → группа
+        q3_to_group = self._build_q3_anchors(n_groups)
+        self.register_buffer('q3_to_group', q3_to_group)    # (8, n_groups)
+
+        # Q6 якоря для групп (среднее по доменам группы)
+        group_anchors = []
+        for g in group_names:
+            vecs = torch.stack([hexagrams[DOMAIN_Q6_IDX[d]] for d in DOMAIN_GROUPS[g]])
+            group_anchors.append(vecs.mean(0))
+        self.register_buffer('group_anchors', torch.stack(group_anchors))  # (n_groups, 6)
+
+    @staticmethod
+    def _build_q3_anchors(n_groups: int) -> torch.Tensor:
+        """Q3 (8 вершин, 3 бита) → soft group matrix (8, n_groups).
+
+        Бит 0: ось ABSTRACT/CONCRETE (знание ↔ действие)
+        Бит 1: ось DYNAMIC/STATIC   (изменение ↔ структура)
+        Бит 2: ось уточнения (степень специализации)
+
+        Маппинг:
+          bit0=−1 → тяготение к ABSTRACT
+          bit1=−1 → тяготение к DYNAMIC
+          иначе  → тяготение к CONCRETE
+        """
+        q3_map = torch.zeros(8, n_groups)
+        for i in range(8):
+            b0 = 1 if (i >> 2 & 1) == 0 else -1
+            b1 = 1 if (i >> 1 & 1) == 0 else -1
+            if b0 == -1:
+                q3_map[i, 0 % n_groups] += 1.0  # ABSTRACT
+            if b1 == -1:
+                q3_map[i, 1 % n_groups] += 1.0  # DYNAMIC
+            q3_map[i, 2 % n_groups] += 0.5      # CONCRETE всегда немного
+        # Нормализуем строки
+        row_sum = q3_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
+        return q3_map / row_sum
 
     @property
     def temperature(self) -> torch.Tensor:
         return self.log_temp.exp().clamp(0.1, 5.0)
 
     def forward(self, x: torch.Tensor
-                ) -> Tuple[torch.Tensor, torch.Tensor]:
+                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-            group_weights: (B, T, n_groups) — softmax веса групп
+            group_weights: (B, T, n_groups)  — итоговые веса групп
+            hex_weights:   (B, T, 64)         — Q6 hex веса для Q6ExpertBank
             lb_loss:       scalar
         """
-        h = self.norm(x)
-        soft_bits = torch.tanh(self.q6_proj(h))                        # (B, T, 6)
+        h = self.norm(x)                                               # (B, T, d)
+        T_inv = self.temperature
 
-        # Мягкое Q6 присваивание через сходство с гексаграммами
-        sim = soft_bits @ self.hexagrams.T                              # (B, T, 64)
-        hex_w = F.softmax(sim / self.temperature, dim=-1)               # (B, T, 64)
-        soft_hex = hex_w @ self.hexagrams                               # (B, T, 6)
+        # ── Q2 масштаб ──────────────────────────────────────────────────────
+        soft_q2  = torch.tanh(self.proj_q2(h))                        # (B, T, 2)
+        sim_q2   = soft_q2 @ self.q2_verts.T                          # (B, T, 4)
+        w_q2     = F.softmax(sim_q2 / T_inv, dim=-1)                  # (B, T, 4)
+        score_q2 = w_q2 @ self.q2_to_group                            # (B, T, n_groups)
 
-        # Близость к якорям групп
-        group_scores  = soft_hex @ self.group_anchors.T                 # (B, T, n_groups)
-        group_weights = F.softmax(group_scores, dim=-1)
+        # ── Q3 масштаб ──────────────────────────────────────────────────────
+        soft_q3  = torch.tanh(self.proj_q3(h))                        # (B, T, 3)
+        sim_q3   = soft_q3 @ self.q3_verts.T                          # (B, T, 8)
+        w_q3     = F.softmax(sim_q3 / T_inv, dim=-1)                  # (B, T, 8)
+        score_q3 = w_q3 @ self.q3_to_group                            # (B, T, n_groups)
 
-        mean_w = group_weights.mean(dim=(0, 1))
-        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum().neg()
+        # ── Q6 масштаб ──────────────────────────────────────────────────────
+        soft_q6  = torch.tanh(self.proj_q6(h))                        # (B, T, 6)
+        sim_q6   = soft_q6 @ self.hexagrams.T                         # (B, T, 64)
+        hex_weights = F.softmax(sim_q6 / T_inv, dim=-1)               # (B, T, 64)
+        soft_hex    = hex_weights @ self.hexagrams                     # (B, T, 6)
+        score_q6    = soft_hex @ self.group_anchors.T                  # (B, T, n_groups)
 
-        return group_weights, lb_loss
+        # ── Смешивание масштабов ─────────────────────────────────────────────
+        scale_mix    = F.softmax(self.log_scale_mix, dim=0)            # (3,)
+        mixed_scores = (scale_mix[0] * score_q2 +
+                        scale_mix[1] * score_q3 +
+                        scale_mix[2] * score_q6)
+        group_weights = F.softmax(mixed_scores, dim=-1)                # (B, T, n_groups)
+
+        # ── Load-balance loss ────────────────────────────────────────────────
+        mean_gw  = group_weights.mean(dim=(0, 1))
+        mean_hex = hex_weights.mean(dim=(0, 1))
+        lb_loss  = ((mean_gw  * torch.log(mean_gw  + 1e-8)).sum().neg() +
+                    (mean_hex * torch.log(mean_hex + 1e-8)).sum().neg() * 0.1)
+
+        return group_weights, hex_weights, lb_loss
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -251,24 +450,30 @@ class GlobalRouter(nn.Module):
 
 @dataclass
 class HMoEConfig:
-    d_model:        int   = 128
-    expert_expansion: int = 2      # expansion factor внутри MicroExpert
-    top_k_experts:  int   = 2      # top-k внутри группы
-    lb_loss_weight: float = 0.01   # вес load-balancing loss
-    bridge_weight:  float = 0.5    # вес BridgeExpert выходов
+    d_model:            int   = 128
+    expert_expansion:   int   = 2      # expansion factor внутри MicroExpert
+    top_k_experts:      int   = 2      # top-k внутри группы
+    lb_loss_weight:     float = 0.01   # вес load-balancing loss
+    bridge_weight:      float = 0.5    # вес BridgeExpert выходов
+    use_multiscale:     bool  = True   # MultiScaleGlobalRouter vs GlobalRouter
+    use_hex_tier:       bool  = False  # 4-й уровень: Q6ExpertBank (64 эксперта)
+    hex_tier_top_k:     int   = 4      # top-k для Q6ExpertBank
+    hex_tier_weight:    float = 0.3    # вес 4-го уровня в финальном выходе
+    hex_tier_d_ff_mult: int   = 1      # d_ff = d_model * hex_tier_d_ff_mult
 
 
 class HierarchicalMoEFFN(nn.Module):
-    """Иерархический MoE FFN.
+    """Иерархический MoE FFN с 4-уровневой архитектурой.
 
-    Заменяет единый _ffn(x) в Variant3Block.
-
-    Поток:
-        x → GlobalRouter → group_weights (3 группы)
-          → для каждой группы: GroupRouter → top-k MicroExperts → взвешенная сумма
-          → группы взвешенно суммируются по group_weights
-          → BridgeExperts синтезируют межгрупповые связи
-          → финальный выход = group_out + bridge_contribution
+    Поток (полный, use_hex_tier=True):
+        x → MultiScaleGlobalRouter → group_weights(3), hex_weights(64)
+          ↓
+          ├─ GroupRouter[g] → top-k MicroExperts → group_out[g]  (уровни 2-3)
+          ├─ BridgeExperts  → bridge_contribution               (уровень 3.5)
+          └─ Q6ExpertBank   → hex_out (64 эксперта по hex_weights) (уровень 4)
+          ↓
+        combined = Σ group_out·gw + bridge + hex_tier_weight·hex_out
+        out = out_proj(out_norm(combined))
     """
 
     def __init__(self, cfg: HMoEConfig):
@@ -277,32 +482,38 @@ class HierarchicalMoEFFN(nn.Module):
         d = cfg.d_model
         group_names = list(DOMAIN_GROUPS.keys())  # ["ABSTRACT", "DYNAMIC", "CONCRETE"]
 
-        # Global router
-        self.global_router = GlobalRouter(d, group_names)
+        # Уровень 1: Global router (MultiScale или legacy)
+        if cfg.use_multiscale:
+            self.global_router = MultiScaleGlobalRouter(d, group_names)
+        else:
+            self.global_router = GlobalRouter(d, group_names)
 
-        # MicroExperts: один на каждый кластер/домен
+        # Уровень 2-3: MicroExperts + GroupRouters
         self.micro_experts = nn.ModuleDict({
             cluster: MicroExpert(d, cfg.expert_expansion)
             for cluster in CLUSTER_TO_DOMAIN.keys()
         })
-
-        # Отображение: группа → список имён кластеров
         self.group_to_clusters: Dict[str, List[str]] = {g: [] for g in group_names}
         for cluster, domain in CLUSTER_TO_DOMAIN.items():
-            group = DOMAIN_TO_GROUP[domain]
-            self.group_to_clusters[group].append(cluster)
+            self.group_to_clusters[DOMAIN_TO_GROUP[domain]].append(cluster)
 
-        # Group routers: один на группу
         self.group_routers = nn.ModuleDict({
             g: GroupRouter(d, clusters)
             for g, clusters in self.group_to_clusters.items()
         })
 
-        # Bridge experts: один на каждую пару групп
+        # Уровень 3.5: Bridge experts
         self.bridge_experts = nn.ModuleDict({
             f"{a}_{b}": BridgeExpert(d)
             for a, b in BRIDGE_PAIRS
         })
+
+        # Уровень 4: Q6ExpertBank (64 эксперта, опционально)
+        if cfg.use_hex_tier:
+            d_ff = d * cfg.hex_tier_d_ff_mult
+            self.hex_tier = Q6ExpertBank(d, d_ff, top_k=cfg.hex_tier_top_k)
+        else:
+            self.hex_tier = None
 
         # Финальная проекция
         self.out_norm = nn.LayerNorm(d)
@@ -315,55 +526,60 @@ class HierarchicalMoEFFN(nn.Module):
             x: (B, T, d_model)
         Returns:
             out:  (B, T, d_model)
-            info: dict с lb_losses и routing stats
+            info: routing stats + lb_loss
         """
         B, T, d = x.shape
         group_names = list(DOMAIN_GROUPS.keys())
         info: Dict[str, torch.Tensor] = {}
         total_lb_loss = torch.tensor(0.0, device=x.device)
 
-        # ── 1. Global routing ────────────────────────────────────────────────
-        group_weights, lb_global = self.global_router(x)   # (B, T, 3)
+        # ── 1. MultiScale Global routing ─────────────────────────────────────
+        if self.cfg.use_multiscale:
+            group_weights, hex_weights, lb_global = self.global_router(x)
+            info['hex_weights'] = hex_weights.detach()
+        else:
+            group_weights, lb_global = self.global_router(x)
+            hex_weights = None
         total_lb_loss = total_lb_loss + lb_global
         info['group_weights'] = group_weights.detach()
 
-        # ── 2. Group-level routing + MicroExperts ────────────────────────────
+        # ── 2-3. Group-level routing + MicroExperts ───────────────────────────
         group_outputs: Dict[str, torch.Tensor] = {}
-
         for g_idx, group in enumerate(group_names):
-            clusters = self.group_to_clusters[group]
-            g_router = self.group_routers[group]
-
-            # Роутер внутри группы
+            clusters  = self.group_to_clusters[group]
+            g_router  = self.group_routers[group]
             expert_weights, _, lb_group = g_router(x, top_k=self.cfg.top_k_experts)
             total_lb_loss = total_lb_loss + lb_group
             info[f'lb_{group}'] = lb_group.detach()
 
-            # Взвешенная сумма микро-экспертов группы
             group_out = torch.zeros(B, T, d, device=x.device)
             for e_idx, cluster in enumerate(clusters):
-                w = expert_weights[..., e_idx:e_idx+1]           # (B, T, 1)
-                expert_out = self.micro_experts[cluster](x)       # (B, T, d)
-                group_out = group_out + w * expert_out
+                w          = expert_weights[..., e_idx:e_idx+1]
+                group_out  = group_out + w * self.micro_experts[cluster](x)
 
-            # Масштабируем выход группы глобальным весом
-            gw = group_weights[..., g_idx:g_idx+1]               # (B, T, 1)
+            gw = group_weights[..., g_idx:g_idx+1]
             group_outputs[group] = gw * group_out
 
-        # ── 3. Bridge experts ────────────────────────────────────────────────
+        # ── 3.5. Bridge experts ───────────────────────────────────────────────
         bridge_contribution = torch.zeros(B, T, d, device=x.device)
         bw = self.cfg.bridge_weight / len(BRIDGE_PAIRS)
-
         for a, b in BRIDGE_PAIRS:
-            bridge = self.bridge_experts[f"{a}_{b}"]
             if a in group_outputs and b in group_outputs:
-                bridge_out = bridge(group_outputs[a], group_outputs[b])
+                bridge_out = self.bridge_experts[f"{a}_{b}"](
+                    group_outputs[a], group_outputs[b])
                 bridge_contribution = bridge_contribution + bw * bridge_out
 
-        # ── 4. Финальный выход ───────────────────────────────────────────────
+        # ── 4. Q6ExpertBank (опционально) ────────────────────────────────────
         combined = sum(group_outputs.values()) + bridge_contribution
-        out = self.out_proj(self.out_norm(combined))
+        if self.hex_tier is not None and hex_weights is not None:
+            hex_out   = self.hex_tier(x, hex_weights)
+            lb_hex    = self.hex_tier.load_balance_loss(hex_weights)
+            total_lb_loss = total_lb_loss + lb_hex * 0.1
+            combined  = combined + self.cfg.hex_tier_weight * hex_out
+            info['hex_tier_active'] = torch.tensor(1.0)
 
+        # ── Финальный выход ───────────────────────────────────────────────────
+        out = self.out_proj(self.out_norm(combined))
         info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight
         return out, info
 
@@ -402,6 +618,12 @@ TRAINING_STAGES = {
         "description": "Совместная финальная настройка всех компонентов",
         "unfreeze": [],  # всё разморожено
         "freeze":   [],
+    },
+    6: {
+        "name": "HexTier",
+        "description": "4-й уровень: Q6ExpertBank (64 Q6-эксперта)",
+        "unfreeze": ["hex_tier", "global_router"],
+        "freeze":   ["micro_experts", "group_routers", "bridge_experts"],
     },
 }
 

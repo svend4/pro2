@@ -1087,7 +1087,8 @@ class ConveyorVariant3Block(nn.Module):
 
     def __init__(self, d_model: int, n_heads: int, ffn_mult: int = 4,
                  hamming_lambda: float = 0.1, uncertainty_budget: float = 0.3,
-                 dropout: float = 0.0):
+                 dropout: float = 0.0,
+                 use_hierarchical_moe: bool = False):
         super().__init__()
         from yijing_transformer.models.variant3 import (
             HexagramProjection, BianGuaAttention, TernaryGate,
@@ -1105,14 +1106,22 @@ class ConveyorVariant3Block(nn.Module):
         self.interlingua = ArchetypalInterlingua(d_model, n_sources=2)
         self.analogy = CrossHexagramAnalogy(d_model)
 
-        d_ff = d_model * ffn_mult
-        self.ffn_gate_proj = nn.Linear(d_model, d_ff, bias=False)
-        self.ffn_value_proj = nn.Linear(d_model, d_ff, bias=False)
-        self.ffn_out_proj = nn.Linear(d_ff, d_model, bias=False)
-        self.ffn_drop = nn.Dropout(dropout)
+        self.use_hierarchical_moe = use_hierarchical_moe
+        if use_hierarchical_moe:
+            from yijing_transformer.models.hierarchical_moe import (
+                HierarchicalMoEFFN, HMoEConfig,
+            )
+            self.hmoe = HierarchicalMoEFFN(HMoEConfig(d_model=d_model))
+        else:
+            d_ff = d_model * ffn_mult
+            self.ffn_gate_proj = nn.Linear(d_model, d_ff, bias=False)
+            self.ffn_value_proj = nn.Linear(d_model, d_ff, bias=False)
+            self.ffn_out_proj = nn.Linear(d_ff, d_model, bias=False)
+            self.ffn_drop = nn.Dropout(dropout)
 
         self.record_intermediates = False
         self._last_output: Optional[ConveyorStageOutput] = None
+        self._last_moe_info: Optional[Dict] = None
 
     def _ffn(self, x: Tensor) -> Tensor:
         gate = F.silu(self.ffn_gate_proj(x))
@@ -1151,10 +1160,19 @@ class ConveyorVariant3Block(nn.Module):
         if out:
             out.record("BIANGUA_ANALOGY", x)
 
-        # Stage 6: SWIGLU_FFN
-        x = x + self._ffn(self.norm_ffn(x))
+        # Stage 6: SWIGLU_FFN или HierarchicalMoEFFN
+        if self.use_hierarchical_moe:
+            moe_out, moe_info = self.hmoe(self.norm_ffn(x))
+            x = x + moe_out
+            self._last_moe_info = moe_info
+            stage_label = "HMOE_FFN"
+        else:
+            x = x + self._ffn(self.norm_ffn(x))
+            self._last_moe_info = None
+            stage_label = "SWIGLU_FFN"
+
         if out:
-            out.record("SWIGLU_FFN", x)
+            out.record(stage_label, x)
             self._last_output = out
 
         return x
