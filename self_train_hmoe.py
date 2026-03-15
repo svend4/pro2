@@ -545,7 +545,8 @@ def main():
         ckpt = torch.load(args.checkpoint, map_location="cpu")
         try:
             model.load_state_dict(ckpt["model_state"])
-            phase = ckpt.get("next_phase", "?") - 1
+            raw = ckpt.get("next_phase")
+            phase = (raw - 1) if isinstance(raw, int) else "?"
             print(f"  Загружен чекпоинт: {args.checkpoint}  (после фазы {phase} curriculum)")
         except Exception as e:
             print(f"  ⚠️  Чекпоинт загружен частично: {e}")
