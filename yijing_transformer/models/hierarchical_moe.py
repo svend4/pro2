@@ -190,7 +190,10 @@ class MicroExpert(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class BridgeExpert(nn.Module):
-    """Эксперт-мост: принимает конкатенацию двух групп, синтезирует связь."""
+    """Эксперт-мост: принимает конкатенацию двух групп, синтезирует связь.
+
+    Использует causal self-attention (маска будущего) для авторегрессионных моделей.
+    """
 
     def __init__(self, d_model: int):
         super().__init__()
@@ -204,6 +207,11 @@ class BridgeExpert(nn.Module):
         self.norm_ffn   = nn.LayerNorm(d_model)
         self.gate       = nn.Parameter(torch.tensor(-2.0))  # starts ~0.12
 
+    @staticmethod
+    def _causal_mask(T: int, device: torch.device) -> torch.Tensor:
+        """Верхнетреугольная маска (True = запрещено смотреть)."""
+        return torch.triu(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1)
+
     def forward(self, x_query: torch.Tensor,
                 x_key: torch.Tensor) -> torch.Tensor:
         """
@@ -211,9 +219,12 @@ class BridgeExpert(nn.Module):
         x_key:   (B, T, d) — выход группы B
         returns: (B, T, d) — синтез моста
         """
+        T = x_query.shape[1]
+        mask = self._causal_mask(T, x_query.device)
+
         q  = self.norm_q(x_query)
         kv = self.norm_kv(x_key)
-        attn_out, _ = self.cross_attn(q, kv, kv)
+        attn_out, _ = self.cross_attn(q, kv, kv, attn_mask=mask)
         x = x_query + attn_out
 
         h = self.norm_ffn(x)
@@ -357,9 +368,10 @@ class MultiScaleGlobalRouter(nn.Module):
                 q2_to_group[v_idx, g_idx] = 1.0
         self.register_buffer('q2_to_group', q2_to_group)    # (4, n_groups)
 
-        # Q3 якоря: каждая из 8 Q3-вершин → ближайший домен → группа
-        q3_to_group = self._build_q3_anchors(n_groups)
-        self.register_buffer('q3_to_group', q3_to_group)    # (8, n_groups)
+        # Q3 якоря: обучаемый маппинг 8 Q3-вершин → n_groups
+        # Инициализируем статическим приближением, затем дообучаем
+        q3_init = self._build_q3_anchors(n_groups)
+        self.q3_to_group = nn.Parameter(q3_init)             # (8, n_groups), обучаемый
 
         # Q6 якоря для групп (среднее по доменам группы)
         group_anchors = []
@@ -419,7 +431,9 @@ class MultiScaleGlobalRouter(nn.Module):
         soft_q3  = torch.tanh(self.proj_q3(h))                        # (B, T, 3)
         sim_q3   = soft_q3 @ self.q3_verts.T                          # (B, T, 8)
         w_q3     = F.softmax(sim_q3 / T_inv, dim=-1)                  # (B, T, 8)
-        score_q3 = w_q3 @ self.q3_to_group                            # (B, T, n_groups)
+        # q3_to_group — обучаемый параметр; нормализуем строки на лету
+        q3_map   = F.softmax(self.q3_to_group, dim=-1)                 # (8, n_groups)
+        score_q3 = w_q3 @ q3_map                                       # (B, T, n_groups)
 
         # ── Q6 масштаб ──────────────────────────────────────────────────────
         soft_q6  = torch.tanh(self.proj_q6(h))                        # (B, T, 6)
@@ -544,6 +558,8 @@ class HierarchicalMoEFFN(nn.Module):
         info['group_weights'] = group_weights.detach()
 
         # ── 2-3. Group-level routing + MicroExperts ───────────────────────────
+        # Векторизованный dispatch: вычисляем все эксперты группы, затем
+        # делаем взвешенную сумму — без Python if/mask.
         group_outputs: Dict[str, torch.Tensor] = {}
         for g_idx, group in enumerate(group_names):
             clusters  = self.group_to_clusters[group]
@@ -552,10 +568,12 @@ class HierarchicalMoEFFN(nn.Module):
             total_lb_loss = total_lb_loss + lb_group
             info[f'lb_{group}'] = lb_group.detach()
 
-            group_out = torch.zeros(B, T, d, device=x.device)
-            for e_idx, cluster in enumerate(clusters):
-                w          = expert_weights[..., e_idx:e_idx+1]
-                group_out  = group_out + w * self.micro_experts[cluster](x)
+            # Все эксперты группы → стек (B, T, d, n_experts)
+            expert_outs = torch.stack(
+                [self.micro_experts[c](x) for c in clusters], dim=-1
+            )                                                # (B, T, d, n)
+            # expert_weights: (B, T, n) → (B, T, 1, n) для broadcast
+            group_out = (expert_outs * expert_weights.unsqueeze(-2)).sum(-1)  # (B, T, d)
 
             gw = group_weights[..., g_idx:g_idx+1]
             group_outputs[group] = gw * group_out
