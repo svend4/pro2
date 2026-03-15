@@ -85,12 +85,9 @@ DOMAIN_Q6_IDX: Dict[str, int] = {
     "NOOS":  63,
 }
 
-# Мосты между группами
-BRIDGE_PAIRS: List[Tuple[str, str]] = [
-    ("ABSTRACT", "DYNAMIC"),
-    ("DYNAMIC",  "CONCRETE"),
-    ("ABSTRACT", "CONCRETE"),
-]
+# Примечание: BRIDGE_PAIRS удалены — в топологии восьмёрки используется
+# единственная точка пересечения BidirBridgeExpert(ABSTRACT, CONCRETE),
+# а не три симметричных моста. DYNAMIC — не рядовая группа, а crossing node.
 
 
 def _make_hexagrams() -> torch.Tensor:
@@ -189,47 +186,64 @@ class MicroExpert(nn.Module):
 # BridgeExpert — эксперт-мост между двумя группами
 # ──────────────────────────────────────────────────────────────────────────────
 
-class BridgeExpert(nn.Module):
-    """Эксперт-мост: принимает конкатенацию двух групп, синтезирует связь.
+class BidirBridgeExpert(nn.Module):
+    """Двунаправленный эксперт-мост между двумя петлями восьмёрки.
 
-    Использует causal self-attention (маска будущего) для авторегрессионных моделей.
+    Реализует подлинное двунаправленное обогащение из bidir_train.py:
+        ВПЕРЁД  A→B: group_A запрашивает group_B (специализация → обобщение)
+        НАЗАД   B→A: group_B запрашивает group_A (обобщение → специализация)
+        Синтез: alpha * fwd + (1-alpha) * bwd
+
+    Causal mask гарантирует авторегрессионность в обоих направлениях.
+    Обучаемый alpha = сигмоид(log_alpha) управляет балансом направлений.
     """
 
     def __init__(self, d_model: int):
         super().__init__()
-        self.cross_attn = nn.MultiheadAttention(d_model, num_heads=4,
-                                                 batch_first=True, bias=False)
-        self.ffn_gate   = nn.Linear(d_model, d_model * 2, bias=False)
-        self.ffn_val    = nn.Linear(d_model, d_model * 2, bias=False)
-        self.ffn_out    = nn.Linear(d_model * 2, d_model, bias=False)
-        self.norm_q     = nn.LayerNorm(d_model)
-        self.norm_kv    = nn.LayerNorm(d_model)
-        self.norm_ffn   = nn.LayerNorm(d_model)
-        self.gate       = nn.Parameter(torch.tensor(-2.0))  # starts ~0.12
+        # Два независимых cross-attention: A→B и B→A
+        self.attn_fwd = nn.MultiheadAttention(d_model, num_heads=4,
+                                               batch_first=True, bias=False)
+        self.attn_bwd = nn.MultiheadAttention(d_model, num_heads=4,
+                                               batch_first=True, bias=False)
+        # Нормы для каждого направления
+        self.norm_a   = nn.LayerNorm(d_model)
+        self.norm_b   = nn.LayerNorm(d_model)
+        # SwiGLU синтез после смешивания
+        self.ffn_gate = nn.Linear(d_model, d_model * 2, bias=False)
+        self.ffn_val  = nn.Linear(d_model, d_model * 2, bias=False)
+        self.ffn_out  = nn.Linear(d_model * 2, d_model, bias=False)
+        self.norm_ffn = nn.LayerNorm(d_model)
+        # Обучаемые параметры
+        self.log_alpha = nn.Parameter(torch.zeros(1))   # баланс fwd/bwd, ≈0.5 изначально
+        self.gate      = nn.Parameter(torch.tensor(-2.0))  # общий выходной gate
 
     @staticmethod
     def _causal_mask(T: int, device: torch.device) -> torch.Tensor:
-        """Верхнетреугольная маска (True = запрещено смотреть)."""
         return torch.triu(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1)
 
-    def forward(self, x_query: torch.Tensor,
-                x_key: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_a: torch.Tensor,
+                x_b: torch.Tensor) -> torch.Tensor:
         """
-        x_query: (B, T, d) — выход группы A
-        x_key:   (B, T, d) — выход группы B
-        returns: (B, T, d) — синтез моста
+        x_a: (B, T, d) — петля A (ABSTRACT или левая петля)
+        x_b: (B, T, d) — петля B (CONCRETE или правая петля)
+        returns: (B, T, d) — двунаправленный синтез (точка пересечения)
         """
-        T = x_query.shape[1]
-        mask = self._causal_mask(T, x_query.device)
+        T    = x_a.shape[1]
+        mask = self._causal_mask(T, x_a.device)
+        na, nb = self.norm_a(x_a), self.norm_b(x_b)
 
-        q  = self.norm_q(x_query)
-        kv = self.norm_kv(x_key)
-        attn_out, _ = self.cross_attn(q, kv, kv, attn_mask=mask)
-        x = x_query + attn_out
+        # A→B: ABSTRACT запрашивает CONCRETE (специализация → обобщение)
+        fwd, _ = self.attn_fwd(na, nb, nb, attn_mask=mask)
+        # B→A: CONCRETE запрашивает ABSTRACT (обобщение → специализация)
+        bwd, _ = self.attn_bwd(nb, na, na, attn_mask=mask)
 
-        h = self.norm_ffn(x)
-        x = x + self.ffn_out(F.silu(self.ffn_gate(h)) * self.ffn_val(h))
-        return x * torch.sigmoid(self.gate)
+        alpha = torch.sigmoid(self.log_alpha)          # (1,) ∈ (0, 1)
+        # Crossing point: взвешенный синтез обоих направлений
+        crossed = alpha * (x_a + fwd) + (1.0 - alpha) * (x_b + bwd)
+
+        h = self.norm_ffn(crossed)
+        out = crossed + self.ffn_out(F.silu(self.ffn_gate(h)) * self.ffn_val(h))
+        return out * torch.sigmoid(self.gate)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -237,36 +251,58 @@ class BridgeExpert(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class GroupRouter(nn.Module):
-    """Роутер внутри группы: Q6-сигнал → веса микро-экспертов группы."""
+    """Роутер внутри группы: Q6-сигнал → веса микро-экспертов группы.
 
-    def __init__(self, d_model: int, expert_names: List[str]):
+    Anti-circle (по Крюкову): если один эксперт доминирует streak_limit
+    последовательных шагов подряд — штраф в lb_loss, вынуждая переключение.
+    Аналог флага «один бит не флипается > 4 раз подряд → форс-смена».
+    """
+
+    def __init__(self, d_model: int, expert_names: List[str],
+                 streak_limit: int = 4, anticircle_weight: float = 0.1):
         super().__init__()
         n = len(expert_names)
-        self.expert_names = expert_names
-        self.proj  = nn.Linear(d_model, n, bias=True)
-        self.norm  = nn.LayerNorm(d_model)
-        # load-balance буфер
-        self.register_buffer('_load_counts', torch.zeros(n))
+        self.expert_names     = expert_names
+        self.streak_limit     = streak_limit
+        self.anticircle_weight = anticircle_weight
+
+        self.proj = nn.Linear(d_model, n, bias=True)
+        self.norm = nn.LayerNorm(d_model)
+        # Скользящее среднее нагрузки по экспертам (EMA, не обучаемый)
+        self.register_buffer('_ema_load', torch.ones(n) / n)
 
     def forward(self, x: torch.Tensor, top_k: int = 2
                 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
-            weights:  (B, T, n)  — softmax веса по экспертам
+            weights:  (B, T, n)  — sparse top-k веса
             indices:  (B, T, k)  — top-k индексы
-            lb_loss:  scalar     — load-balancing loss
+            lb_loss:  scalar     — load-balance + anti-circle loss
         """
         logits  = self.proj(self.norm(x))                      # (B, T, n)
         weights = F.softmax(logits, dim=-1)                    # (B, T, n)
 
         k = min(top_k, weights.shape[-1])
-        topk_vals, indices = torch.topk(weights, k, dim=-1)   # (B, T, k)
+        topk_vals, indices = torch.topk(weights, k, dim=-1)
         sparse_w = torch.zeros_like(weights).scatter_(-1, indices, topk_vals)
         sparse_w = sparse_w / (sparse_w.sum(dim=-1, keepdim=True) + 1e-8)
 
-        # Load-balancing loss (следим чтобы эксперты использовались равномерно)
-        mean_w = weights.mean(dim=(0, 1))                      # (n,)
-        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum().neg()  # энтропия
+        # ── Load-balance: энтропия нагрузки ─────────────────────────────────
+        mean_w  = weights.mean(dim=(0, 1))                     # (n,)
+        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum().neg()
+
+        # ── Anti-circle: штраф за доминирование одного эксперта ─────────────
+        # Обновляем EMA нагрузки
+        if self.training:
+            with torch.no_grad():
+                self._ema_load.mul_(0.95).add_(mean_w.detach() * 0.05)
+
+        # Доминирование = макс. нагрузка * streak_limit > 1.0 (т.е. > 1/k * streak_limit)
+        max_load = self._ema_load.max()
+        uniform  = 1.0 / max(len(self.expert_names), 1)
+        # Чем сильнее монополия относительно порога streak_limit, тем больше штраф
+        anticircle_penalty = F.relu(max_load - uniform * self.streak_limit)
+        lb_loss = lb_loss - self.anticircle_weight * anticircle_penalty
 
         return sparse_w, indices, lb_loss
 
@@ -480,13 +516,19 @@ class HierarchicalMoEFFN(nn.Module):
     """Иерархический MoE FFN с 4-уровневой архитектурой.
 
     Поток (полный, use_hex_tier=True):
-        x → MultiScaleGlobalRouter → group_weights(3), hex_weights(64)
+        Топология восьмёрки (Крюков / Алгоритм Скарабея):
+
+        x → GlobalRouter → group_weights
           ↓
-          ├─ GroupRouter[g] → top-k MicroExperts → group_out[g]  (уровни 2-3)
-          ├─ BridgeExperts  → bridge_contribution               (уровень 3.5)
-          └─ Q6ExpertBank   → hex_out (64 эксперта по hex_weights) (уровень 4)
+        Петля A: ABSTRACT эксперты (биты 0-2, NOOS+COSMO)
+        Петля B: CONCRETE эксперты (биты 3-5, GEO+HYDRO)
           ↓
-        combined = Σ group_out·gw + bridge + hex_tier_weight·hex_out
+        BidirBridgeExpert (точка пересечения, экватор Q6):
+          A→B fwd + B→A bwd → x_crossing
+          ↓
+        DYNAMIC эксперты получают x_crossing (AERO+PYRO)
+          ↓
+        combined = A + crossing + DYNAMIC(crossing) + B
         out = out_proj(out_norm(combined))
     """
 
@@ -516,11 +558,11 @@ class HierarchicalMoEFFN(nn.Module):
             for g, clusters in self.group_to_clusters.items()
         })
 
-        # Уровень 3.5: Bridge experts
-        self.bridge_experts = nn.ModuleDict({
-            f"{a}_{b}": BridgeExpert(d)
-            for a, b in BRIDGE_PAIRS
-        })
+        # ── Топология восьмёрки (Крюков / Алгоритм Скарабея) ─────────────────
+        # Один BidirBridgeExpert — точка пересечения петли A и петли B.
+        # Заменяет три симметричных BridgeExperts: DYNAMIC становится
+        # не рядовой группой, а медиатором между ABSTRACT и CONCRETE.
+        self.crossing = BidirBridgeExpert(d)
 
         # Уровень 4: Q6ExpertBank (64 эксперта, опционально)
         if cfg.use_hex_tier:
@@ -533,21 +575,45 @@ class HierarchicalMoEFFN(nn.Module):
         self.out_norm = nn.LayerNorm(d)
         self.out_proj = nn.Linear(d, d, bias=False)
 
+    def _run_group(self, x: torch.Tensor, group: str,
+                   group_weights: torch.Tensor, g_idx: int
+                   ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Вычислить выход одной группы экспертов и её lb_loss."""
+        clusters = self.group_to_clusters[group]
+        expert_weights, _, lb = self.group_routers[group](
+            x, top_k=self.cfg.top_k_experts)
+        expert_outs = torch.stack(
+            [self.micro_experts[c](x) for c in clusters], dim=-1
+        )                                                      # (B, T, d, n)
+        group_out = (expert_outs * expert_weights.unsqueeze(-2)).sum(-1)
+        gw = group_weights[..., g_idx:g_idx+1]
+        return gw * group_out, lb
+
     def forward(self, x: torch.Tensor
                 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """
-        Args:
-            x: (B, T, d_model)
-        Returns:
-            out:  (B, T, d_model)
-            info: routing stats + lb_loss
+        """Поток по топологии восьмёрки (Алгоритм Скарабея / Крюков):
+
+            x → GlobalRouter → group_weights
+              ↓
+            Петля A  : ABSTRACT эксперты (биты 0-2, верхняя полусфера Q6)
+              ↓
+            Петля B  : CONCRETE эксперты (биты 3-5, нижняя полусфера Q6)
+              ↓
+            Пересечение: BidirBridgeExpert(A, B)
+              fwd A→B: специализация → обобщение
+              bwd B→A: обобщение → специализация
+              → x_crossing (обогащённый двунаправленный сигнал)
+              ↓
+            DYNAMIC эксперты получают x_crossing (не исходный x!)
+              эксперты экватора обрабатывают уже скрещённый сигнал
+              ↓
+            Финальный синтез: A + crossing + DYNAMIC(crossing) + B
         """
         B, T, d = x.shape
-        group_names = list(DOMAIN_GROUPS.keys())
         info: Dict[str, torch.Tensor] = {}
         total_lb_loss = torch.tensor(0.0, device=x.device)
 
-        # ── 1. MultiScale Global routing ─────────────────────────────────────
+        # ── 1. GlobalRouter ───────────────────────────────────────────────────
         if self.cfg.use_multiscale:
             group_weights, hex_weights, lb_global = self.global_router(x)
             info['hex_weights'] = hex_weights.detach()
@@ -557,46 +623,43 @@ class HierarchicalMoEFFN(nn.Module):
         total_lb_loss = total_lb_loss + lb_global
         info['group_weights'] = group_weights.detach()
 
-        # ── 2-3. Group-level routing + MicroExperts ───────────────────────────
-        # Векторизованный dispatch: вычисляем все эксперты группы, затем
-        # делаем взвешенную сумму — без Python if/mask.
-        group_outputs: Dict[str, torch.Tensor] = {}
-        for g_idx, group in enumerate(group_names):
-            clusters  = self.group_to_clusters[group]
-            g_router  = self.group_routers[group]
-            expert_weights, _, lb_group = g_router(x, top_k=self.cfg.top_k_experts)
-            total_lb_loss = total_lb_loss + lb_group
-            info[f'lb_{group}'] = lb_group.detach()
+        # ── 2. Петля A: ABSTRACT (верхняя полусфера, биты 0-2) ───────────────
+        out_a, lb_a = self._run_group(x, "ABSTRACT", group_weights, 0)
+        total_lb_loss = total_lb_loss + lb_a
+        info['lb_ABSTRACT'] = lb_a.detach()
 
-            # Все эксперты группы → стек (B, T, d, n_experts)
-            expert_outs = torch.stack(
-                [self.micro_experts[c](x) for c in clusters], dim=-1
-            )                                                # (B, T, d, n)
-            # expert_weights: (B, T, n) → (B, T, 1, n) для broadcast
-            group_out = (expert_outs * expert_weights.unsqueeze(-2)).sum(-1)  # (B, T, d)
+        # ── 3. Петля B: CONCRETE (нижняя полусфера, биты 3-5) ────────────────
+        out_b, lb_b = self._run_group(x, "CONCRETE", group_weights, 2)
+        total_lb_loss = total_lb_loss + lb_b
+        info['lb_CONCRETE'] = lb_b.detach()
 
-            gw = group_weights[..., g_idx:g_idx+1]
-            group_outputs[group] = gw * group_out
+        # ── 4. Точка пересечения: двунаправленный синтез A ↔ B ───────────────
+        #   fwd: ABSTRACT → запрашивает → CONCRETE  (специализация→обобщение)
+        #   bwd: CONCRETE → запрашивает → ABSTRACT  (обобщение→специализация)
+        #   alpha = sigmoid(log_alpha) управляет балансом fwd/bwd
+        x_crossing = self.crossing(out_a, out_b)              # (B, T, d)
+        info['crossing_alpha'] = torch.sigmoid(
+            self.crossing.log_alpha).detach()
 
-        # ── 3.5. Bridge experts ───────────────────────────────────────────────
-        bridge_contribution = torch.zeros(B, T, d, device=x.device)
-        bw = self.cfg.bridge_weight / len(BRIDGE_PAIRS)
-        for a, b in BRIDGE_PAIRS:
-            if a in group_outputs and b in group_outputs:
-                bridge_out = self.bridge_experts[f"{a}_{b}"](
-                    group_outputs[a], group_outputs[b])
-                bridge_contribution = bridge_contribution + bw * bridge_out
+        # ── 5. DYNAMIC: эксперты экватора получают x_crossing ────────────────
+        #   Аналог «точки пересечения» в _figure8_walk:
+        #   hexagrams with exactly 3 bits set → AERO, PYRO
+        out_d, lb_d = self._run_group(
+            x_crossing, "DYNAMIC", group_weights, 1)
+        total_lb_loss = total_lb_loss + lb_d
+        info['lb_DYNAMIC'] = lb_d.detach()
 
-        # ── 4. Q6ExpertBank (опционально) ────────────────────────────────────
-        combined = sum(group_outputs.values()) + bridge_contribution
+        # ── 6. Финальный синтез: A + crossing + DYNAMIC + B ──────────────────
+        combined = out_a + x_crossing + out_d + out_b
+
+        # ── 7. Q6ExpertBank (4-й уровень, опционально) ───────────────────────
         if self.hex_tier is not None and hex_weights is not None:
-            hex_out   = self.hex_tier(x, hex_weights)
-            lb_hex    = self.hex_tier.load_balance_loss(hex_weights)
+            hex_out = self.hex_tier(x, hex_weights)
+            lb_hex  = self.hex_tier.load_balance_loss(hex_weights)
             total_lb_loss = total_lb_loss + lb_hex * 0.1
-            combined  = combined + self.cfg.hex_tier_weight * hex_out
+            combined = combined + self.cfg.hex_tier_weight * hex_out
             info['hex_tier_active'] = torch.tensor(1.0)
 
-        # ── Финальный выход ───────────────────────────────────────────────────
         out = self.out_proj(self.out_norm(combined))
         info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight
         return out, info
@@ -623,12 +686,12 @@ TRAINING_STAGES = {
         "name": "GlobalRouter",
         "description": "Обучение глобального роутера + всё вместе",
         "unfreeze": ["micro_experts", "group_routers", "global_router", "out_proj"],
-        "freeze":   ["bridge_experts"],
+        "freeze":   ["crossing"],
     },
     4: {
-        "name": "BridgeExperts",
-        "description": "Обучение мостов между группами",
-        "unfreeze": ["bridge_experts", "global_router"],
+        "name": "Crossing",
+        "description": "Обучение точки пересечения (BidirBridgeExpert) + GlobalRouter",
+        "unfreeze": ["crossing", "global_router"],
         "freeze":   [],  # micro_experts и routers можно заморозить для экономии
     },
     5: {
@@ -641,7 +704,7 @@ TRAINING_STAGES = {
         "name": "HexTier",
         "description": "4-й уровень: Q6ExpertBank (64 Q6-эксперта)",
         "unfreeze": ["hex_tier", "global_router"],
-        "freeze":   ["micro_experts", "group_routers", "bridge_experts"],
+        "freeze":   ["micro_experts", "group_routers"],
     },
 }
 
