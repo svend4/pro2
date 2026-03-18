@@ -838,8 +838,11 @@ class YiJingTransformer(nn.Module):
                 layer._mod_loss = self._compute_mod_balance_loss(router_logits, k)
             else:
                 if self.cfg.use_gradient_ckpt and self.training and kv_cache is None:
+                    # grad_checkpoint requires positional args; wrap to pass domain_ids
+                    def _ckpt_fwd(x_, cache_, domain_ids_=domain_ids):
+                        return layer(x_, kv_cache=cache_, domain_ids=domain_ids_)
                     x, new_kv = grad_checkpoint(
-                        layer, x, layer_cache, use_reentrant=False
+                        _ckpt_fwd, x, layer_cache, use_reentrant=False
                     )
                 else:
                     x, new_kv = layer(x, kv_cache=layer_cache, domain_ids=domain_ids)

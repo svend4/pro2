@@ -141,6 +141,11 @@ class BianGuaAttention(nn.Module):
     высокой косинусной близости для получения высокого внимания.
     """
 
+    @property
+    def hamming_lambda(self):
+        """Bounded hamming_lambda ∈ (0, 1) via sigmoid."""
+        return torch.sigmoid(self.hamming_lambda_logit)
+
     def __init__(self, d_model: int, n_heads: int,
                  hamming_lambda: float = 0.1):
         super().__init__()

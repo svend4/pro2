@@ -139,7 +139,10 @@ class ModelSurgeon:
         """
         if dimensions is None:
             d = self.cfg.d_model
-            dimensions = [2**k for k in range(3, int(torch.tensor(float(d)).log2().item()) + 1)]
+            max_k = int(torch.tensor(float(d)).log2().item()) + 1
+            dimensions = [2**k for k in range(3, max_k) if 2**k <= d]
+            if not dimensions or dimensions[-1] != d:
+                dimensions.append(d)
         head = MatryoshkaHead(self.cfg.d_model, dimensions)
         self.model.matryoshka_head = head
         return self
