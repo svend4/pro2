@@ -104,10 +104,17 @@ def encode(text: str, vocab_size: int = 256, block_size: int = 32) -> torch.Tens
     return torch.tensor(ids or [32], dtype=torch.long).unsqueeze(0)
 
 
-def perplexity(model: Variant3GPT, texts: List[str], n: int = 20) -> float:
+def perplexity(model: Variant3GPT, texts: List[str], n: int = 20,
+               eval_frac: float = 0.2) -> float:
+    """PPL на held-out подмножестве (последние eval_frac текстов)."""
+    # Используем хвост списка как eval-set для предотвращения data leakage
+    split = max(1, int(len(texts) * (1 - eval_frac)))
+    eval_texts = texts[split:]
+    if not eval_texts:
+        eval_texts = texts  # fallback если слишком мало текстов
     model.eval()
     ppls = []
-    for text in random.sample(texts, min(n, len(texts))):
+    for text in random.sample(eval_texts, min(n, len(eval_texts))):
         tokens = encode(text)
         if tokens.shape[1] < 2:
             continue

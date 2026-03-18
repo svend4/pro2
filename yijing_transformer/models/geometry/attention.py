@@ -41,6 +41,9 @@ class PalaceAttention(nn.Module):
         mask = palace_attention_mask(64)
         self.register_buffer('palace_mask', mask)
         self.inter_palace_weight = nn.Parameter(torch.tensor(0.1))
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
 
     def get_mask(self, seq_len: int) -> torch.Tensor:
         if seq_len <= 64:
@@ -58,9 +61,9 @@ class PalaceAttention(nn.Module):
         B, T, D = x.shape
         scale = self.head_dim ** -0.5
         palace_mask = self.get_mask(T)
-        q = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        k = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        v = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        q = self.q_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         attn = torch.matmul(q, k.transpose(-2, -1)) * scale
         attn = attn * palace_mask.unsqueeze(0).unsqueeze(0)
         if mask is not None:
@@ -439,14 +442,14 @@ class HexagramAttentionPattern(nn.Module):
         self.scale = nn.Parameter(torch.tensor(0.0))
         patterns = torch.zeros(6, block_size, block_size)
         for i in range(block_size):
-            for j in range(i + 1):
-                dist = i - j
+            for j in range(block_size):
+                dist = abs(i - j)
                 patterns[0, i, j] = 1.0 if dist <= 2 else -1.0
                 patterns[1, i, j] = 1.0 if dist <= 8 else -1.0
                 patterns[2, i, j] = 1.0 if dist <= 32 else -1.0
                 patterns[3, i, j] = 1.0 if dist % 2 == 0 else -1.0
                 patterns[4, i, j] = 1.0 if dist % 4 == 0 else -1.0
-                patterns[5, i, j] = 1.0 if j <= 4 else -1.0
+                patterns[5, i, j] = 1.0 if min(i, j) <= 4 else -1.0
         self.register_buffer('patterns', patterns)
 
     def forward(self, x, T):

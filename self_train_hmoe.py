@@ -131,10 +131,11 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
 
     w_a = gw_dict.get("ABSTRACT", 0.33)
     w_b = gw_dict.get("CONCRETE", 0.33)
-    w_total = w_a + w_b + 1e-8
+    w_d = gw_dict.get("DYNAMIC", 0.33)
+    w_total = w_a + w_b + w_d + 1e-8
 
-    # Нормированный баланс
-    balance = (w_a / w_total + w_b / w_total) / 2   # ≈ 0.5 при равновесии
+    # Нормированный баланс по всем трём группам (включая DYNAMIC)
+    balance = (w_a / w_total + w_b / w_total) / 2   # ≈ 0.33 при равновесии
     imbalance = abs(w_a / w_total - w_b / w_total)   # 0 = баланс, 1 = дисбаланс
 
     lci = (1.0 - imbalance) * math.pi   # ∈ [0, π], цель = π
@@ -308,7 +309,7 @@ def figure8_hmoe(
             h = model.tok_emb(ids)
             for block in model.blocks:
                 h = block(h)
-        emb = h.mean(dim=1).squeeze(0)
+        emb = h.mean(dim=1).squeeze(0).detach()
         rag.add(text, emb)
 
     print(f"  RAG-буфер      : {len(rag)} текстов")
@@ -414,7 +415,8 @@ def figure8_hmoe(
 
         avg_lci_emb = (lci_a_emb + lci_b_emb) / 2
         avg_lci_r   = (lci_a_r   + lci_b_r)   / 2
-        resonance   = abs(avg_lci_emb - math.pi) < _LCI_EPSILON
+        resonance   = (abs(avg_lci_emb - math.pi) < _LCI_EPSILON
+                       and abs(avg_lci_r - math.pi) < _LCI_EPSILON)
 
         res_mark = "✓ РЕЗОНАНС (LCI ≈ π)" if resonance else (
             f"петля A{'↑' if lci_a_emb > math.pi else '↓'}  "

@@ -65,8 +65,10 @@ class D4EquivariantLayer(nn.Module):
 
     def forward(self, x):
         z = self.proj_to_3d(x)
-        w = F.softmax(self.op_weights, dim=0)
         z_flat = z.reshape(-1, 3)
+        # Gumbel-softmax с hard=True для сохранения D4-эквивариантности:
+        # выбираем ровно одну групповую операцию (а не взвешенную сумму)
+        w = F.gumbel_softmax(self.op_weights, tau=1.0, hard=True, dim=0)
         transformed = torch.zeros_like(z_flat)
         for i in range(8):
             transformed += w[i] * (z_flat @ self.d4_ops[i].T)

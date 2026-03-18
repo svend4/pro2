@@ -659,7 +659,7 @@ class HierarchicalMoEFFN(nn.Module):
             lb_hex  = self.hex_tier.load_balance_loss(hex_weights)
             total_lb_loss = total_lb_loss + lb_hex * 0.1
             combined = combined + self.cfg.hex_tier_weight * hex_out
-            info['hex_tier_active'] = torch.tensor(1.0)
+            info['hex_tier_active'] = torch.tensor(1.0, device=x.device)
 
         out = self.out_proj(self.out_norm(combined))
         info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight
