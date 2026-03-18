@@ -419,13 +419,14 @@ class Variant3Block(nn.Module):
         attn_out → TernaryGate → ternary_out
         [attn_out, ternary_out] → ArchetypalInterlingua(x) → inter_out
         inter_out → CrossHexagramAnalogy(hex_weights) → analogy_out
-        analogy_out → FFN → block output
+        analogy_out → FFN (или HierarchicalMoEFFN) → block output
     """
 
     def __init__(self, d_model: int, n_heads: int,
                  ffn_mult:          int   = 4,
                  hamming_lambda:    float = 0.1,
-                 uncertainty_budget: float = 0.3):
+                 uncertainty_budget: float = 0.3,
+                 use_hierarchical_moe: bool = False):
         super().__init__()
         self.norm_hex  = nn.LayerNorm(d_model)
         self.norm_attn = nn.LayerNorm(d_model)
@@ -448,11 +449,18 @@ class Variant3Block(nn.Module):
 
         self.analogy = CrossHexagramAnalogy(d_model)
 
-        # SwiGLU-style FFN
-        d_ff = d_model * ffn_mult
-        self.ffn_gate_proj  = nn.Linear(d_model, d_ff, bias=False)
-        self.ffn_value_proj = nn.Linear(d_model, d_ff, bias=False)
-        self.ffn_out_proj   = nn.Linear(d_ff, d_model, bias=False)
+        self.use_hierarchical_moe = use_hierarchical_moe
+        if use_hierarchical_moe:
+            from yijing_transformer.models.hierarchical_moe import (
+                HierarchicalMoEFFN, HMoEConfig,
+            )
+            self.hmoe = HierarchicalMoEFFN(HMoEConfig(d_model=d_model))
+        else:
+            # SwiGLU-style FFN (оригинальный)
+            d_ff = d_model * ffn_mult
+            self.ffn_gate_proj  = nn.Linear(d_model, d_ff, bias=False)
+            self.ffn_value_proj = nn.Linear(d_model, d_ff, bias=False)
+            self.ffn_out_proj   = nn.Linear(d_ff, d_model, bias=False)
 
     def _ffn(self, x: torch.Tensor) -> torch.Tensor:
         gate  = F.silu(self.ffn_gate_proj(x))
@@ -477,8 +485,15 @@ class Variant3Block(nn.Module):
         # 5. Кросс-архетипная аналогия — 変爻 механизм
         analogy_out = self.analogy(inter_out, hex_weights)
 
-        # 6. FFN
-        out = analogy_out + self._ffn(self.norm_ffn(analogy_out))
+        # 6. FFN (стандартный или HierarchicalMoE)
+        if self.use_hierarchical_moe:
+            moe_out, moe_info = self.hmoe(self.norm_ffn(analogy_out))
+            out = analogy_out + moe_out
+            # lb_loss передаётся наружу через атрибут для доступа в тренере
+            self._last_moe_info = moe_info
+        else:
+            out = analogy_out + self._ffn(self.norm_ffn(analogy_out))
+            self._last_moe_info = None
         return out
 
 
@@ -499,6 +514,7 @@ class Variant3Config:
     uncertainty_budget:  float = 0.3
     dropout:             float = 0.0
     use_domain_routing:  bool  = True
+    use_hierarchical_moe: bool = False   # заменить _ffn на HierarchicalMoEFFN
 
 
 class Variant3GPT(nn.Module):
@@ -530,6 +546,7 @@ class Variant3GPT(nn.Module):
                 ffn_mult=cfg.ffn_mult,
                 hamming_lambda=cfg.hamming_lambda,
                 uncertainty_budget=cfg.uncertainty_budget,
+                use_hierarchical_moe=cfg.use_hierarchical_moe,
             )
             for _ in range(cfg.n_layers)
         ])

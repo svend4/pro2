@@ -1,0 +1,62 @@
+[
+  {
+    "label": "cascade/phase1/α=-4",
+    "phase": 1,
+    "texts": 200,
+    "steps": 22,
+    "ppl_before": 281.41,
+    "ppl_after": 176.9,
+    "ppl_delta": 37.14,
+    "final_loss": 5.3011,
+    "mode": "cascade",
+    "cycle": 1
+  },
+  {
+    "label": "cascade/phase2/α=-2",
+    "phase": 2,
+    "texts": 200,
+    "steps": 22,
+    "ppl_before": 223.89,
+    "ppl_after": 124.9,
+    "ppl_delta": 44.21,
+    "final_loss": 4.9642,
+    "mode": "cascade",
+    "cycle": 1
+  },
+  {
+    "label": "cascade/phase3/α=+0",
+    "phase": 3,
+    "texts": 200,
+    "steps": 30,
+    "ppl_before": 215.79,
+    "ppl_after": 130.92,
+    "ppl_delta": 39.33,
+    "final_loss": 4.8413,
+    "mode": "cascade",
+    "cycle": 1
+  },
+  {
+    "label": "cascade/phase4/α=+2",
+    "phase": 4,
+    "texts": 200,
+    "steps": 22,
+    "ppl_before": 123.28,
+    "ppl_after": 116.94,
+    "ppl_delta": 5.14,
+    "final_loss": 4.7709,
+    "mode": "cascade",
+    "cycle": 1
+  },
+  {
+    "label": "cascade/phase5/α=+4",
+    "phase": 5,
+    "texts": 200,
+    "steps": 15,
+    "ppl_before": 114.45,
+    "ppl_after": 98.83,
+    "ppl_delta": 13.65,
+    "final_loss": 4.7196,
+    "mode": "cascade",
+    "cycle": 1
+  }
+]

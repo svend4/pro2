@@ -1,0 +1,158 @@
+[
+  {
+    "mode": "local",
+    "dry_run": true,
+    "our_q6": {
+      "repo": "pro2",
+      "timestamp": "2026-03-14T17:49:00",
+      "concepts": {
+        "гексаграмма": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            0,
+            0
+          ],
+          "hex_idx": 13,
+          "source": "pro2"
+        },
+        "Q6 координата": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 29,
+          "source": "pro2"
+        },
+        "трансформация знаний": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 29,
+          "source": "pro2"
+        },
+        "архетипы": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 29,
+          "source": "pro2"
+        },
+        "nautilus": {
+          "q6": [
+            0,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 28,
+          "source": "pro2"
+        },
+        "информация": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 29,
+          "source": "pro2"
+        },
+        "кристалл": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 29,
+          "source": "pro2"
+        },
+        "методология": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 29,
+          "source": "pro2"
+        },
+        "α-уровень": {
+          "q6": [
+            1,
+            0,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 29,
+          "source": "pro2"
+        },
+        "convergence": {
+          "q6": [
+            0,
+            1,
+            1,
+            1,
+            1,
+            0
+          ],
+          "hex_idx": 30,
+          "source": "pro2"
+        }
+      },
+      "n_concepts": 10
+    },
+    "alignment": {
+      "info1": {
+        "n_texts": 50,
+        "avg_hamming": 0.48,
+        "alignment_pct": 92.0,
+        "status": "ALIGNED"
+      },
+      "meta": {
+        "n_texts": 11,
+        "avg_hamming": 0.4,
+        "alignment_pct": 93.3,
+        "status": "ALIGNED"
+      },
+      "data2": {
+        "n_texts": 50,
+        "avg_hamming": 1.3,
+        "alignment_pct": 78.3,
+        "status": "ALIGNED"
+      }
+    },
+    "partner_data_sizes": {
+      "info1": 50,
+      "meta": 11,
+      "data2": 50
+    }
+  }
+]
