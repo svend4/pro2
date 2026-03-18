@@ -37,6 +37,7 @@ def distillation_loss(student_logits, teacher_logits, targets,
     hard_loss = F.cross_entropy(
         student_logits.reshape(-1, student_logits.size(-1)),
         targets.reshape(-1),
+        ignore_index=-100,
     )
 
     # Soft loss: KL divergence при повышенной температуре
@@ -65,11 +66,10 @@ def feature_distillation_loss(student_hidden, teacher_hidden):
         loss: MSE loss (scalar)
     """
     if student_hidden.size(-1) != teacher_hidden.size(-1):
-        # Проецируем student → teacher dim (или наоборот)
-        # Используем простой средний pooling по feature dim
-        teacher_hidden = F.adaptive_avg_pool1d(
-            teacher_hidden.transpose(1, 2),
-            student_hidden.size(-1)
+        # Проецируем student → teacher dim через adaptive pooling
+        student_hidden = F.adaptive_avg_pool1d(
+            student_hidden.transpose(1, 2),
+            teacher_hidden.size(-1)
         ).transpose(1, 2)
 
     return F.mse_loss(student_hidden, teacher_hidden)

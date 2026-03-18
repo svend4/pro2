@@ -130,7 +130,7 @@ class TokenMerger(nn.Module):
             })
 
         # Pad to same length if needed (batch consistency)
-        max_len = max(r.shape[0] for r in results)
+        max_len = max(res.shape[0] for res in results)
         padded = []
         for r_tensor in results:
             if r_tensor.shape[0] < max_len:
