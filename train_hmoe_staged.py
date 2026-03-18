@@ -121,11 +121,16 @@ def perplexity(model: Variant3GPT, texts: List[str], n: int = 20) -> float:
 
 def collect_moe_lb_loss(model: Variant3GPT) -> torch.Tensor:
     """Суммирует lb_loss из всех блоков с HMoE."""
-    total = torch.tensor(0.0)
+    total = None
     for block in model.blocks:
         info = getattr(block, '_last_moe_info', None)
         if info and 'lb_loss' in info:
-            total = total + info['lb_loss']
+            if total is None:
+                total = info['lb_loss']
+            else:
+                total = total + info['lb_loss']
+    if total is None:
+        total = torch.tensor(0.0, device=next(model.parameters()).device)
     return total
 
 

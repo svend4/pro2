@@ -297,11 +297,12 @@ class GroupRouter(nn.Module):
             with torch.no_grad():
                 self._ema_load.mul_(0.95).add_(mean_w.detach() * 0.05)
 
-        # Доминирование = макс. нагрузка * streak_limit > 1.0 (т.е. > 1/k * streak_limit)
+        # Доминирование: штраф если макс. нагрузка превышает допуск над uniform
         max_load = self._ema_load.max()
         uniform  = 1.0 / max(len(self.expert_names), 1)
-        # Чем сильнее монополия относительно порога streak_limit, тем больше штраф
-        anticircle_penalty = F.relu(max_load - uniform * self.streak_limit)
+        # Порог = uniform * (1 + streak_limit/n_experts), достижим при дисбалансе
+        threshold = uniform * (1.0 + self.streak_limit / max(len(self.expert_names), 1))
+        anticircle_penalty = F.relu(max_load - threshold)
         lb_loss = lb_loss - self.anticircle_weight * anticircle_penalty
 
         return sparse_w, indices, lb_loss

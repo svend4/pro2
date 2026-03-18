@@ -544,7 +544,7 @@ def main():
     if os.path.exists(args.checkpoint):
         ckpt = torch.load(args.checkpoint, map_location="cpu")
         try:
-            model.load_state_dict(ckpt["model_state"])
+            model.load_state_dict(ckpt["model_state"], strict=False)
             raw = ckpt.get("next_phase")
             phase = (raw - 1) if isinstance(raw, int) else "?"
             print(f"  Загружен чекпоинт: {args.checkpoint}  (после фазы {phase} curriculum)")

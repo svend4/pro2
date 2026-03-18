@@ -416,7 +416,7 @@ def main():
     start_phase = 1
     if args.resume and os.path.exists(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu")
-        model.load_state_dict(ckpt["model_state"])
+        model.load_state_dict(ckpt["model_state"], strict=False)
         start_phase = ckpt.get("next_phase", 1)
         print(f"  Чекпоинт загружен: {args.resume}  (продолжаем с фазы {start_phase})")
 
