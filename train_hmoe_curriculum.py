@@ -246,7 +246,7 @@ def perplexity(model: nn.Module, texts: List[str], n: int = 20) -> float:
         with torch.no_grad():
             _, loss, _ = model(inp, targets=tgt)
         if loss is not None and not torch.isnan(loss):
-            ppls.append(math.exp(min(loss.item(), 10)))
+            ppls.append(min(math.exp(loss.item()), 1e5))
     return sum(ppls) / len(ppls) if ppls else float("inf")
 
 

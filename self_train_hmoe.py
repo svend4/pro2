@@ -114,6 +114,8 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
             info = getattr(block, '_last_moe_info', None)
             if info and 'group_weights' in info:
                 gw = info['group_weights']   # (B, T, n_groups) или (B, n_groups)
+                if torch.isnan(gw).any():
+                    continue
                 if gw.dim() == 3:
                     gw = gw.mean(dim=(0, 1))   # → (n_groups,)
                 elif gw.dim() == 2:
@@ -242,6 +244,7 @@ def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
     if inp.shape[1] < 1:
         return float("nan")
     total_loss = 0.0
+    completed_steps = 0
     for _ in range(n_steps):
         _, loss, aux = model(inp, targets=tgt)
         if loss is None or torch.isnan(loss):
@@ -252,7 +255,8 @@ def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
         opt.step()
         total_loss += loss.item()
-    return total_loss / n_steps
+        completed_steps += 1
+    return total_loss / max(completed_steps, 1)
 
 
 def quality_filter(text: str, min_len: int = 10) -> bool:
