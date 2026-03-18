@@ -193,7 +193,7 @@ class RepoCorpusLoader:
 
         for pattern in defn["globs"]:
             for path in sorted(self.root.glob(pattern)):
-                if path in seen:
+                if path in seen or not path.is_file():
                     continue
                 # Исключения
                 path_str = str(path)

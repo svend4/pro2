@@ -76,7 +76,7 @@ def get_biangua() -> Tensor:
 def bfs_distances(biangua: Tensor) -> Tensor:
     """Compute all-pairs BFS distances on the biangua graph. O(64²)."""
     n = biangua.shape[0]
-    adj = (biangua > 0.5).cpu().numpy()
+    adj = (biangua > 0.5).cpu()
     dist = torch.full((n, n), fill_value=999, dtype=torch.long)
     for src in range(n):
         dist[src, src] = 0
@@ -708,7 +708,10 @@ class AdaptiveHammingScheduler:
     def step(self, step: int):
         lam = self.get_lambda(step)
         for module in self.targets:
-            module.hamming_lambda.data.fill_(lam)
+            # hamming_lambda is now sigmoid(logit); set logit = logit(lam)
+            lam_clamped = max(min(lam, 1.0 - 1e-6), 1e-6)
+            logit_val = math.log(lam_clamped / (1.0 - lam_clamped))
+            module.hamming_lambda_logit.data.fill_(logit_val)
 
 
 # ---------------------------------------------------------------------------
