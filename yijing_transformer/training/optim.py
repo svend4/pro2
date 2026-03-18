@@ -69,6 +69,7 @@ def build_optimizer(model, cfg, llrd_factor=1.0, embedding_lr_scale=1.0):
             param_groups[group_key] = {
                 'params': [],
                 'lr': cfg.lr * lr_mult,
+                'lr_ratio': lr_mult,
                 'weight_decay': wd,
             }
         param_groups[group_key]['params'].append(param)
