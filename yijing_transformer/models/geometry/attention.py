@@ -69,6 +69,7 @@ class PalaceAttention(nn.Module):
         if mask is not None:
             attn = attn.masked_fill(mask.unsqueeze(1) == 0, float('-inf'))
         attn = F.softmax(attn, dim=-1)
+        attn = attn.nan_to_num(0.0)
         out = torch.matmul(attn, v)
         return out.transpose(1, 2).reshape(B, T, D)
 
@@ -178,13 +179,14 @@ class WeavingLoomArchitecture(nn.Module):
 
     def forward(self, x, mask=None):
         B, T, D = x.shape
-        scale = D ** -0.5
+        head_dim = D // max(1, getattr(self, 'n_heads', 1))
+        scale = head_dim ** -0.5
         gate = torch.sigmoid(self.level1_gate(x))
         out = x * gate
         if self.max_level < 2:
             return self.out_proj(out)
-        n_groups = max(1, T // 8)
         group_size = min(8, T)
+        n_groups = max(1, (T + group_size - 1) // group_size)
         pad_len = n_groups * group_size - T
         if pad_len > 0:
             out_padded = F.pad(out, (0, 0, 0, pad_len))
@@ -211,6 +213,7 @@ class WeavingLoomArchitecture(nn.Module):
         if mask is not None:
             attn3 = attn3.masked_fill(mask == 0, float('-inf'))
         attn3 = F.softmax(attn3, dim=-1)
+        attn3 = attn3.nan_to_num(0.0)
         out3 = torch.matmul(attn3, v3)
         return self.out_proj(out3)
 
@@ -275,6 +278,7 @@ class HeisenbergAttention(nn.Module):
         if mask is not None:
             attn = attn.masked_fill(mask == 0, float('-inf'))
         attn = F.softmax(attn, dim=-1)
+        attn = attn.nan_to_num(0.0)
         return torch.matmul(attn, v)
 
 
@@ -313,6 +317,7 @@ class FlowerOfLifeGAT(nn.Module):
         e = self.a(torch.cat([h_i, h_j], dim=-1)).squeeze(-1)
         e = e.masked_fill(self.adjacency == 0, float('-inf'))
         alpha = F.softmax(e, dim=-1)
+        alpha = alpha.nan_to_num(0.0)
         out_nodes = torch.matmul(alpha, h)
         out_nodes = self.out_proj(out_nodes)
         result = x.clone()
