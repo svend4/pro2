@@ -22,12 +22,15 @@
     ds.print_stats()
 """
 
+import logging
 import os
 import glob
 import random
 from dataclasses import dataclass, field
 
 import torch
+
+_log = logging.getLogger(__name__)
 
 DOMAINS = ["ai_agents", "infosystems", "knowledge", "algorithms", "data2", "meta"]
 
@@ -130,8 +133,8 @@ class Svend4Corpus:
                     if text:
                         domain_texts.append(text)
                         dstats.n_chars += len(text)
-                except Exception:
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    _log.warning("Не удалось прочитать %s: %s", fpath, e)
 
             combined = "\n\n" + f"[DOMAIN:{domain}]\n\n".join(domain_texts)
             all_texts.append((domain, combined))
@@ -212,12 +215,16 @@ class Svend4Corpus:
         y = torch.stack([self.data[i + 1:i + self.block_size + 1] for i in ix]).to(device)
 
         # Определяем домен для каждого сэмпла по позиции в корпусе
-        domain_ids = torch.zeros(batch_size, dtype=torch.long, device=device)
+        domain_ids = torch.full((batch_size,), -1, dtype=torch.long, device=device)
         for sample_idx, pos in enumerate(ix.tolist()):
             for dom_idx, (start, end, _name) in enumerate(self.domain_map):
                 if start <= pos < end:
                     domain_ids[sample_idx] = dom_idx
                     break
+        unmapped = (domain_ids < 0).sum().item()
+        if unmapped > 0:
+            _log.warning("%d сэмплов не попали ни в один домен", unmapped)
+            domain_ids.clamp_(min=0)
         return x, y, domain_ids
 
     def get_domain_batch(

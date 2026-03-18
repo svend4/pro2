@@ -1,6 +1,7 @@
 """Стриминговый датасет TinyStories с буферизацией."""
 
 import logging
+import threading
 import torch
 import random
 from collections import deque
@@ -38,6 +39,7 @@ class StreamingBatchLoader:
         self._restart_fn = restart_fn
         self._buffer: deque = deque()
         self._exhausted = False
+        self._lock = threading.Lock()
         self._fill_buffer()
 
     def _fill_buffer(self):
@@ -56,13 +58,14 @@ class StreamingBatchLoader:
         """Заменяет один старый пример из буфера новым."""
         if self._exhausted:
             return
-        try:
-            new_ex = next(self._iterator)
-            self._buffer.append(new_ex)
-            if len(self._buffer) > self._buffer_size:
-                self._buffer.popleft()
-        except StopIteration:
-            self._exhausted = True
+        with self._lock:
+            try:
+                new_ex = next(self._iterator)
+                self._buffer.append(new_ex)
+                if len(self._buffer) > self._buffer_size:
+                    self._buffer.popleft()
+            except StopIteration:
+                self._exhausted = True
 
     def _maybe_restart(self):
         """Перезапускает итератор если он исчерпан и есть restart_fn."""
@@ -102,6 +105,9 @@ class StreamingBatchLoader:
             else:
                 pad_len = self._block_size + 1 - len(tokens)
                 chunk = tokens + [self._pad_token_id] * pad_len
+            assert len(chunk) == self._block_size + 1, (
+                f"chunk size {len(chunk)} != expected {self._block_size + 1}"
+            )
             x_batch.append(chunk[:-1])
             y_batch.append(chunk[1:])
 
