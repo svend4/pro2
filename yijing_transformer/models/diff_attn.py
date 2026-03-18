@@ -50,6 +50,9 @@ class DifferentialAttention(nn.Module):
         self.out_proj = nn.Linear(n_heads * self.head_dim, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
 
+        # RMSNorm после дифференциальной операции (Ye et al. 2024)
+        self.diff_norm = nn.RMSNorm(self.head_dim)
+
         # Lambda: обучаемый коэффициент подавления (per head)
         # Инициализируем exp(lambda_init) ≈ 0.8
         self.lambda_init = nn.Parameter(torch.full((n_heads,), -0.2))
@@ -73,12 +76,14 @@ class DifferentialAttention(nn.Module):
         v = self.v_proj(x).view(B, T, H, hd).transpose(1, 2)
 
         # Разделяем Q и K на две половины
-        q1, q2 = q[..., :hhd], q[..., hhd:]  # (B, H, T, hhd)
+        q1, q2 = q[..., :hhd], q[..., hhd:]  # (B, H, T, hhd) и (..., hd-hhd)
         k1, k2 = k[..., :hhd], k[..., hhd:]
 
-        # Attention scores для обеих половин
-        scores1 = (q1 @ k1.transpose(-2, -1)) * self.scale  # (B, H, T, T)
-        scores2 = (q2 @ k2.transpose(-2, -1)) * self.scale
+        # Attention scores для обеих половин (корректный scale для каждой)
+        scale1 = 1.0 / math.sqrt(hhd)
+        scale2 = 1.0 / math.sqrt(hd - hhd)
+        scores1 = (q1 @ k1.transpose(-2, -1)) * scale1  # (B, H, T, T)
+        scores2 = (q2 @ k2.transpose(-2, -1)) * scale2
 
         # Causal mask
         if causal_mask is None:
@@ -94,10 +99,12 @@ class DifferentialAttention(nn.Module):
         # Differential: attn = attn1 - lambda * attn2
         lam = torch.sigmoid(self.lambda_init).view(1, H, 1, 1)  # (1, H, 1, 1)
         diff_attn = attn1 - lam * attn2
+        diff_attn = diff_attn.nan_to_num(0.0)
         diff_attn = self.dropout(diff_attn)
 
-        # Weighted sum
+        # Weighted sum + RMSNorm для стабилизации (Ye et al. 2024)
         out = diff_attn @ v  # (B, H, T, hd)
+        out = self.diff_norm(out)
         out = out.transpose(1, 2).reshape(B, T, H * hd)
         return self.out_proj(out)
 
@@ -140,7 +147,7 @@ class QuantizedKVCache:
         """
         amax = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-8)
         scales = amax / 127.0
-        x_int8 = (x / scales).round().clamp(-128, 127).to(torch.int8)
+        x_int8 = (x / scales).round().clamp(-127, 127).to(torch.int8)
         return x_int8, scales
 
     @staticmethod

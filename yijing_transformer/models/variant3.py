@@ -191,6 +191,7 @@ class BianGuaAttention(nn.Module):
                                     float('-inf'))
 
         attn = F.softmax(scores, dim=-1)
+        attn = attn.nan_to_num(0.0)
         out  = (attn @ v).transpose(1, 2).reshape(B, T, C)
         return self.out_proj(out)
 
@@ -486,7 +487,7 @@ class Variant3Block(nn.Module):
 
         # 4. Архетипальная интерлингва — хаб для двух источников
         # Сигнатура: forward(x, source_outputs)
-        inter_out = self.interlingua(x, [attn_out, ternary_out])
+        inter_out = self.interlingua(attn_out, [attn_out, ternary_out])
         self._interlingua_loss = self.interlingua.get_interlingua_loss()
 
         # 5. Кросс-архетипная аналогия — 変爻 механизм
