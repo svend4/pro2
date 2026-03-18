@@ -214,10 +214,14 @@ class TrainingMonitor:
 
     def save_snapshot(self, step, model, optimizer):
         """Сохраняет снимок состояния для дебага."""
+        if self.snapshotter is None:
+            return
         self.snapshotter.save(step, model, optimizer)
 
     def should_save_checkpoint(self, val_loss):
         """Проверяет, нужно ли сохранять чекпоинт (top-k по val_loss)."""
+        if self.checkpoint_mgr is None:
+            return False
         return self.checkpoint_mgr.should_save(val_loss)
 
     def balance_losses(self, losses_dict):
@@ -237,8 +241,10 @@ class TrainingMonitor:
         """Оценивает sharpness минимума (SAM-style).
 
         Returns:
-            float: sharpness estimate
+            float: sharpness estimate, or None if estimator unavailable
         """
+        if self.sharpness is None:
+            return None
         return self.sharpness.estimate(self.model, loss_fn, data_batch)
 
     def get_alerts(self):
