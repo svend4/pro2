@@ -243,15 +243,28 @@ class Svend4Corpus:
         n_val = max(1, int(self.n_tokens * val_fraction))
         n_train = self.n_tokens - n_val
 
+        # Пересчитываем domain_map для train и val частей
+        train_domain_map = []
+        val_domain_map = []
+        for start, end, name in self.domain_map:
+            # Train: обрезаем домены по n_train
+            if start < n_train:
+                train_domain_map.append((start, min(end, n_train), name))
+            # Val: сдвигаем домены на n_train
+            if end > n_train:
+                val_domain_map.append((max(start, n_train) - n_train, end - n_train, name))
+
         train = Svend4Corpus(
             self.data[:n_train].tolist(),
             self.block_size,
             self.tokenizer,
+            domain_map=train_domain_map,
         )
         val = Svend4Corpus(
             self.data[n_train:].tolist(),
             self.block_size,
             self.tokenizer,
+            domain_map=val_domain_map,
         )
         return train, val
 

@@ -141,7 +141,7 @@ class AdvancedGenerator:
                 mask[0] = False
                 probs[sorted_idx[mask]] = 0.0
 
-            probs = probs / probs.sum()
+            probs = probs / (probs.sum() + 1e-10)
             next_token = torch.multinomial(probs, 1).unsqueeze(0)
             context = torch.cat([context, next_token], dim=1)
             generated.append(next_token.item())
