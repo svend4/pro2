@@ -135,8 +135,9 @@ class TokenMerger(nn.Module):
         for r_tensor in results:
             if r_tensor.shape[0] < max_len:
                 pad = torch.zeros(max_len - r_tensor.shape[0], D, device=x.device, dtype=x.dtype)
-                r_tensor = torch.cat([r_tensor, pad])
-            padded.append(r_tensor)
+                padded.append(torch.cat([r_tensor, pad]))
+            else:
+                padded.append(r_tensor)
 
         merged_out = torch.stack(padded)
         return merged_out, unmerge_infos
