@@ -271,8 +271,8 @@ def palace_attention_mask(block_size: int = 64) -> torch.Tensor:
         for i in indices:
             for j in indices:
                 mask[i, j] = 1.0
-    # Ослабленная связность между дворцами
-    mask = mask + 0.1 * (1 - mask)
+    # Возвращаем бинарную маску: 1.0 = intra-palace, 0.0 = inter-palace
+    # Взвешивание inter-palace выполняется в PalaceAttention.get_mask()
     return mask
 
 

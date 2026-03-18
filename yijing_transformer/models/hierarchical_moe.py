@@ -432,13 +432,15 @@ class MultiScaleGlobalRouter(nn.Module):
         """
         q3_map = torch.zeros(8, n_groups)
         for i in range(8):
-            b0 = 1 if (i >> 2 & 1) == 0 else -1
-            b1 = 1 if (i >> 1 & 1) == 0 else -1
+            b0 = 1 if (i >> 2 & 1) == 0 else -1  # bit2: ABSTRACT/CONCRETE
+            b1 = 1 if (i >> 1 & 1) == 0 else -1  # bit1: DYNAMIC/STATIC
+            b2 = 1 if (i >> 0 & 1) == 0 else -1   # bit0: степень специализации
             if b0 == -1:
                 q3_map[i, 0 % n_groups] += 1.0  # ABSTRACT
             if b1 == -1:
                 q3_map[i, 1 % n_groups] += 1.0  # DYNAMIC
-            q3_map[i, 2 % n_groups] += 0.5      # CONCRETE всегда немного
+            # bit0 модулирует базовую CONCRETE активацию
+            q3_map[i, 2 % n_groups] += 0.5 if b2 == 1 else 0.25
         # Нормализуем строки
         row_sum = q3_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
         return q3_map / row_sum

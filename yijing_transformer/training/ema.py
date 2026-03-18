@@ -73,10 +73,10 @@ class EMA:
             self.restore()
 
     def state_dict(self):
-        return {'shadow': self.shadow, 'decay': self.decay}
+        return {'shadow': {k: v.clone() for k, v in self.shadow.items()}, 'decay': self.decay}
 
     def load_state_dict(self, state):
-        self.shadow = state['shadow']
+        self.shadow = {k: v.clone() for k, v in state['shadow'].items()}
         self.decay = state['decay']
 
 

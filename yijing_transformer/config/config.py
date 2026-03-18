@@ -124,7 +124,7 @@ class YiJingConfig:
     # v23: Lookahead, EMA, Gradient Noise, Curriculum
     lookahead_k: int = 0             # Lookahead steps (0 = выкл, 5 типично)
     lookahead_alpha: float = 0.5     # Lookahead interpolation
-    ema_decay: float = 0.0           # EMA decay (0 = выкл, 0.999 типично)
+    # ema_decay: moved to v10 (line 71)
     grad_noise_eta: float = 0.0      # Gradient noise eta (0 = выкл)
     curriculum_strategy: str = 'none'  # Curriculum: none, linear, sqrt, step
 
@@ -150,20 +150,19 @@ class YiJingConfig:
     use_sequence_packing: bool = False  # Sequence packing for efficiency
 
     # v28: Lookahead, SWA, Grad Accumulation, Label Smoothing
-    lookahead_k: int = 0               # Lookahead sync every k steps (0 = выкл)
-    lookahead_alpha: float = 0.5       # Lookahead interpolation
-    swa_start: int = 0                 # SWA start step (0 = выкл)
-    grad_accum_steps: int = 1          # Gradient accumulation steps
+    # lookahead_k, lookahead_alpha: defined in v23
+    # swa_start: defined in v22
+    # grad_accum_steps: defined in training section (default=4)
     label_smoothing_warmup: int = 0    # Label smoothing warmup steps (0 = выкл)
 
     # v29: EMA, Curriculum, Gradient Noise, Weight Decay Schedule
-    ema_decay: float = 0.0             # EMA decay (0 = выкл, 0.999 типично)
-    curriculum_strategy: str = 'none'  # none, linear, sqrt, step, exponential
-    gradient_noise_eta: float = 0.0    # Gradient noise amplitude (0 = выкл)
-    wd_schedule: str = 'constant'      # constant, linear, cosine, proportional
+    # ema_decay: defined in v10
+    # curriculum_strategy: defined in v23
+    # gradient_noise_eta: defined in v11
+    # wd_schedule: defined in v24
 
     # v30: Gradient Centralization, AGC, Freeze Schedule
-    use_grad_centralization: bool = False  # Gradient Centralization
+    # use_grad_centralization: defined in v25
     agc_clipping: float = 0.0             # AGC clipping factor (0 = выкл, 0.01 типично)
     freeze_strategy: str = 'none'         # none, top_down, bottom_up, all_at_once
     loss_spike_threshold: float = 3.0     # Loss spike detection threshold (std devs)
@@ -192,23 +191,23 @@ class YiJingConfig:
     activation_checkpoint_ratio: float = 0.0  # Activation checkpointing ratio (0 = выкл)
 
     # v35: Curriculum, Gradient Noise, Dynamic Batch, Stability Monitor
-    curriculum_strategy: str = 'none'     # Curriculum learning: 'none', 'linear', 'sqrt', 'step'
-    grad_noise_eta: float = 0.0           # Gradient noise eta (0 = выкл)
+    # curriculum_strategy: defined in v23
+    # grad_noise_eta: defined in v23
     dynamic_batch_size: bool = False      # Dynamic batch size scaling
     stability_monitor: bool = False       # Training stability monitor
 
     # v36: EMA, Gradient Vaccine, AGC, Weight Standardization
-    ema_decay: float = 0.0                # EMA decay (0 = выкл, 0.999 типично)
+    # ema_decay: defined in v10
     gradient_vaccine_lambda: float = 0.0  # Gradient vaccine strength (0 = выкл)
-    agc_clip_factor: float = 0.0          # Adaptive Gradient Clipping factor (0 = выкл, 0.01 типично)
+    # agc_clip_factor: defined in v21
     weight_standardization: bool = False  # Weight Standardization
 
     # v37: Gradient Centralization, Lookahead, SWA, Batch Warmup, Gradient Penalty
     gradient_centralization: bool = False  # Gradient Centralization
-    lookahead_k: int = 0                  # Lookahead k (0 = выкл, 5 типично)
+    # lookahead_k: defined in v23
     swa_start_epoch: int = 0              # SWA start epoch (0 = выкл)
     batch_size_warmup_steps: int = 0      # Batch size warmup steps (0 = выкл)
-    gradient_penalty_lambda: float = 0.0  # R1 gradient penalty (0 = выкл)
+    # gradient_penalty_lambda: defined in v33
 
     # v38: Multi-Scale Loss, Grad Accum Scheduler, Freezing, Checkpoints, SGDR
     multi_scale_loss: bool = False        # Multi-scale loss
@@ -237,31 +236,31 @@ class YiJingConfig:
     batch_size_finder: bool = False       # Batch size finder
 
     # v42: SGDR, Gradient Accumulation, Model EMA, Curriculum, Stability Monitor
-    cosine_warm_restarts: bool = False    # SGDR scheduler
+    # cosine_warm_restarts: defined in v38
     gradient_accumulation: int = 1        # Gradient accumulation steps
     model_ema: bool = False               # Model EMA
     curriculum_learning: bool = False     # Curriculum learning
-    stability_monitor: bool = False       # Training stability monitor
+    # stability_monitor: defined in v35
 
     # v43: Knowledge Distillation, Label Smoothing, Focal Loss, Contrastive, R-Drop
     knowledge_distillation: bool = False  # Knowledge distillation
-    label_smoothing: float = 0.0          # Label smoothing epsilon
+    # label_smoothing: defined in v11
     focal_loss_gamma: float = 0.0         # Focal loss gamma (0 = disabled)
     contrastive_loss: bool = False        # Contrastive loss
     rdrop_alpha: float = 0.0              # R-Drop alpha (0 = disabled)
 
     # v44: Gradient Noise, Lookahead, Layer-wise LR, SWA, WSD Schedule
     gradient_noise: bool = False          # Gradient noise injection
-    lookahead_k: int = 0                  # Lookahead k (0 = disabled)
-    layerwise_lr_decay: float = 1.0       # Layer-wise LR decay (1.0 = disabled)
+    # lookahead_k: defined in v23
+    # layerwise_lr_decay: defined in v14
     swa: bool = False                     # Stochastic weight averaging
     wsd_schedule: bool = False            # Warmup-Stable-Decay schedule
 
     # v45: Gradient Centralization, AdaFactor LR, Gradient Penalty, SAM, Lion
-    gradient_centralization: bool = False  # Gradient centralization
+    # gradient_centralization: defined in v37
     adafactor_lr_scaling: bool = False    # AdaFactor-like LR scaling
     gradient_penalty: float = 0.0         # Gradient penalty lambda (0 = disabled)
-    sam_rho: float = 0.0                  # SAM rho (0 = disabled)
+    # sam_rho: defined in v27
     lion_optimizer: bool = False          # Lion optimizer
 
     # v46: Token Loss Weighting, Seq Packing, Dynamic Padding, Attn Sink, Spec Decoding
@@ -354,7 +353,7 @@ class YiJingConfig:
     use_bidirectional_tri: bool = False # двунаправленный треугольный attention (Андреев 3.3)
     use_flower_gat: bool = False        # Цветок Жизни GAT (Беляев 6.6)
     use_structural_defect: bool = False  # Structural Defect bottleneck 16→12 (Беляев)
-    curriculum_strategy: str = 'linear' # 'linear', 'geometric_first', 'triangular' (Андреев 3.4)
+    # curriculum_strategy: defined in v23 (default='none')
 
     # v54: Anti-interference source routing
     use_source_mixer: bool = False      # learnable per-source gates (lightweight)

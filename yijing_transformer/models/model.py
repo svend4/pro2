@@ -1176,8 +1176,8 @@ class YiJingGPT(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
 
-            # Stop tokens
-            if stop_tokens is not None:
+            # Stop tokens (only for batch_size=1)
+            if stop_tokens is not None and idx_next.numel() == 1:
                 if idx_next.item() in stop_tokens:
                     break
 

@@ -64,21 +64,25 @@ def build_scheduler(optimizer, cfg, scheduler_type='cosine', **kwargs):
         return _CosineSchedulerWrapper(optimizer, cfg)
 
     elif scheduler_type == 'wsd':
+        warmup = kwargs.get('warmup_steps', cfg.warmup_steps)
+        decay = kwargs.get('decay_steps', cfg.total_steps // 2)
         return WSDScheduler(
             optimizer,
-            warmup_steps=kwargs.get('warmup_steps', cfg.warmup_steps),
-            stable_steps=kwargs.get('stable_steps', cfg.total_steps // 2),
-            decay_steps=kwargs.get('decay_steps', cfg.total_steps // 2),
-            max_lr=kwargs.get('max_lr', cfg.lr),
-            min_lr=kwargs.get('min_lr', cfg.lr * 0.1),
+            total_steps=cfg.total_steps,
+            warmup_steps=warmup,
+            decay_steps=decay,
+            min_lr_ratio=kwargs.get('min_lr_ratio', 0.1),
         )
 
     elif scheduler_type == 'wsd_v44':
+        warmup_frac = cfg.warmup_steps / max(cfg.total_steps, 1)
+        decay_frac = kwargs.get('decay_fraction', 0.3)
         return WarmupStableDecaySchedule(
-            optimizer,
-            warmup_steps=kwargs.get('warmup_steps', cfg.warmup_steps),
-            stable_steps=kwargs.get('stable_steps', cfg.total_steps // 3),
-            decay_steps=kwargs.get('decay_steps', cfg.total_steps // 3),
+            base_lr=cfg.lr,
+            total_steps=cfg.total_steps,
+            warmup_fraction=warmup_frac,
+            decay_fraction=decay_frac,
+            min_lr=cfg.lr * 0.01,
         )
 
     elif scheduler_type == 'cosine_restarts':

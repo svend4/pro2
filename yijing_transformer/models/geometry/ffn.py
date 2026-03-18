@@ -113,7 +113,7 @@ class DomainMoE(nn.Module):
         router_probs  = F.softmax(router_logits, dim=-1)
 
         top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
-        top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
+        top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
         output = _vectorized_dispatch(
             x_flat, self.W1, self.W2,
@@ -172,7 +172,7 @@ class TrigramMoE(nn.Module):
         router_probs  = F.softmax(router_logits, dim=-1)
 
         top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
-        top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
+        top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + 1e-8)
 
         output = _vectorized_dispatch(
             x_flat, self.W1, self.W2,

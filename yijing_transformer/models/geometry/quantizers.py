@@ -40,7 +40,7 @@ class E8Quantizer(nn.Module):
         super().__init__()
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
         e8 = generate_e8_roots()
@@ -56,7 +56,7 @@ class E8Quantizer(nn.Module):
     def forward(self, x):
         x_norm_sq = (x * x).sum(dim=-1, keepdim=True)
         cross = x @ self.codebook.T
-        dists_sq = x_norm_sq - 2 * cross + self.codebook_norm_sq
+        dists_sq = (x_norm_sq - 2 * cross + self.codebook_norm_sq).clamp(min=0)
         weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
         quantized = weights @ self.codebook
         if self.adaptive_temp:
@@ -76,7 +76,7 @@ class FactoredYiJingQuantizer(nn.Module):
         super().__init__()
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
         trigrams = get_trigrams()
@@ -102,7 +102,7 @@ class FactoredYiJingQuantizer(nn.Module):
     def _soft_quantize(self, z):
         z_norm_sq = (z * z).sum(dim=-1, keepdim=True)
         cross = z @ self.trigrams.T
-        dists_sq = z_norm_sq - 2 * cross + self.trigrams_norm_sq
+        dists_sq = (z_norm_sq - 2 * cross + self.trigrams_norm_sq).clamp(min=0)
         weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
         return weights @ self.trigrams
 
@@ -117,7 +117,7 @@ class FourStateQuantizer(nn.Module):
         super().__init__()
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
         states = torch.tensor([-1.0, -0.5, 0.5, 1.0])
@@ -150,7 +150,7 @@ class AntipodalQuantizer(nn.Module):
         super().__init__()
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
         hexagrams = get_hexagrams()
@@ -167,7 +167,7 @@ class AntipodalQuantizer(nn.Module):
         x_norm_sq = (x * x).sum(dim=-1, keepdim=True)
         cross = x @ self.codebook.T
         codebook_norm_sq = (self.codebook ** 2).sum(dim=1)
-        dists_sq = x_norm_sq - 2 * cross + codebook_norm_sq
+        dists_sq = (x_norm_sq - 2 * cross + codebook_norm_sq).clamp(min=0)
         weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
         quantized = weights @ self.codebook
         if self.adaptive_temp:
@@ -198,7 +198,7 @@ class HierarchicalQuantizer(nn.Module):
 
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
 
@@ -221,7 +221,7 @@ class HierarchicalQuantizer(nn.Module):
     def _soft_quantize_batch(self, z):
         z_norm_sq = (z * z).sum(dim=-1, keepdim=True)
         cross = z @ self.codebook.T
-        dists_sq = z_norm_sq - 2 * cross + self.codebook_norm_sq
+        dists_sq = (z_norm_sq - 2 * cross + self.codebook_norm_sq).clamp(min=0)
         weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
         return weights @ self.codebook
 
@@ -267,7 +267,7 @@ class DeformableQuantizer(nn.Module):
         cb_norm_sq = (cb * cb).sum(dim=1)
         z_norm_sq = (groups * groups).sum(dim=-1, keepdim=True)
         cross = groups @ cb.T
-        dists_sq = z_norm_sq - 2 * cross + cb_norm_sq
+        dists_sq = (z_norm_sq - 2 * cross + cb_norm_sq).clamp(min=0)
         weights = F.softmax(-dists_sq / self.temp, dim=-1)
         quantized_groups = weights @ cb
         quantized = quantized_groups.reshape(*shape, self.total_dim)
@@ -296,12 +296,12 @@ class GumbelQuantizer(nn.Module):
         self.n_codewords = 2 ** group_dim
         self.hard = hard
         self.commitment_weight = commitment_weight
-        self.log_temp = nn.Parameter(torch.tensor(temp).log())
+        self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
 
         codebook = generate_hypercube(group_dim)
         self.register_buffer('codebook', codebook)
         self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
-        self._commitment_loss = torch.tensor(0.0)
+        self.register_buffer('_commitment_loss', torch.tensor(0.0), persistent=False)
 
     @property
     def current_temp(self):
@@ -312,7 +312,7 @@ class GumbelQuantizer(nn.Module):
         groups = x.reshape(*shape, self.n_groups, self.group_dim)
         z_norm_sq = (groups * groups).sum(dim=-1, keepdim=True)
         cross = groups @ self.codebook.T
-        dists_sq = z_norm_sq - 2 * cross + self.codebook_norm_sq
+        dists_sq = (z_norm_sq - 2 * cross + self.codebook_norm_sq).clamp(min=0)
         logits = -dists_sq
 
         if self.training:
@@ -402,7 +402,9 @@ class GroupedQuantizer(nn.Module):
                 vmin = x_g.amin(dim=-1).mean(dim=tuple(range(x_g.dim() - 2)))
                 vmax = x_g.amax(dim=-1).mean(dim=tuple(range(x_g.dim() - 2)))
                 self.scales.data = (vmax - vmin) / (self.qmax - self.qmin)
-                self.zero_points.data = (self.qmin - vmin / self.scales.data).round()
+                # Защита от div-by-zero при scales == 0 (all-zero group)
+                safe_scales = self.scales.data.clamp(min=1e-8)
+                self.zero_points.data = (self.qmin - vmin / safe_scales).round()
 
     def extra_repr(self):
         return (f"d_model={self.d_model}, groups={self.n_groups}, "
@@ -443,7 +445,7 @@ class TernaryQuantizer(nn.Module):
 
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
 
@@ -469,7 +471,7 @@ class TernaryQuantizer(nn.Module):
             raise ValueError(f"Unknown TernaryQuantizer mode: {mode}")
 
         # Penalty weight for uncertainty usage
-        self._uncertainty_loss = torch.tensor(0.0)
+        self.register_buffer('_uncertainty_loss', torch.tensor(0.0), persistent=False)
 
     @staticmethod
     def _generate_sparse_codebook(n: int, max_zeros: int) -> torch.Tensor:
@@ -502,7 +504,7 @@ class TernaryQuantizer(nn.Module):
         """Полная квантизация к 3^n вершинам."""
         x_norm_sq = (x * x).sum(dim=-1, keepdim=True)
         cross = x @ self.codebook.T
-        dists_sq = x_norm_sq - 2 * cross + self.codebook_norm_sq
+        dists_sq = (x_norm_sq - 2 * cross + self.codebook_norm_sq).clamp(min=0)
         weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
         return weights @ self.codebook
 
@@ -514,7 +516,7 @@ class TernaryQuantizer(nn.Module):
             z = x[..., g*3:(g+1)*3]
             z_norm_sq = (z * z).sum(dim=-1, keepdim=True)
             cross = z @ self.trigrams.T
-            dists_sq = z_norm_sq - 2 * cross + self.trigrams_norm_sq
+            dists_sq = (z_norm_sq - 2 * cross + self.trigrams_norm_sq).clamp(min=0)
             weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
             parts.append(weights @ self.trigrams)
         return torch.cat(parts, dim=-1)
@@ -637,7 +639,7 @@ class PairedBitQuantizer(nn.Module):
 
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
 
@@ -798,7 +800,7 @@ class MatryoshkaQuantizer(nn.Module):
 
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
-            self.log_temp = nn.Parameter(torch.tensor(temp).log())
+            self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
         else:
             self.temp = temp
 
@@ -850,7 +852,7 @@ class MatryoshkaQuantizer(nn.Module):
         """Мягкая квантизация: расстояния → softmax → взвешенная сумма."""
         x_norm_sq = (x * x).sum(dim=-1, keepdim=True)
         cross = x @ codebook.T
-        dists_sq = x_norm_sq - 2 * cross + cb_norm_sq
+        dists_sq = (x_norm_sq - 2 * cross + cb_norm_sq).clamp(min=0)
         weights = F.softmax(-dists_sq / self.current_temp, dim=-1)
         quantized = weights @ codebook
         return quantized, weights

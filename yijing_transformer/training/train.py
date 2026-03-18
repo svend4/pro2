@@ -45,8 +45,8 @@ from training.bridge import TrainingBridge
 
 def get_lr(step, cfg):
     """Cosine learning rate с warmup."""
-    if step < cfg.warmup_steps:
-        return cfg.lr * step / cfg.warmup_steps
+    if step < max(cfg.warmup_steps, 1):
+        return cfg.lr * step / max(cfg.warmup_steps, 1)
     progress = (step - cfg.warmup_steps) / max(1, cfg.total_steps - cfg.warmup_steps)
     return cfg.lr * 0.5 * (1.0 + math.cos(math.pi * progress))
 
@@ -371,10 +371,11 @@ def train(args):
     start_time = time.time()
 
     for step in range(start_step + 1, cfg.total_steps + 1):
-        # LR управляется через bridge scheduler
+        # LR управляется через cosine schedule; сохраняем LLRD-пропорции
         lr = get_lr(step, cfg)
         for pg in optimizer.param_groups:
-            pg['lr'] = lr
+            lr_ratio = pg.get('lr_ratio', 1.0)
+            pg['lr'] = lr * lr_ratio
 
         domain_ids_batch = None
         if data_fn:
@@ -406,7 +407,7 @@ def train(args):
         # Bridge: модификаторы градиентов (AGC, Grad Noise, Centralization)
         bridge.after_backward(step)
 
-        accum_loss += loss.item()
+        accum_loss += loss.item() * cfg.grad_accum_steps  # восстанавливаем оригинальный масштаб
 
         if step % cfg.grad_accum_steps == 0:
             scaler.unscale_(optimizer)
@@ -424,7 +425,7 @@ def train(args):
             )
 
         if step % cfg.log_every == 0:
-            avg_loss = accum_loss / cfg.log_every * cfg.grad_accum_steps
+            avg_loss = accum_loss / cfg.log_every
             elapsed = time.time() - start_time
             steps_per_sec = step / elapsed if elapsed > 0 else 0
             logger.log({

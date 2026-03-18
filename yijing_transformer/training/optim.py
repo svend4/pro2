@@ -55,9 +55,10 @@ def build_optimizer(model, cfg, llrd_factor=1.0, embedding_lr_scale=1.0):
             lr_mult = llrd_factor ** depth
         elif 'tok_emb' in name or 'pos_emb' in name:
             lr_mult = embedding_lr_scale
-        elif 'head.' in name:
+        elif 'head.' in name or 'ln_f.' in name:
             lr_mult = 1.0
         else:
+            # Fallback: для параметров вне слоёв (нормы, прочие) при LLRD
             lr_mult = 1.0
 
         # Decay vs no-decay
@@ -69,6 +70,7 @@ def build_optimizer(model, cfg, llrd_factor=1.0, embedding_lr_scale=1.0):
             param_groups[group_key] = {
                 'params': [],
                 'lr': cfg.lr * lr_mult,
+                'lr_ratio': lr_mult,
                 'weight_decay': wd,
             }
         param_groups[group_key]['params'].append(param)

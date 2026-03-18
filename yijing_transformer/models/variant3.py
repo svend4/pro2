@@ -191,6 +191,7 @@ class BianGuaAttention(nn.Module):
                                     float('-inf'))
 
         attn = F.softmax(scores, dim=-1)
+        attn = attn.nan_to_num(0.0)
         out  = (attn @ v).transpose(1, 2).reshape(B, T, C)
         return self.out_proj(out)
 
@@ -486,7 +487,7 @@ class Variant3Block(nn.Module):
 
         # 4. Архетипальная интерлингва — хаб для двух источников
         # Сигнатура: forward(x, source_outputs)
-        inter_out = self.interlingua(x, [attn_out, ternary_out])
+        inter_out = self.interlingua(attn_out, [attn_out, ternary_out])
         self._interlingua_loss = self.interlingua.get_interlingua_loss()
 
         # 5. Кросс-архетипная аналогия — 変爻 механизм
@@ -587,8 +588,11 @@ class Variant3GPT(nn.Module):
         pos = torch.arange(T, device=tokens.device)
         x   = self.drop(self.tok_emb(tokens) + self.pos_emb(pos))   # (B, T, d)
 
+        aux_loss = 0.0
         for block in self.blocks:
             x = block(x)
+            if hasattr(block, '_interlingua_loss') and block._interlingua_loss is not None:
+                aux_loss = aux_loss + block._interlingua_loss
 
         routing_info = None
         if hasattr(self, 'domain_router'):
@@ -603,6 +607,8 @@ class Variant3GPT(nn.Module):
                 logits.reshape(-1, logits.size(-1)),
                 targets.reshape(-1),
             )
+            if isinstance(aux_loss, torch.Tensor):
+                loss = loss + 0.01 * aux_loss
 
         return logits, loss, routing_info
 

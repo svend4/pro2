@@ -267,7 +267,7 @@ class RuleBank(nn.Module):
         self.d_event = d_event
         self.d_model = d_model
         self.n_rules = n_rules
-        self.n_hits = n_hits
+        self.n_hits = min(n_hits, n_rules)
         self.n_alternatives = n_alternatives
 
         # Паттерны (образцы): каждый паттерн = вектор в d_event
@@ -569,5 +569,6 @@ class AbrialeLayer(nn.Module):
             loss: скаляр — штраф за неравномерное использование
         """
         avg_usage = hit_weights.mean(dim=(0, 1))  # (n_rules,)
-        target = 1.0 / hit_weights.shape[-1]
+        # target = n_hits/n_rules (т.к. scatter помещает mass только на n_hits правил)
+        target = self.n_hits / hit_weights.shape[-1]
         return ((avg_usage - target) ** 2).sum() * hit_weights.shape[-1]

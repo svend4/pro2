@@ -368,7 +368,7 @@ class HexagramMoE(nn.Module):
         router_probs = F.softmax(router_logits, dim=-1).mean(0)  # (n_experts,)
         uniform = torch.ones_like(router_probs) / self.n_experts
         balance_loss = self.balance_coeff * F.kl_div(
-            router_probs.log(), uniform, reduction='batchmean'
+            router_probs.log(), uniform, reduction='sum'
         )
 
         return output, balance_loss
