@@ -216,7 +216,7 @@ class Q6GeometricRouter(nn.Module):
 
         # Якоря экспертов в Q6 — буфер, не обучаемый
         anchors = torch.stack([
-            _q6_idx_to_vertex(EXPERT_HEXAGRAM_ANCHORS.get(name, i * 9))
+            _q6_idx_to_vertex(EXPERT_HEXAGRAM_ANCHORS.get(name, i * 9 % 64))
             for i, name in enumerate(self.expert_names)
         ])  # (n_experts, 6)
         self.register_buffer('expert_anchors', anchors)
