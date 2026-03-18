@@ -16,9 +16,11 @@ NAUTILUS PORTAL
   python portal.py --json             # машиночитаемый вывод
 """
 
+import html
 import json
 import sys
 import argparse
+import urllib.parse
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
@@ -72,7 +74,7 @@ class Info1Adapter:
         """Ищет концепт в структуре info1 через GitHub API."""
         results = []
         try:
-            url = f"https://api.github.com/search/code?q={query}+repo:{self.REPO}+language:Markdown"
+            url = f"https://api.github.com/search/code?q={urllib.parse.quote(query)}+repo:{self.REPO}+language:Markdown"
             req = urllib.request.Request(url, headers={"User-Agent": "nautilus-portal/1.0"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
@@ -161,7 +163,7 @@ class Pro2Adapter:
         for key in ["final_stats", "training_summary", "domain_coverage"]:
             if key in log:
                 val = str(log[key])
-                if q in val.lower() or True:  # включаем всё в демо-режиме
+                if q in val.lower():  # поиск по ключевому слову
                     results.append(PortalEntry(
                         id=f"pro2:log:{key}",
                         title=f"pro2 / {key}",
@@ -355,8 +357,8 @@ def render_html(result: PortalResult, portal: NautilusPortal) -> str:
         entries_html += f"""
         <div style="border-left:3px solid {repo_color};padding:8px 12px;margin:8px 0;background:#1e1e1e;border-radius:0 4px 4px 0">
           <div style="color:{repo_color};font-size:11px;font-weight:bold;text-transform:uppercase">{e.id.split(':')[0]} · {e.format_type} {alpha_badge}</div>
-          <div style="color:#e0e0e0;font-size:14px;margin:3px 0">{e.title}</div>
-          <div style="color:#aaa;font-size:12px">{e.content[:200]}</div>
+          <div style="color:#e0e0e0;font-size:14px;margin:3px 0">{html.escape(e.title)}</div>
+          <div style="color:#aaa;font-size:12px">{html.escape(e.content[:200])}</div>
         </div>"""
 
     links_html = ""

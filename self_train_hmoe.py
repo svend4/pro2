@@ -269,7 +269,7 @@ def quality_filter(text: str, min_len: int = 10) -> bool:
 def figure8_hmoe(
     model:          Variant3GPT,
     seed_texts:     List[str],
-    block_size:     int   = 63,
+    block_size:     int   = MODEL_CFG["block_size"] - 1,
     n_cycles:       int   = 4,
     steps_per_loop: int   = 50,
     temperature:    float = 1.2,
@@ -463,8 +463,8 @@ def figure8_hmoe(
 
 # ── Вспомогательные функции ──────────────────────────────────────────────────
 
-def _encode(text: str, block_size: int = 63) -> torch.Tensor:
-    ids = [min(b, 255) for b in text.encode("utf-8")][:block_size]
+def _encode(text: str, block_size: int = MODEL_CFG["block_size"] - 1) -> torch.Tensor:
+    ids = [min(b, MODEL_CFG["vocab_size"] - 1) for b in text.encode("utf-8")][:block_size]
     if not ids:
         ids = [32]
     return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
