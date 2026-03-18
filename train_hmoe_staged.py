@@ -141,6 +141,21 @@ def collect_moe_lb_loss(model: Variant3GPT) -> torch.Tensor:
     return total
 
 
+def collect_interlingua_loss(model: Variant3GPT) -> torch.Tensor:
+    """Суммирует interlingua loss из всех блоков."""
+    total = None
+    for block in model.blocks:
+        il_loss = getattr(block, '_interlingua_loss', None)
+        if il_loss is not None and isinstance(il_loss, torch.Tensor):
+            if total is None:
+                total = il_loss
+            else:
+                total = total + il_loss
+    if total is None:
+        total = torch.tensor(0.0, device=next(model.parameters()).device)
+    return total
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Stage 1: MicroExperts — каждый эксперт на своём кластере
 # ══════════════════════════════════════════════════════════════════════════════
@@ -204,7 +219,8 @@ def train_stage1_micro_experts(
                 continue
 
             lb = collect_moe_lb_loss(model)
-            total_loss = loss + lb
+            il = collect_interlingua_loss(model)
+            total_loss = loss + lb + 0.01 * il
 
             opt.zero_grad()
             total_loss.backward()

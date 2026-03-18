@@ -482,6 +482,7 @@ class Variant3Block(nn.Module):
         # 4. Архетипальная интерлингва — хаб для двух источников
         # Сигнатура: forward(x, source_outputs)
         inter_out = self.interlingua(x, [attn_out, ternary_out])
+        self._interlingua_loss = self.interlingua.get_interlingua_loss()
 
         # 5. Кросс-архетипная аналогия — 変爻 механизм
         analogy_out = self.analogy(inter_out, hex_weights)
