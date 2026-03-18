@@ -161,7 +161,7 @@ class GeometryCurriculumScheduler:
         elif self.strategy == 'geometric_first':
             if step < self.warmup_steps:
                 return 1.0
-            decay_progress = (step - self.warmup_steps) / max(self.total_steps - self.warmup_steps, 1)
+            decay_progress = min((step - self.warmup_steps) / max(self.total_steps - self.warmup_steps, 1), 1.0)
             return self.target_strength + (1.0 - self.target_strength) * (1 - decay_progress)
         else:
             return self.target_strength
