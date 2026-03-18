@@ -200,8 +200,11 @@ class Q6GeometricRouter(nn.Module):
     def __init__(self, d_model: int, n_experts: int, top_k: int = 2,
                  quant_temp: float = 0.3, expert_names: Optional[List[str]] = None):
         super().__init__()
+        if expert_names is None and n_experts > len(EXPERT_NAMES):
+            raise ValueError(
+                f"n_experts={n_experts} exceeds available EXPERT_NAMES ({len(EXPERT_NAMES)})")
         self.n_experts = n_experts
-        self.top_k = top_k
+        self.top_k = min(top_k, n_experts)
         self.expert_names = expert_names or EXPERT_NAMES[:n_experts]
 
         # Проекция d_model → 6 (Q6-пространство)
@@ -400,7 +403,7 @@ class _YiJingCoreAttention(nn.Module):
             geo_attn = F.softmax(geo_bias.masked_fill(~causal, float('-inf')), dim=-1)
             geo_out = geo_attn @ v
             scales = self.head_scales.view(1, -1, 1, 1)
-            out = out + scales * (geo_out - out).detach()
+            out = out + scales * (geo_out - out.detach())
 
         out = out.transpose(1, 2).reshape(B, T, C)
         return self.out_proj(out)

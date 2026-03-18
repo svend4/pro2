@@ -279,6 +279,10 @@ class HexagramMoE(nn.Module):
         self.router_temp = nn.Parameter(torch.tensor(temp).log())
 
         ffn_hidden = int(d_model * ffn_mult)
+        # Ensure even division for non-factored experts
+        if not (use_factored and n_experts == 64):
+            expert_dim = ffn_hidden // n_experts
+            ffn_hidden = expert_dim * n_experts  # round down to exact multiple
 
         if use_factored and n_experts == 64:
             # Факторизованные эксперты: 8 верхних + 8 нижних триграммных FFN
