@@ -438,10 +438,11 @@ class HierarchicalE2(nn.Module):
         for p in self.parameters():
             p.requires_grad_(False)
 
-        # Embeddings + head — всегда обучаемы
+        # Embeddings + head + final norm — всегда обучаемы
         for p in list(self.tok_emb.parameters()) + \
                  list(self.pos_emb.parameters()) + \
-                 list(self.head.parameters()):
+                 list(self.head.parameters()) + \
+                 list(self.ln_f.parameters()):
             p.requires_grad_(True)
 
         # Размораживаем уровни по фазе

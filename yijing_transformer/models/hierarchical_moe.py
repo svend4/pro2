@@ -349,7 +349,7 @@ class GlobalRouter(nn.Module):
         group_scores  = soft_hex @ self.group_anchors.T
         group_weights = F.softmax(group_scores, dim=-1)
         mean_w  = group_weights.mean(dim=(0, 1))
-        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum().neg()
+        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()
         return group_weights, lb_loss
 
 
