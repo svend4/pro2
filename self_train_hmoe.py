@@ -114,6 +114,8 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
             info = getattr(block, '_last_moe_info', None)
             if info and 'group_weights' in info:
                 gw = info['group_weights']   # (B, T, n_groups) или (B, n_groups)
+                if torch.isnan(gw).any():
+                    continue
                 if gw.dim() == 3:
                     gw = gw.mean(dim=(0, 1))   # → (n_groups,)
                 elif gw.dim() == 2:
@@ -131,10 +133,11 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
 
     w_a = gw_dict.get("ABSTRACT", 0.33)
     w_b = gw_dict.get("CONCRETE", 0.33)
-    w_total = w_a + w_b + 1e-8
+    w_d = gw_dict.get("DYNAMIC", 0.33)
+    w_total = w_a + w_b + w_d + 1e-8
 
-    # Нормированный баланс
-    balance = (w_a / w_total + w_b / w_total) / 2   # ≈ 0.5 при равновесии
+    # Нормированный баланс по всем трём группам (включая DYNAMIC)
+    balance = (w_a / w_total + w_b / w_total) / 2   # ≈ 0.33 при равновесии
     imbalance = abs(w_a / w_total - w_b / w_total)   # 0 = баланс, 1 = дисбаланс
 
     lci = (1.0 - imbalance) * math.pi   # ∈ [0, π], цель = π
@@ -241,6 +244,7 @@ def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
     if inp.shape[1] < 1:
         return float("nan")
     total_loss = 0.0
+    completed_steps = 0
     for _ in range(n_steps):
         _, loss, aux = model(inp, targets=tgt)
         if loss is None or torch.isnan(loss):
@@ -251,7 +255,8 @@ def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
         opt.step()
         total_loss += loss.item()
-    return total_loss / n_steps
+        completed_steps += 1
+    return total_loss / max(completed_steps, 1)
 
 
 def quality_filter(text: str, min_len: int = 10) -> bool:
@@ -264,7 +269,7 @@ def quality_filter(text: str, min_len: int = 10) -> bool:
 def figure8_hmoe(
     model:          Variant3GPT,
     seed_texts:     List[str],
-    block_size:     int   = 63,
+    block_size:     int   = MODEL_CFG["block_size"] - 1,
     n_cycles:       int   = 4,
     steps_per_loop: int   = 50,
     temperature:    float = 1.2,
@@ -308,7 +313,7 @@ def figure8_hmoe(
             h = model.tok_emb(ids)
             for block in model.blocks:
                 h = block(h)
-        emb = h.mean(dim=1).squeeze(0)
+        emb = h.mean(dim=1).squeeze(0).detach()
         rag.add(text, emb)
 
     print(f"  RAG-буфер      : {len(rag)} текстов")
@@ -414,7 +419,8 @@ def figure8_hmoe(
 
         avg_lci_emb = (lci_a_emb + lci_b_emb) / 2
         avg_lci_r   = (lci_a_r   + lci_b_r)   / 2
-        resonance   = abs(avg_lci_emb - math.pi) < _LCI_EPSILON
+        resonance   = (abs(avg_lci_emb - math.pi) < _LCI_EPSILON
+                       and abs(avg_lci_r - math.pi) < _LCI_EPSILON)
 
         res_mark = "✓ РЕЗОНАНС (LCI ≈ π)" if resonance else (
             f"петля A{'↑' if lci_a_emb > math.pi else '↓'}  "
@@ -457,8 +463,8 @@ def figure8_hmoe(
 
 # ── Вспомогательные функции ──────────────────────────────────────────────────
 
-def _encode(text: str, block_size: int = 63) -> torch.Tensor:
-    ids = [min(b, 255) for b in text.encode("utf-8")][:block_size]
+def _encode(text: str, block_size: int = MODEL_CFG["block_size"] - 1) -> torch.Tensor:
+    ids = [min(b, MODEL_CFG["vocab_size"] - 1) for b in text.encode("utf-8")][:block_size]
     if not ids:
         ids = [32]
     return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
@@ -544,7 +550,7 @@ def main():
     if os.path.exists(args.checkpoint):
         ckpt = torch.load(args.checkpoint, map_location="cpu")
         try:
-            model.load_state_dict(ckpt["model_state"])
+            model.load_state_dict(ckpt["model_state"], strict=False)
             raw = ckpt.get("next_phase")
             phase = (raw - 1) if isinstance(raw, int) else "?"
             print(f"  Загружен чекпоинт: {args.checkpoint}  (после фазы {phase} curriculum)")

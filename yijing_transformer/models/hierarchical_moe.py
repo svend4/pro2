@@ -157,7 +157,7 @@ class Q6ExpertBank(nn.Module):
     def load_balance_loss(self, hex_weights: torch.Tensor) -> torch.Tensor:
         """Вспомогательный loss для равномерной нагрузки экспертов."""
         mean_w = hex_weights.mean(dim=[0, 1])             # (64,)
-        return (mean_w * torch.log(mean_w + 1e-8)).sum().neg()
+        return (mean_w * torch.log(mean_w + 1e-8)).sum()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -287,9 +287,9 @@ class GroupRouter(nn.Module):
         sparse_w = torch.zeros_like(weights).scatter_(-1, indices, topk_vals)
         sparse_w = sparse_w / (sparse_w.sum(dim=-1, keepdim=True) + 1e-8)
 
-        # ── Load-balance: энтропия нагрузки ─────────────────────────────────
+        # ── Load-balance: МИНИМИЗИРУЕМ отрицательную энтропию = МАКСИМИЗИРУЕМ баланс
         mean_w  = weights.mean(dim=(0, 1))                     # (n,)
-        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum().neg()
+        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()    # Σ p·log(p) < 0
 
         # ── Anti-circle: штраф за доминирование одного эксперта ─────────────
         # Обновляем EMA нагрузки
@@ -297,12 +297,13 @@ class GroupRouter(nn.Module):
             with torch.no_grad():
                 self._ema_load.mul_(0.95).add_(mean_w.detach() * 0.05)
 
-        # Доминирование = макс. нагрузка * streak_limit > 1.0 (т.е. > 1/k * streak_limit)
+        # Доминирование: штраф если макс. нагрузка превышает допуск над uniform
         max_load = self._ema_load.max()
         uniform  = 1.0 / max(len(self.expert_names), 1)
-        # Чем сильнее монополия относительно порога streak_limit, тем больше штраф
-        anticircle_penalty = F.relu(max_load - uniform * self.streak_limit)
-        lb_loss = lb_loss - self.anticircle_weight * anticircle_penalty
+        # Порог = uniform * (1 + streak_limit/n_experts), достижим при дисбалансе
+        threshold = uniform * (1.0 + self.streak_limit / max(len(self.expert_names), 1))
+        anticircle_penalty = F.relu(max_load - threshold)
+        lb_loss = lb_loss + self.anticircle_weight * anticircle_penalty
 
         return sparse_w, indices, lb_loss
 
@@ -488,8 +489,8 @@ class MultiScaleGlobalRouter(nn.Module):
         # ── Load-balance loss ────────────────────────────────────────────────
         mean_gw  = group_weights.mean(dim=(0, 1))
         mean_hex = hex_weights.mean(dim=(0, 1))
-        lb_loss  = ((mean_gw  * torch.log(mean_gw  + 1e-8)).sum().neg() +
-                    (mean_hex * torch.log(mean_hex + 1e-8)).sum().neg() * 0.1)
+        lb_loss  = ((mean_gw  * torch.log(mean_gw  + 1e-8)).sum() +
+                    (mean_hex * torch.log(mean_hex + 1e-8)).sum() * 0.1)
 
         return group_weights, hex_weights, lb_loss
 
@@ -658,7 +659,7 @@ class HierarchicalMoEFFN(nn.Module):
             lb_hex  = self.hex_tier.load_balance_loss(hex_weights)
             total_lb_loss = total_lb_loss + lb_hex * 0.1
             combined = combined + self.cfg.hex_tier_weight * hex_out
-            info['hex_tier_active'] = torch.tensor(1.0)
+            info['hex_tier_active'] = torch.tensor(1.0, device=x.device)
 
         out = self.out_proj(self.out_norm(combined))
         info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight
@@ -674,13 +675,13 @@ TRAINING_STAGES = {
         "name": "MicroExperts",
         "description": "Обучение микро-экспертов по кластерам (остальное заморожено)",
         "unfreeze": ["micro_experts"],
-        "freeze":   ["global_router", "group_routers", "bridge_experts", "out_proj"],
+        "freeze":   ["global_router", "group_routers", "crossing", "out_proj"],
     },
     2: {
         "name": "GroupRouters",
         "description": "Обучение групповых роутеров + продолжение экспертов",
         "unfreeze": ["micro_experts", "group_routers"],
-        "freeze":   ["global_router", "bridge_experts"],
+        "freeze":   ["global_router", "crossing"],
     },
     3: {
         "name": "GlobalRouter",

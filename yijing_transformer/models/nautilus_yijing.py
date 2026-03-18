@@ -733,7 +733,7 @@ class NautilusYiJing(nn.Module):
             entropy = -(ew * ew.log()).sum(dim=-1)  # (B, T)
             synth_act = (entropy - self.synth_entropy_threshold).clamp(min=0)
             if synth_act.sum() > 0:
-                synth_act = synth_act / (synth_act.max() + 1e-8)
+                synth_act = synth_act / synth_act.max().clamp(min=1e-8)
                 synth_out = self.synth_expert(x)
                 x = x + synth_out * synth_act.unsqueeze(-1) * self.synth_gate
                 synth_info = {

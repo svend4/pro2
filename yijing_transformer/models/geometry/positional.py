@@ -18,6 +18,7 @@ class RotaryEmbedding(nn.Module):
         self.scaling = scaling
         self.scaling_factor = scaling_factor
         if scaling == 'ntk' and scaling_factor > 1.0:
+            assert dim > 2, f"NTK scaling requires dim > 2, got dim={dim}"
             base = base * (scaling_factor ** (dim / (dim - 2)))
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)

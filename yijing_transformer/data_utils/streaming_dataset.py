@@ -1,9 +1,12 @@
 """Стриминговый датасет TinyStories с буферизацией."""
 
+import logging
 import torch
 import random
 from collections import deque
 from datasets import load_dataset
+
+_log = logging.getLogger(__name__)
 
 
 def get_batch_streaming(iterator, batch_size, block_size, device, tokenizer,
@@ -17,6 +20,8 @@ def get_batch_streaming(iterator, batch_size, block_size, device, tokenizer,
             ex = next(iterator)
             buffer.append(ex)
         except StopIteration:
+            if not buffer:
+                _log.warning("Streaming iterator exhausted with empty buffer")
             break
 
     while len(x_batch) < batch_size:

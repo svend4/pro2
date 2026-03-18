@@ -171,9 +171,9 @@ CURRICULUM: List[CurriculumPhase] = [
 
 # ── Утилиты ───────────────────────────────────────────────────────────────────
 
-def encode(text: str, block_size: int = 63) -> torch.Tensor:
+def encode(text: str, block_size: int = MODEL_CFG["block_size"] - 1) -> torch.Tensor:
     """Кодирует текст как byte-токены."""
-    ids = [min(b, 255) for b in text.encode("utf-8")][:block_size]
+    ids = [min(b, MODEL_CFG["vocab_size"] - 1) for b in text.encode("utf-8")][:block_size]
     if not ids:
         ids = [32]
     return torch.tensor(ids, dtype=torch.long).unsqueeze(0)  # (1, T)
@@ -199,7 +199,7 @@ def load_corpus(root: str, clusters: List[str]) -> List[str]:
         return []
 
 
-def make_batch(texts: List[str], block_size: int = 63) -> Tuple[torch.Tensor, torch.Tensor]:
+def make_batch(texts: List[str], block_size: int = MODEL_CFG["block_size"] - 1) -> Tuple[torch.Tensor, torch.Tensor]:
     """Случайный батч из списка текстов."""
     text = random.choice(texts)
     tokens = encode(text, block_size)
@@ -246,7 +246,7 @@ def perplexity(model: nn.Module, texts: List[str], n: int = 20) -> float:
         with torch.no_grad():
             _, loss, _ = model(inp, targets=tgt)
         if loss is not None and not torch.isnan(loss):
-            ppls.append(math.exp(min(loss.item(), 10)))
+            ppls.append(min(math.exp(loss.item()), 1e5))
     return sum(ppls) / len(ppls) if ppls else float("inf")
 
 
@@ -323,7 +323,7 @@ def run_phase(
     t0 = time.perf_counter()
 
     for step in range(1, steps + 1):
-        inp, tgt = make_batch(texts_for_phase, block_size=63)
+        inp, tgt = make_batch(texts_for_phase)
 
         logits, loss, aux_loss = model(inp, targets=tgt)
 
@@ -416,7 +416,7 @@ def main():
     start_phase = 1
     if args.resume and os.path.exists(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu")
-        model.load_state_dict(ckpt["model_state"])
+        model.load_state_dict(ckpt["model_state"], strict=False)
         start_phase = ckpt.get("next_phase", 1)
         print(f"  Чекпоинт загружен: {args.resume}  (продолжаем с фазы {start_phase})")
 

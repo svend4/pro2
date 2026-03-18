@@ -104,10 +104,17 @@ def encode(text: str, vocab_size: int = 256, block_size: int = 32) -> torch.Tens
     return torch.tensor(ids or [32], dtype=torch.long).unsqueeze(0)
 
 
-def perplexity(model: Variant3GPT, texts: List[str], n: int = 20) -> float:
+def perplexity(model: Variant3GPT, texts: List[str], n: int = 20,
+               eval_frac: float = 0.2) -> float:
+    """PPL на held-out подмножестве (последние eval_frac текстов)."""
+    # Используем хвост списка как eval-set для предотвращения data leakage
+    split = max(1, int(len(texts) * (1 - eval_frac)))
+    eval_texts = texts[split:]
+    if not eval_texts:
+        eval_texts = texts  # fallback если слишком мало текстов
     model.eval()
     ppls = []
-    for text in random.sample(texts, min(n, len(texts))):
+    for text in random.sample(eval_texts, min(n, len(eval_texts))):
         tokens = encode(text)
         if tokens.shape[1] < 2:
             continue
@@ -121,11 +128,31 @@ def perplexity(model: Variant3GPT, texts: List[str], n: int = 20) -> float:
 
 def collect_moe_lb_loss(model: Variant3GPT) -> torch.Tensor:
     """Суммирует lb_loss из всех блоков с HMoE."""
-    total = torch.tensor(0.0)
+    total = None
     for block in model.blocks:
         info = getattr(block, '_last_moe_info', None)
         if info and 'lb_loss' in info:
-            total = total + info['lb_loss']
+            if total is None:
+                total = info['lb_loss']
+            else:
+                total = total + info['lb_loss']
+    if total is None:
+        total = torch.tensor(0.0, device=next(model.parameters()).device)
+    return total
+
+
+def collect_interlingua_loss(model: Variant3GPT) -> torch.Tensor:
+    """Суммирует interlingua loss из всех блоков."""
+    total = None
+    for block in model.blocks:
+        il_loss = getattr(block, '_interlingua_loss', None)
+        if il_loss is not None and isinstance(il_loss, torch.Tensor):
+            if total is None:
+                total = il_loss
+            else:
+                total = total + il_loss
+    if total is None:
+        total = torch.tensor(0.0, device=next(model.parameters()).device)
     return total
 
 
@@ -192,7 +219,8 @@ def train_stage1_micro_experts(
                 continue
 
             lb = collect_moe_lb_loss(model)
-            total_loss = loss + lb
+            il = collect_interlingua_loss(model)
+            total_loss = loss + lb + 0.01 * il
 
             opt.zero_grad()
             total_loss.backward()

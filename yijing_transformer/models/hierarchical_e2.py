@@ -536,7 +536,7 @@ class HierarchicalE2(nn.Module):
             # Auxiliary: энтропия ранних кластеров (α=−4)
             # Поощряем чёткое распределение по гексаграммам
             assign_entropy = -(assignments * (assignments + 1e-9).log()).sum(-1).mean()
-            target_entropy = math.log(8.0)
+            target_entropy = math.log(float(self.cfg.n_archetypes))
             glyph_loss = (assign_entropy - target_entropy).pow(2)
 
             loss = lm_loss + 0.05 * conv_loss + 0.02 * glyph_loss

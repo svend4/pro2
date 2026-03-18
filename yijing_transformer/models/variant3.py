@@ -153,7 +153,7 @@ class BianGuaAttention(nn.Module):
         self.v_proj   = nn.Linear(d_model, d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
 
-        self.hamming_lambda = nn.Parameter(torch.tensor(hamming_lambda))
+        self.hamming_lambda_logit = nn.Parameter(torch.tensor(hamming_lambda))
 
         hexagrams = _make_hexagrams()
         self.register_buffer('hexagrams', hexagrams)  # (64, 6)
@@ -176,7 +176,7 @@ class BianGuaAttention(nn.Module):
         # hamming_affinity[b, i, j] = <soft_hex_i, soft_hex_j> / 2 ∈ [-3, 3]
         # Low Hamming ↔ High affinity ↔ Positive bias
         ham_affinity = torch.bmm(soft_hex, soft_hex.transpose(-2, -1)) / 2.0
-        ham_bias = self.hamming_lambda * ham_affinity.unsqueeze(1) # (B, 1, T, T)
+        ham_bias = torch.sigmoid(self.hamming_lambda_logit) * ham_affinity.unsqueeze(1) # (B, 1, T, T)
 
         scores = scores + ham_bias
 
@@ -469,8 +469,9 @@ class Variant3Block(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # 1. Локализация в Q6
-        h_enriched, hex_weights = self.hex_proj(self.norm_hex(x))
-        x = x + (h_enriched - self.norm_hex(x))  # residual: add projection signal
+        norm_x = self.norm_hex(x)
+        h_enriched, hex_weights = self.hex_proj(norm_x)
+        x = x + (h_enriched - norm_x)  # residual: add projection signal
 
         # 2. Топологическое внимание
         attn_out = x + self.biangua_attn(self.norm_attn(x), hex_weights)
@@ -481,6 +482,7 @@ class Variant3Block(nn.Module):
         # 4. Архетипальная интерлингва — хаб для двух источников
         # Сигнатура: forward(x, source_outputs)
         inter_out = self.interlingua(x, [attn_out, ternary_out])
+        self._interlingua_loss = self.interlingua.get_interlingua_loss()
 
         # 5. Кросс-архетипная аналогия — 変爻 механизм
         analogy_out = self.analogy(inter_out, hex_weights)
