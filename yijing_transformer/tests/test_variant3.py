@@ -248,8 +248,12 @@ class TestBianGuaAttention:
         assert x.grad is not None
 
     def test_hamming_lambda_learnable(self, module):
-        """hamming_lambda — обучаемый параметр."""
-        assert isinstance(module.hamming_lambda, nn.Parameter)
+        """hamming_lambda — обучаемый (через sigmoid logit)."""
+        assert hasattr(module, 'hamming_lambda_logit')
+        assert isinstance(module.hamming_lambda_logit, nn.Parameter)
+        # Property should return bounded value
+        lam = module.hamming_lambda
+        assert 0.0 < lam.item() < 1.0
 
     def test_topological_bias_effect(self, module):
         """Топологический bias меняет распределение внимания."""
