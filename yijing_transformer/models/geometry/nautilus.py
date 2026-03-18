@@ -96,12 +96,21 @@ class NautilusChamber(nn.Module):
         if self.module_type == 'cube_diagonal':
             # CubeDiagonalAttention возвращает bias, конвертируем в enrichment
             bias = self.module.get_bias(x)  # (B, T, T)
+            # Causal mask: запрещаем утечку информации из будущих токенов
+            T = x.shape[1]
+            causal = torch.tril(torch.ones(T, T, device=x.device))
+            bias = bias.masked_fill(causal.unsqueeze(0) == 0, float('-inf'))
             weights = F.softmax(bias, dim=-1)
+            weights = weights.nan_to_num(0.0)
             enrichment = torch.bmm(weights, x) - x  # delta
         elif self.module_type == 'privileged_axis':
             # PrivilegedAxisAttention возвращает bias
             bias = self.module.get_bias(x)  # (B, T, T)
+            T = x.shape[1]
+            causal = torch.tril(torch.ones(T, T, device=x.device))
+            bias = bias.masked_fill(causal.unsqueeze(0) == 0, float('-inf'))
             weights = F.softmax(bias, dim=-1)
+            weights = weights.nan_to_num(0.0)
             enrichment = torch.bmm(weights, x) - x  # delta
         elif self.module_type == 'dual_embedding':
             enrichment = self.module(x) - x  # DualEmbedding возвращает x + scale*...
