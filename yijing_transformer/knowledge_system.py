@@ -210,6 +210,12 @@ MODULES: List[Module] = [
     Module("models/export.py", Level.THEOREM,
            "ONNX/TorchScript export, model cards",
            ["export_onnx", "export_torchscript"]),
+    Module("scripts/ablation_archetypes.py", Level.THEOREM,
+           "Archetype ablation: which Level-2 patterns help on language (Level-4)?",
+           ["run_ablation", "PATTERNS"]),
+    Module("scripts/benchmark_level4.py", Level.THEOREM,
+           "Level 4 benchmark: LM, mod-64, XOR, copy tasks",
+           ["run_benchmark", "TASK_REGISTRY"]),
 ]
 
 
