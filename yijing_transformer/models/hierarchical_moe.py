@@ -513,6 +513,15 @@ class HMoEConfig:
     hex_tier_top_k:     int   = 4      # top-k для Q6ExpertBank
     hex_tier_weight:    float = 0.3    # вес 4-го уровня в финальном выходе
     hex_tier_d_ff_mult: int   = 1      # d_ff = d_model * hex_tier_d_ff_mult
+    # ── Совместный 4-уровневый топологический loss (схема Крюкова) ────────────
+    # Уровень 1 (Формула / Математика): LCI → π  →  |w_A - w_B|² → 0
+    lambda_lci:         float = 0.0
+    # Уровень 2 (Архетип / Физика): ни одна группа не доминирует выше порога
+    lambda_balance:     float = 0.0
+    # Уровень 3 (Алгоритм / Химия): DYNAMIC ≥ 0.20 (точка пересечения жива)
+    lambda_dynamic:     float = 0.0
+    # Порог доминирования для lambda_balance (по умолчанию 40%)
+    balance_threshold:  float = 0.40
 
 
 class HierarchicalMoEFFN(nn.Module):
@@ -578,6 +587,47 @@ class HierarchicalMoEFFN(nn.Module):
         self.out_norm = nn.LayerNorm(d)
         self.out_proj = nn.Linear(d, d, bias=False)
 
+    def _topology_loss(self, group_weights: torch.Tensor) -> torch.Tensor:
+        """Совместный 4-уровневый топологический loss (схема Крюкова).
+
+        group_weights: (B, T, 3) — [ABSTRACT, DYNAMIC, CONCRETE]
+
+        Уровень 1 (Формула / Математика):
+            LCI = (1 - |w_A - w_B|) * π → π
+            ↔  |w_A - w_B|² → 0
+
+        Уровень 2 (Архетип / Физика):
+            Ни одна группа не доминирует выше balance_threshold.
+            Штраф: relu(w - threshold)² для каждой группы.
+
+        Уровень 3 (Алгоритм / Химия):
+            DYNAMIC (точка пересечения) не схлопывается.
+            Штраф: relu(0.20 - w_X) — если DYNAMIC < 20%.
+        """
+        if (self.cfg.lambda_lci == 0.0 and
+                self.cfg.lambda_balance == 0.0 and
+                self.cfg.lambda_dynamic == 0.0):
+            return torch.tensor(0.0, device=group_weights.device)
+
+        gw = group_weights.mean(dim=(0, 1))     # (3,) — средние веса групп
+        w_a, w_x, w_b = gw[0], gw[1], gw[2]    # ABSTRACT, DYNAMIC, CONCRETE
+
+        # Уровень 1: |w_A - w_B|² — баланс петель восьмёрки
+        lci_loss = (w_a - w_b).pow(2)
+
+        # Уровень 2: штраф за доминирование любой группы
+        thr = self.cfg.balance_threshold
+        balance_loss = (F.relu(w_a - thr).pow(2) +
+                        F.relu(w_b - thr).pow(2) +
+                        F.relu(w_x - thr).pow(2))
+
+        # Уровень 3: DYNAMIC не схлопывается
+        dynamic_loss = F.relu(0.20 - w_x)
+
+        return (self.cfg.lambda_lci     * lci_loss     +
+                self.cfg.lambda_balance * balance_loss  +
+                self.cfg.lambda_dynamic * dynamic_loss)
+
     def _run_group(self, x: torch.Tensor, group: str,
                    group_weights: torch.Tensor, g_idx: int
                    ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -626,6 +676,10 @@ class HierarchicalMoEFFN(nn.Module):
         total_lb_loss = total_lb_loss + lb_global
         info['group_weights'] = group_weights.detach()
 
+        # ── 1b. Топологический loss уровней 1-3 (добавляется ДО масштабирования
+        #        lb_loss_weight, чтобы иметь прямой контроль через lambda_*)
+        topo_loss = self._topology_loss(group_weights)
+
         # ── 2. Петля A: ABSTRACT (верхняя полусфера, биты 0-2) ───────────────
         out_a, lb_a = self._run_group(x, "ABSTRACT", group_weights, 0)
         total_lb_loss = total_lb_loss + lb_a
@@ -664,7 +718,9 @@ class HierarchicalMoEFFN(nn.Module):
             info['hex_tier_active'] = torch.tensor(1.0, device=x.device)
 
         out = self.out_proj(self.out_norm(combined))
-        info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight
+        # lb_loss: load-balance (масштабированный) + topology (прямой)
+        info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight + topo_loss
+        info['topo_loss'] = topo_loss.detach()
         return out, info
 
 

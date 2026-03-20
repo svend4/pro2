@@ -319,6 +319,7 @@ def run_phase(
     model.train()
     running_loss = 0.0
     running_aux  = 0.0
+    running_topo = 0.0
     losses = []
     t0 = time.perf_counter()
 
@@ -344,16 +345,28 @@ def run_phase(
             running_aux += aux_loss.item()
         losses.append(loss.item())
 
+        # Собрать topo_loss для отображения (detached, только для лога)
+        for block in model.blocks:
+            info = getattr(block, '_last_moe_info', None)
+            if info and 'topo_loss' in info:
+                tl = info['topo_loss']
+                if not torch.isnan(tl):
+                    running_topo += tl.item()
+                break
+
         if step % log_every == 0:
             avg_loss = running_loss / log_every
             avg_aux  = running_aux  / log_every
+            avg_topo = running_topo / log_every
             elapsed  = time.perf_counter() - t0
             ppl_est  = math.exp(min(avg_loss, 10))
+            topo_str = f"  topo={avg_topo:.4f}" if avg_topo > 0 else ""
             print(f"    step {step:>5d}/{steps}  loss={avg_loss:.4f}  "
-                  f"aux={avg_aux:.5f}  ppl≈{ppl_est:.1f}  "
+                  f"aux={avg_aux:.5f}  ppl≈{ppl_est:.1f}{topo_str}  "
                   f"({elapsed:.1f}s elapsed)")
             running_loss = 0.0
             running_aux  = 0.0
+            running_topo = 0.0
 
     # Финальные метрики
     eval_texts = texts_all if texts_all else texts_for_phase
@@ -391,6 +404,14 @@ def main():
                         help="Принудительно запустить фазу даже если уже пройдена")
     parser.add_argument("--log_every",      type=int, default=25,
                         help="Логировать каждые N шагов (default: 25)")
+    parser.add_argument("--topo",           action="store_true",
+                        help="Включить совместный 4-уровневый топологический loss")
+    parser.add_argument("--lambda_lci",     type=float, default=0.5,
+                        help="λ₁ — LCI loss (Уровень 1, Формула). Default: 0.5")
+    parser.add_argument("--lambda_balance", type=float, default=0.3,
+                        help="λ₂ — баланс групп (Уровень 2, Архетип). Default: 0.3")
+    parser.add_argument("--lambda_dynamic", type=float, default=0.3,
+                        help="λ₃ — DYNAMIC≥0.20 (Уровень 3, Алгоритм). Default: 0.3")
     args = parser.parse_args()
 
     steps = 50 if args.fast else args.steps_per_phase
@@ -401,6 +422,22 @@ def main():
     print("  Архитектура: HierarchicalMoE (фигура-восьмёрка по Крюкову)")
     print("═" * 72)
 
+    # ── HMoE конфиг с опциональным 4-уровневым топологическим loss ─────────
+    hmoe_cfg_kwargs = dict(
+        d_model       = 128,
+        use_multiscale = True,
+        use_hex_tier  = False,
+    )
+    if args.topo:
+        hmoe_cfg_kwargs.update(
+            lambda_lci     = args.lambda_lci,
+            lambda_balance = args.lambda_balance,
+            lambda_dynamic = args.lambda_dynamic,
+        )
+        print(f"\n  Топологический loss ВКЛЮЧЁН (--topo):")
+        print(f"    λ₁ lci={args.lambda_lci}  λ₂ balance={args.lambda_balance}  λ₃ dynamic={args.lambda_dynamic}")
+    hmoe_cfg = HMoEConfig(**hmoe_cfg_kwargs)
+
     # ── Создать/загрузить модель ────────────────────────────────────────────
     cfg = Variant3Config(**MODEL_CFG)
     model = Variant3GPT(cfg)
@@ -408,7 +445,7 @@ def main():
     # Заменить HMoE конфиг во всех блоках
     for block in model.blocks:
         if hasattr(block, 'hmoe'):
-            block.hmoe = HierarchicalMoEFFN(HMOE_CFG)
+            block.hmoe = HierarchicalMoEFFN(hmoe_cfg)
 
     total_p = sum(p.numel() for p in model.parameters())
     print(f"\n  Модель: {total_p/1e6:.2f}M параметров")
