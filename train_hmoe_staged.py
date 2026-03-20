@@ -339,7 +339,7 @@ def main():
 
     print("\n  Загружаю кластеры репозитория...")
     loader = RepoCorpusLoader(_ROOT)
-    clusters_raw = loader.load_all_clusters()
+    clusters_raw = loader.get_all_clusters()   # fix: load_all_clusters → get_all_clusters
 
     # Преобразуем в dict[cluster_name → list[str]]
     clusters: Dict[str, List[str]] = {}
