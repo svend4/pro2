@@ -452,6 +452,21 @@ class MultiScaleGlobalRouter(nn.Module):
         anch = F.normalize(anch, dim=-1)                    # единичная норма
         self.register_buffer('group_anchors', anch)         # (n_groups, 6)
 
+        # ── WHT спектральные маски полусфер Q6 (Этап 7) ─────────────────────────
+        # Q6 гиперкуб: λ_k = 6-2k; полусферы по числу Yang-битов:
+        #   ABSTRACT  (λ=+4): bitcount ≥ 5  →  7 вершин  (Qian-сторона)
+        #   DYNAMIC   (λ= 0): bitcount = 3  → 20 вершин  (экватор, λ=0)
+        #   CONCRETE  (λ=-4): bitcount ≤ 1  →  7 вершин  (Kun-сторона)
+        # Нормировка / mask.sum() убирает структурный перевес DYNAMIC (20 vs 7).
+        _bits = torch.tensor([bin(i).count('1') for i in range(64)],
+                             dtype=torch.float32)
+        self.register_buffer('wht_abstract', (_bits >= 5).float())   # (64,)
+        self.register_buffer('wht_dynamic',  (_bits == 3).float())   # (64,)
+        self.register_buffer('wht_concrete', (_bits <= 1).float())   # (64,)
+        # Обучаемый скаляр смешения cosine↔WHT; init=-2 → sigmoid≈0.12 (WHT слаб
+        # при старте, позволяет загрузить существующий чекпоинт без потери качества)
+        self.log_wht_mix = nn.Parameter(torch.tensor(-2.0))
+
     @staticmethod
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
         """Q3 (8 вершин, 3 бита) → soft group matrix (8, n_groups).
@@ -535,8 +550,20 @@ class MultiScaleGlobalRouter(nn.Module):
         hex_weights = F.softmax(sim_q6 / T_inv, dim=-1)               # (B, T, 64)
         soft_hex    = hex_weights @ self.hexagrams                     # (B, T, 6)
         # hexgeom: нормализуем on-the-fly (устойчиво к чекпоинтам)
-        anchors_norm = F.normalize(self.group_anchors, dim=-1)         # (n_groups, 6)
-        score_q6    = soft_hex @ anchors_norm.T                        # (B, T, n_groups)
+        anchors_norm  = F.normalize(self.group_anchors, dim=-1)        # (n_groups, 6)
+        score_q6_cos  = soft_hex @ anchors_norm.T                      # (B, T, n_groups)
+
+        # ── WHT спектральный роутинг (Этап 7) ───────────────────────────────────
+        # Для каждой полусферы суммируем вероятности hex_weights и нормируем
+        # на размер полусферы → при равномерном hex_weights даёт 1/64 для всех,
+        # устраняя структурный перевес DYNAMIC (20 вершин vs 7 у ABSTRACT/CONCRETE).
+        score_q6_wht = torch.stack([
+            (hex_weights * self.wht_abstract).sum(-1) / self.wht_abstract.sum(),
+            (hex_weights * self.wht_dynamic ).sum(-1) / self.wht_dynamic.sum(),
+            (hex_weights * self.wht_concrete).sum(-1) / self.wht_concrete.sum(),
+        ], dim=-1)                                                      # (B, T, n_groups)
+        wht_alpha = torch.sigmoid(self.log_wht_mix)                    # ∈ (0,1)
+        score_q6  = (1.0 - wht_alpha) * score_q6_cos + wht_alpha * score_q6_wht
 
         # ── Смешивание масштабов ─────────────────────────────────────────────
         scale_mix    = F.softmax(self.log_scale_mix, dim=0)            # (3,)
