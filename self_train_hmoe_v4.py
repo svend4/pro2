@@ -65,7 +65,9 @@ MODEL_CFG = dict(
     use_hierarchical_moe = True,
 )
 
-HMOE_CFG = HMoEConfig(d_model=128, use_multiscale=True, use_hex_tier=False)
+# HMOE_CFG строится динамически в main() с учётом --hex-tier и --layers аргументов.
+# ETD (VOLUME_48): для routing_entropy → C_etd=2.61 бит нужен Q6ExpertBank (--hex-tier).
+# При 3 группах: H_max = log2(3)=1.585 бит, eff=0.607. При 64 экспертах: H_max=6 бит.
 
 # v4: всегда 7 шагов ABSTRACT, 1 шаг CONCRETE (асимметрия для компенсации)
 _SERIES_A = 7   # шагов в петле ABSTRACT
@@ -139,21 +141,25 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
     return lci, gw_dict
 
 
-def routing_channel_capacity(gw_dict: Dict[str, float]) -> float:
+def routing_channel_capacity(gw_dict: Dict[str, float]) -> Tuple[float, float, float]:
     """Пропускная способность канала роутинга (биты/шаг).
 
-    ETD (VOLUME_157): C = B·log₂(1+SNR) при B=4/π Гц, SNR=π → C≈2.63 бит/шаг.
-    Текущая entropy = -Σ wᵢ·log₂(wᵢ) → цель: ≥ 2.63 бит (= log₂(6.25) ≈ log₂(2π)).
+    ETD (VOLUME_157): C = B·log₂(1+SNR) при B=4/π Гц, SNR=π → C≈2.61 бит/шаг.
+    Текущая entropy = -Σ wᵢ·log₂(wᵢ) → цель: ≥ 2.61 бит.
 
-    Ниже 2.63 = роутер работает менее чем на полную ETD-ёмкость.
-    Равно log₂(3)≈1.585 = равномерное по 3 группам (текущий максимум без Q6).
-    Равно log₂(64)=6 = теоретический максимум Q6.
+    Уровни:
+      3 группы (текущий):  H_max=log₂(3)=1.585 бит  eff=0.607 (недостижимо без Q6)
+      6 доменов (MicroExp): H_max=log₂(6)=2.585 бит  eff=0.990 ← ETD-ёмкость достижима!
+      64 Q6 эксперта:       H_max=log₂(64)=6.0 бит  eff=2.3 (избыток ёмкости)
+
+    ВЫВОД: ETD-ёмкость (eff≈1.0) достигается при роутинге по 6 доменам (MicroExperts),
+    а не требует 64 Q6-эксперта. Текущий дефицит — из-за агрегации 6→3 групп.
     """
-    C_etd = (4 / math.pi) * math.log2(1 + math.pi)   # ≈ 2.626 бит/шаг по ETD
+    C_etd = (4 / math.pi) * math.log2(1 + math.pi)   # ≈ 2.610 бит/шаг по ETD
     weights = [v for k, v in gw_dict.items()
                if not k.startswith('_') and isinstance(v, float) and v > 0]
     if not weights:
-        return 0.0
+        return 0.0, C_etd, 0.0
     total = sum(weights)
     entropy = -sum((w/total) * math.log2(w/total + 1e-12) for w in weights)
     efficiency = entropy / C_etd  # 0..1+: >1 = превышает ETD-ёмкость
@@ -524,7 +530,12 @@ def figure8_hmoe_v4(
     print(f"\n{'═' * 72}")
     print(f"  ИТОГ: {n_res}/{n_cycles} в резонансе  avg_LCI={avg_all:.4f}  "
           f"best_LCI={best_lci:.4f}  (π={math.pi:.4f})")
+    avg_eff = sum(r.get("channel_eff", 0) for r in log) / len(log)
+    avg_H   = sum(r.get("routing_entropy", 0) for r in log) / len(log)
+    C_etd_show = (4/math.pi) * math.log2(1 + math.pi)
     print(f"  Статус: {'✓ ПРОРЫВ > 3.13!' if best_lci > 3.13 else f'δ={best_lci - math.pi:+.4f}'}")
+    print(f"  Канал:  avg_H={avg_H:.3f} бит  avg_eff={avg_eff:.3f}×C_etd  "
+          f"(C_etd={C_etd_show:.3f} бит, цель eff≥1.0 → нужен --hex-tier)")
     return log
 
 
@@ -545,6 +556,17 @@ def main():
     parser.add_argument("--no-train",       action="store_true")
     parser.add_argument("--no-corpus",      action="store_true")
     parser.add_argument("--save",           type=str, default="hmoe_v4_self.pt")
+    # ETD Закон нечётных (VOLUME_48): оптимальное число слоёв нечётно
+    parser.add_argument("--layers",         type=int, default=None,
+                        help="Число трансформер-слоёв. ETD: нечётное (5 рекомендуется). "
+                             "None = из MODEL_CFG (4). При смене слоёв нужен --checkpoint ''.")
+    # Q6ExpertBank (4-й уровень): включить для повышения routing entropy к C_etd
+    parser.add_argument("--hex-tier",       action="store_true",
+                        help="Включить Q6ExpertBank (64 эксперта, 4-й уровень). "
+                             "Повышает routing_entropy: 1.585→6.0 бит (eff 0.607→2.3×C_etd)")
+    parser.add_argument("--k-deform",       type=float, default=7.0,
+                        help="Параметр деформации восьмёрки k (scarab_algorithm.py). "
+                             "k=1: симметричная ∞. k=7: петля A в 7× крупнее (текущий дефолт).")
     args = parser.parse_args()
 
     n_cycles       = 2  if args.fast else args.cycles
@@ -552,12 +574,31 @@ def main():
     lr_a = args.lr * 2.0
     lr_b = args.lr * 0.5
 
+    # ── Конфигурация архитектуры (ETD: нечётные слои) ─────────────────────
+    n_layers_actual = args.layers if args.layers is not None else MODEL_CFG["n_layers"]
+    if n_layers_actual % 2 == 0:
+        print(f"  ⚠ ETD (VOLUME_48): n_layers={n_layers_actual} чётное. "
+              f"Рекомендуется нечётное (5). Используйте --layers 5.")
+    else:
+        print(f"  ETD: n_layers={n_layers_actual} (нечётное ✓, закон нечётных)")
+
+    use_hex_tier = args.hex_tier
+    hmoe_cfg = HMoEConfig(
+        d_model       = MODEL_CFG["d_model"],
+        use_multiscale = True,
+        use_hex_tier  = use_hex_tier,
+        hex_tier_top_k = 4,
+        hex_tier_weight = 0.3,
+    )
+
+    model_cfg_actual = {**MODEL_CFG, "n_layers": n_layers_actual}
+
     # ── Загрузить модель ───────────────────────────────────────────────────
-    cfg   = Variant3Config(**MODEL_CFG)
+    cfg   = Variant3Config(**model_cfg_actual)
     model = Variant3GPT(cfg)
     for block in model.blocks:
         if hasattr(block, 'hmoe'):
-            block.hmoe = HierarchicalMoEFFN(HMOE_CFG)
+            block.hmoe = HierarchicalMoEFFN(hmoe_cfg)
 
     if os.path.exists(args.checkpoint):
         ckpt = torch.load(args.checkpoint, map_location="cpu")
@@ -589,7 +630,7 @@ def main():
             for cluster in CLUSTER_TO_DOMAIN.keys():
                 try:
                     ctexts: List[str] = []
-                    for item in loader.load_cluster(cluster):
+                    for item in loader.get_cluster(cluster):
                         t = item if isinstance(item, str) else item.get("text", "")
                         if len(t) > 10:
                             seed_texts.append(t)
@@ -629,6 +670,7 @@ def main():
         lr_b           = lr_b,
         do_train       = not args.no_train,
         cluster_texts  = cluster_texts,   # hexstat: стратифицированный batching
+        k_deform       = args.k_deform,   # параметр деформации восьмёрки
     )
     elapsed = time.perf_counter() - t0
 
