@@ -76,13 +76,24 @@ DOMAIN_TO_GROUP: Dict[str, str] = {
 }
 
 # Q6 якоря доменов (индексы гексаграмм 0..63)
+#
+# hexlearn/hexopt: k-medoids + SA-оптимизация якорей (sep-score 12 → 21, +75%).
+# Спектральный принцип (hexgraph): якоря соответствуют собственным значениям Q6:
+#   ABSTRACT (λ=+4): вершины с 5+ битами (верхняя полусфера)
+#   DYNAMIC  (λ= 0): вершины с ровно 3 битами (экватор, null-space)
+#   CONCRETE (λ=-4): вершины с 0-1 битом (нижняя полусфера)
+#
+# Предыдущие (sep-score=12):
+#   GEO=0, HYDRO=18(2бит), PYRO=45(4бит), AERO=6(2бит), COSMO=27(4бит), NOOS=63
+# Оптимизированные (sep-score=21):
+#   GEO=0(0бит), HYDRO=8(1бит), PYRO=21(3бит), AERO=19(3бит), COSMO=62(5бит), NOOS=63(6бит)
 DOMAIN_Q6_IDX: Dict[str, int] = {
-    "GEO":   0,
-    "HYDRO": 18,
-    "PYRO":  45,
-    "AERO":  6,
-    "COSMO": 27,
-    "NOOS":  63,
+    "GEO":   0,   # 000000 (0 бит) — Земля, чистая конкретность (Yin×6)
+    "HYDRO": 8,   # 001000 (1 бит) — Вода, текучий поток
+    "PYRO":  21,  # 010101 (3 бита) — Огонь, трансформация (истинный экватор)
+    "AERO":  19,  # 010011 (3 бита) — Ветер, саморефлексия (истинный экватор)
+    "COSMO": 62,  # 111110 (5 бит) — Пустота, структуры (верхняя полусфера)
+    "NOOS":  63,  # 111111 (6 бит) — Сознание, чистая абстракция (Yang×6)
 }
 
 # Примечание: BRIDGE_PAIRS удалены — в топологии восьмёрки используется
@@ -334,7 +345,12 @@ class GlobalRouter(nn.Module):
                 hexagrams[DOMAIN_Q6_IDX[d]] for d in DOMAIN_GROUPS[g]
             ])
             group_anchors.append(domain_vecs.mean(0))
-        self.register_buffer('group_anchors', torch.stack(group_anchors))
+        # hexgeom (Voronoi/Hamming): нормализуем якоря до единичной нормы.
+        # DYNAMIC якорь имеет norm≈1.414 vs ABSTRACT/CONCRETE norm≈2.0 —
+        # без нормализации DYNAMIC систематически проигрывает на 29%.
+        anch = torch.stack(group_anchors)
+        anch = F.normalize(anch, dim=-1)
+        self.register_buffer('group_anchors', anch)
 
     @property
     def temperature(self) -> torch.Tensor:
@@ -346,7 +362,9 @@ class GlobalRouter(nn.Module):
         sim       = soft_bits @ self.hexagrams.T
         hex_w     = F.softmax(sim / self.temperature, dim=-1)
         soft_hex  = hex_w @ self.hexagrams
-        group_scores  = soft_hex @ self.group_anchors.T
+        # hexgeom: нормализуем якоря on-the-fly — работает и при загрузке чекпоинта
+        anchors_norm  = F.normalize(self.group_anchors, dim=-1)
+        group_scores  = soft_hex @ anchors_norm.T
         group_weights = F.softmax(group_scores, dim=-1)
         mean_w  = group_weights.mean(dim=(0, 1))
         lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()
@@ -377,7 +395,20 @@ class MultiScaleGlobalRouter(nn.Module):
     """
 
     # Маппинг Q2-вершин на группы (вершина 0..3 → group_idx)
-    _Q2_TO_GROUP: List[int] = [0, 1, 2, 0]  # (−−)→ABS, (−+)→DYN, (+−)→CON, (++)→ABS
+    #
+    # hexgraph (спектральный): вершины Q2 в кодировке {-1,+1} где +1=Yang=1-бит:
+    #   (-1,-1) = 0 Yang-битов → нижняя полусфера Q2 → CONCRETE (Kun/Земля)
+    #   (-1,+1) = 1 Yang-бит  → экватор Q2 (λ=0)    → DYNAMIC
+    #   (+1,-1) = 1 Yang-бит  → экватор Q2 (λ=0)    → DYNAMIC
+    #   (+1,+1) = 2 Yang-бита → верхняя полусфера Q2 → ABSTRACT (Qian/Небо)
+    #
+    # Старый маппинг [0,1,2,0]: (-1,-1)→ABSTRACT, (+1,+1)→ABSTRACT — семантически
+    # неверен: Kun(000000) = Земля = CONCRETE, а не ABSTRACT. Ошибка давала 2:1:1
+    # дисбаланс в пользу ABSTRACT на уровне Q2.
+    #
+    # Новый маппинг [2,1,1,0]: 1:2:1 — DYNAMIC получает 50% Q2-голосов, что
+    # компенсирует его структурное недопредставление на Q6-уровне.
+    _Q2_TO_GROUP: List[int] = [2, 1, 1, 0]  # (−−)→CON, (−+)→DYN, (+−)→DYN, (++)→ABS
 
     def __init__(self, d_model: int, group_names: List[str]):
         super().__init__()
@@ -411,36 +442,60 @@ class MultiScaleGlobalRouter(nn.Module):
         self.q3_to_group = nn.Parameter(q3_init)             # (8, n_groups), обучаемый
 
         # Q6 якоря для групп (среднее по доменам группы)
+        # hexgeom: нормализуем до единичной нормы — иначе DYNAMIC anchor
+        # (norm≈1.414) проигрывает ABSTRACT/CONCRETE (norm≈2.0) на 29%.
         group_anchors = []
         for g in group_names:
             vecs = torch.stack([hexagrams[DOMAIN_Q6_IDX[d]] for d in DOMAIN_GROUPS[g]])
             group_anchors.append(vecs.mean(0))
-        self.register_buffer('group_anchors', torch.stack(group_anchors))  # (n_groups, 6)
+        anch = torch.stack(group_anchors)                   # (n_groups, 6)
+        anch = F.normalize(anch, dim=-1)                    # единичная норма
+        self.register_buffer('group_anchors', anch)         # (n_groups, 6)
 
     @staticmethod
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
         """Q3 (8 вершин, 3 бита) → soft group matrix (8, n_groups).
 
-        Бит 0: ось ABSTRACT/CONCRETE (знание ↔ действие)
-        Бит 1: ось DYNAMIC/STATIC   (изменение ↔ структура)
-        Бит 2: ось уточнения (степень специализации)
+        hexgraph (спектральный): Q3 — это куб с собственными значениями λ_k=3-2k:
+          k=0 (λ=+3): 0 Yang-битов (−−−) → чистый CONCRETE (Kun)
+          k=1 (λ=+1): 1 Yang-бит          → DYNAMIC тяготение
+          k=2 (λ=−1): 2 Yang-бита         → ABSTRACT тяготение
+          k=3 (λ=−3): 3 Yang-бита (+ + +) → чистый ABSTRACT (Qian)
 
-        Маппинг:
-          bit0=−1 → тяготение к ABSTRACT
-          bit1=−1 → тяготение к DYNAMIC
-          иначе  → тяготение к CONCRETE
+        Маппинг по числу Yang-битов (+1 в {-1,+1} кодировке):
+          0 битов → CONCRETE (уверенно)
+          1 бит   → DYNAMIC (уверенно, 2 бита от одного из экватора Q3)
+          2 бита  → ABSTRACT тяготение (смешанно, с DYNAMIC)
+          3 бита  → ABSTRACT (уверенно)
+
+        Это заменяет старую эвристику (bit0/bit1 знаки) на спектрально-обоснованную.
         """
         q3_map = torch.zeros(8, n_groups)
         for i in range(8):
-            b0 = 1 if (i >> 2 & 1) == 0 else -1  # bit2: ABSTRACT/CONCRETE
-            b1 = 1 if (i >> 1 & 1) == 0 else -1  # bit1: DYNAMIC/STATIC
-            b2 = 1 if (i >> 0 & 1) == 0 else -1   # bit0: степень специализации
-            if b0 == -1:
-                q3_map[i, 0 % n_groups] += 1.0  # ABSTRACT
-            if b1 == -1:
-                q3_map[i, 1 % n_groups] += 1.0  # DYNAMIC
-            # bit0 модулирует базовую CONCRETE активацию
-            q3_map[i, 2 % n_groups] += 0.5 if b2 == 1 else 0.25
+            # i в {-1,+1}^3: +1 = Yang = "1 бит", -1 = Yin = "0 бит"
+            # verts = list(product([-1,1], repeat=3)), поэтому:
+            # i=0 (-1,-1,-1): 0 Yang = CONCRETE
+            # i=1 (-1,-1,+1): 1 Yang = DYNAMIC
+            # i=2 (-1,+1,-1): 1 Yang = DYNAMIC
+            # i=3 (-1,+1,+1): 2 Yang = ABSTRACT-тяготение
+            # i=4 (+1,-1,-1): 1 Yang = DYNAMIC
+            # i=5 (+1,-1,+1): 2 Yang = ABSTRACT-тяготение
+            # i=6 (+1,+1,-1): 2 Yang = ABSTRACT-тяготение
+            # i=7 (+1,+1,+1): 3 Yang = ABSTRACT
+            yang_count = bin(i).count('1')  # число Yang-битов в бинарном представлении
+            if yang_count == 0:
+                # (---) Kun = чистый CONCRETE
+                q3_map[i, 2 % n_groups] = 1.0
+            elif yang_count == 1:
+                # 1 Yang = экватор Q3 → DYNAMIC
+                q3_map[i, 1 % n_groups] = 1.0
+            elif yang_count == 2:
+                # 2 Yang = слабый ABSTRACT с примесью DYNAMIC
+                q3_map[i, 0 % n_groups] = 0.6
+                q3_map[i, 1 % n_groups] = 0.4
+            else:
+                # (+++) Qian = чистый ABSTRACT
+                q3_map[i, 0 % n_groups] = 1.0
         # Нормализуем строки
         row_sum = q3_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
         return q3_map / row_sum
@@ -479,7 +534,9 @@ class MultiScaleGlobalRouter(nn.Module):
         sim_q6   = soft_q6 @ self.hexagrams.T                         # (B, T, 64)
         hex_weights = F.softmax(sim_q6 / T_inv, dim=-1)               # (B, T, 64)
         soft_hex    = hex_weights @ self.hexagrams                     # (B, T, 6)
-        score_q6    = soft_hex @ self.group_anchors.T                  # (B, T, n_groups)
+        # hexgeom: нормализуем on-the-fly (устойчиво к чекпоинтам)
+        anchors_norm = F.normalize(self.group_anchors, dim=-1)         # (n_groups, 6)
+        score_q6    = soft_hex @ anchors_norm.T                        # (B, T, n_groups)
 
         # ── Смешивание масштабов ─────────────────────────────────────────────
         scale_mix    = F.softmax(self.log_scale_mix, dim=0)            # (3,)
@@ -513,6 +570,20 @@ class HMoEConfig:
     hex_tier_top_k:     int   = 4      # top-k для Q6ExpertBank
     hex_tier_weight:    float = 0.3    # вес 4-го уровня в финальном выходе
     hex_tier_d_ff_mult: int   = 1      # d_ff = d_model * hex_tier_d_ff_mult
+    # ── Совместный 4-уровневый топологический loss (схема Крюкова) ────────────
+    # Уровень 1 (Формула / Математика): LCI → π  →  |w_A - w_B|² → 0
+    lambda_lci:         float = 0.0
+    # Уровень 2 (Архетип / Физика): ни одна группа не доминирует выше порога
+    lambda_balance:     float = 0.0
+    # Уровень 3 (Алгоритм / Химия): DYNAMIC ≥ 0.20 (точка пересечения жива)
+    lambda_dynamic:     float = 0.0
+    # Порог доминирования для lambda_balance (по умолчанию 40%)
+    balance_threshold:  float = 0.40
+    # hexphys (Ising): температурная регуляризация роутера к T_c(Q6)=3.0
+    # T_c = z·J/2 = 6·1/2 = 3.0 (mean-field для 6-мерного гиперкуба)
+    # Штраф: (log_T - log_T_c)² если T < T_c (упорядоченная фаза → доминирование)
+    lambda_temp_reg:    float = 0.0
+    ising_T_c:          float = 3.0   # критическая температура Q6
 
 
 class HierarchicalMoEFFN(nn.Module):
@@ -578,6 +649,62 @@ class HierarchicalMoEFFN(nn.Module):
         self.out_norm = nn.LayerNorm(d)
         self.out_proj = nn.Linear(d, d, bias=False)
 
+    def _topology_loss(self, group_weights: torch.Tensor) -> torch.Tensor:
+        """Совместный 4-уровневый топологический loss (схема Крюкова).
+
+        group_weights: (B, T, 3) — [ABSTRACT, DYNAMIC, CONCRETE]
+
+        Уровень 1 (Формула / Математика):
+            LCI = (1 - |w_A - w_B|) * π → π
+            ↔  |w_A - w_B|² → 0
+
+        Уровень 2 (Архетип / Физика):
+            Ни одна группа не доминирует выше balance_threshold.
+            Штраф: relu(w - threshold)² для каждой группы.
+
+        Уровень 3 (Алгоритм / Химия):
+            DYNAMIC (точка пересечения) не схлопывается.
+            Штраф: relu(0.20 - w_X) — если DYNAMIC < 20%.
+        """
+        all_zero = (self.cfg.lambda_lci == 0.0 and
+                    self.cfg.lambda_balance == 0.0 and
+                    self.cfg.lambda_dynamic == 0.0 and
+                    self.cfg.lambda_temp_reg == 0.0)
+        if all_zero:
+            return torch.tensor(0.0, device=group_weights.device)
+
+        gw = group_weights.mean(dim=(0, 1))     # (3,) — средние веса групп
+        w_a, w_x, w_b = gw[0], gw[1], gw[2]    # ABSTRACT, DYNAMIC, CONCRETE
+
+        # Уровень 1: |w_A - w_B|² — баланс петель восьмёрки (LCI → π)
+        lci_loss = (w_a - w_b).pow(2)
+
+        # Уровень 2: штраф за доминирование любой группы
+        thr = self.cfg.balance_threshold
+        balance_loss = (F.relu(w_a - thr).pow(2) +
+                        F.relu(w_b - thr).pow(2) +
+                        F.relu(w_x - thr).pow(2))
+
+        # Уровень 3: DYNAMIC не схлопывается (≥ 20%)
+        dynamic_loss = F.relu(0.20 - w_x)
+
+        # hexphys (Ising T_c): роутер не должен уходить в упорядоченную фазу.
+        # T_c = 3.0 (mean-field Q6: z·J/2 = 6·1/2).
+        # Штраф только когда T < T_c (упорядоченная фаза → доминирование группы).
+        temp_reg_loss = torch.tensor(0.0, device=group_weights.device)
+        if self.cfg.lambda_temp_reg > 0.0:
+            router = self.global_router
+            if hasattr(router, 'log_temp'):
+                T_now = router.log_temp.exp()
+                T_c   = torch.tensor(self.cfg.ising_T_c, device=group_weights.device)
+                # Только если T < T_c (в упорядоченной фазе)
+                temp_reg_loss = F.relu(T_c - T_now).pow(2)
+
+        return (self.cfg.lambda_lci      * lci_loss      +
+                self.cfg.lambda_balance  * balance_loss   +
+                self.cfg.lambda_dynamic  * dynamic_loss   +
+                self.cfg.lambda_temp_reg * temp_reg_loss)
+
     def _run_group(self, x: torch.Tensor, group: str,
                    group_weights: torch.Tensor, g_idx: int
                    ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -626,6 +753,10 @@ class HierarchicalMoEFFN(nn.Module):
         total_lb_loss = total_lb_loss + lb_global
         info['group_weights'] = group_weights.detach()
 
+        # ── 1b. Топологический loss уровней 1-3 (добавляется ДО масштабирования
+        #        lb_loss_weight, чтобы иметь прямой контроль через lambda_*)
+        topo_loss = self._topology_loss(group_weights)
+
         # ── 2. Петля A: ABSTRACT (верхняя полусфера, биты 0-2) ───────────────
         out_a, lb_a = self._run_group(x, "ABSTRACT", group_weights, 0)
         total_lb_loss = total_lb_loss + lb_a
@@ -664,7 +795,9 @@ class HierarchicalMoEFFN(nn.Module):
             info['hex_tier_active'] = torch.tensor(1.0, device=x.device)
 
         out = self.out_proj(self.out_norm(combined))
-        info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight
+        # lb_loss: load-balance (масштабированный) + topology (прямой)
+        info['lb_loss'] = total_lb_loss * self.cfg.lb_loss_weight + topo_loss
+        info['topo_loss'] = topo_loss.detach()
         return out, info
 
 

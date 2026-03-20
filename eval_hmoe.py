@@ -234,9 +234,16 @@ def _trend_spark(values: List[float]) -> str:
     if not values:
         return ""
     levels = " ▁▂▃▄▅▆▇█"
-    mn, mx = min(values), max(values)
+    clean = [v for v in values if v == v]  # filter NaN
+    if not clean:
+        return "?"
+    mn, mx = min(clean), max(clean)
     rng = mx - mn or 1.0
-    return "".join(levels[int((v - mn) / rng * (len(levels) - 1))] for v in values)
+    def _idx(v):
+        if v != v:  # NaN
+            return 0
+        return int((v - mn) / rng * (len(levels) - 1))
+    return "".join(levels[_idx(v)] for v in values)
 
 
 # ── Рекомендации ─────────────────────────────────────────────────────────────

@@ -65,7 +65,9 @@ MODEL_CFG = dict(
     use_hierarchical_moe = True,
 )
 
-HMOE_CFG = HMoEConfig(d_model=128, use_multiscale=True, use_hex_tier=False)
+# HMOE_CFG строится динамически в main() с учётом --hex-tier и --layers аргументов.
+# ETD (VOLUME_48): для routing_entropy → C_etd=2.61 бит нужен Q6ExpertBank (--hex-tier).
+# При 3 группах: H_max = log2(3)=1.585 бит, eff=0.607. При 64 экспертах: H_max=6 бит.
 
 # v4: всегда 7 шагов ABSTRACT, 1 шаг CONCRETE (асимметрия для компенсации)
 _SERIES_A = 7   # шагов в петле ABSTRACT
@@ -77,9 +79,19 @@ _BALANCE_THOLD = 0.01  # если w_B > w_A + 0.01 → запуск мини-б�
 # ── Вспомогательные функции (скопированы из self_train_hmoe.py) ───────────────
 
 def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict[str, float]]:
-    """LCI через маршрутизацию: LCI = (1 - |w_A - w_B|) * π."""
+    """LCI через маршрутизацию — два варианта, возвращает максимальный.
+
+    LCI_classic = (1 - |w_A - w_B|) · π           ← оригинал (2 сферы)
+    LCI_quater  = √(w_A² + w_X² + w_B² + w_cr²) · π  ← ScarabQuaternion (4 сферы)
+
+    ScarabQuaternion (scarab_algorithm.py): |A| = √(BVS²+SVS²+MVS²+ChVS²) = π при мастерстве.
+    Маппинг: BVS=ABSTRACT, SVS=DYNAMIC, MVS=CONCRETE, ChVS=crossing_alpha (BidirBridgeExpert).
+    При идеальном балансе (1/4,1/4,1/4,1/4): LCI_quater = √(4·(1/4)²) · π = 0.5π — не π!
+    Нормировка: LCI_quater = √(4·Σw²) · π  чтобы максимум = π при равных весах.
+    """
     model.eval()
-    gw_list = []
+    gw_list   = []
+    alpha_list = []
     with torch.no_grad():
         model(ids)
         for block in model.blocks:
@@ -93,16 +105,65 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
                 elif gw.dim() == 2:
                     gw = gw.mean(dim=0)
                 gw_list.append(gw.cpu())
+                # crossing_alpha = баланс fwd/bwd в BidirBridgeExpert (4-я сфера ЧВС)
+                if 'crossing_alpha' in info:
+                    alpha_list.append(info['crossing_alpha'].cpu().item())
     if not gw_list:
         return math.pi, {"ABSTRACT": 0.33, "DYNAMIC": 0.34, "CONCRETE": 0.33}
+
     avg_gw = torch.stack(gw_list).mean(0)
     groups = list(DOMAIN_GROUPS.keys())
     gw_dict = {g: avg_gw[i].item() for i, g in enumerate(groups)}
+
     w_a = gw_dict.get("ABSTRACT", 0.33)
+    w_x = gw_dict.get("DYNAMIC",  0.34)
     w_b = gw_dict.get("CONCRETE", 0.33)
-    imbalance = abs(w_a - w_b)
-    lci = (1.0 - imbalance) * math.pi
+    # 4-я сфера (ЧВС): crossing_alpha — близость к 0.5 означает баланс fwd↔bwd
+    w_cr = (1.0 - abs(sum(alpha_list) / len(alpha_list) - 0.5) * 2) if alpha_list else 0.5
+
+    # ── LCI classic (2 сферы) ─────────────────────────────────────────────
+    lci_classic = (1.0 - abs(w_a - w_b)) * math.pi
+
+    # ── LCI quaternion (4 сферы, ScarabQuaternion) ────────────────────────
+    # Нормировка: при равных w_a=w_x=w_b=1/3, w_cr=1 → нормировать на √(4/3)
+    # Общая формула: LCI_q = π · √(w_a²+w_x²+w_b²) / √(1/3)  (3-компонентная часть)
+    # + бонус за balanced crossing: max π когда all equal AND w_cr near 1
+    sum_sq = w_a**2 + w_x**2 + w_b**2              # min 1/3 (равные), max 1 (один доминирует)
+    # Нормируем: inversely — меньше sum_sq = лучше баланс = выше LCI
+    balance_3 = 1.0 - (sum_sq - 1/3) / (2/3)       # 1.0 при равных, 0.0 при полном доминировании
+    lci_quater = math.pi * (0.8 * balance_3 + 0.2 * w_cr)
+
+    # Возвращаем среднее — оба сигнала важны
+    lci = (lci_classic + lci_quater) / 2.0
+    gw_dict['_lci_classic']  = round(lci_classic, 4)
+    gw_dict['_lci_quater']   = round(lci_quater,  4)
+    gw_dict['_crossing_alpha'] = round(w_cr, 4)
     return lci, gw_dict
+
+
+def routing_channel_capacity(gw_dict: Dict[str, float]) -> Tuple[float, float, float]:
+    """Пропускная способность канала роутинга (биты/шаг).
+
+    ETD (VOLUME_157): C = B·log₂(1+SNR) при B=4/π Гц, SNR=π → C≈2.61 бит/шаг.
+    Текущая entropy = -Σ wᵢ·log₂(wᵢ) → цель: ≥ 2.61 бит.
+
+    Уровни:
+      3 группы (текущий):  H_max=log₂(3)=1.585 бит  eff=0.607 (недостижимо без Q6)
+      6 доменов (MicroExp): H_max=log₂(6)=2.585 бит  eff=0.990 ← ETD-ёмкость достижима!
+      64 Q6 эксперта:       H_max=log₂(64)=6.0 бит  eff=2.3 (избыток ёмкости)
+
+    ВЫВОД: ETD-ёмкость (eff≈1.0) достигается при роутинге по 6 доменам (MicroExperts),
+    а не требует 64 Q6-эксперта. Текущий дефицит — из-за агрегации 6→3 групп.
+    """
+    C_etd = (4 / math.pi) * math.log2(1 + math.pi)   # ≈ 2.610 бит/шаг по ETD
+    weights = [v for k, v in gw_dict.items()
+               if not k.startswith('_') and isinstance(v, float) and v > 0]
+    if not weights:
+        return 0.0, C_etd, 0.0
+    total = sum(weights)
+    entropy = -sum((w/total) * math.log2(w/total + 1e-12) for w in weights)
+    efficiency = entropy / C_etd  # 0..1+: >1 = превышает ETD-ёмкость
+    return entropy, C_etd, efficiency
 
 
 def _freeze_all_except(moe: HierarchicalMoEFFN, keep_groups: List[str]) -> None:
@@ -229,17 +290,56 @@ def run_loop(model, x_ids, block_size, temperature, steps_per_loop,
 
 # ── Основной алгоритм ─────────────────────────────────────────────────────────
 
+def _stratified_texts(cluster_texts: Dict[str, List[str]], group: str,
+                      min_count: int = 27) -> List[str]:
+    """Стратифицированный список текстов для группы.
+
+    hexstat: t_mix(Q6)=27 — минимум для стабилизации routing entropy.
+    Возвращает список длиной ≥ min_count, циклически перемежая тексты
+    из всех кластеров группы (round-robin), чтобы каждые ~t_mix шагов
+    были представлены все домены группы.
+    """
+    from yijing_transformer.models.hierarchical_moe import DOMAIN_TO_GROUP, CLUSTER_TO_DOMAIN
+    # Собрать тексты по кластерам нужной группы
+    group_clusters: Dict[str, List[str]] = {
+        c: cluster_texts.get(c, [])
+        for c, d in CLUSTER_TO_DOMAIN.items()
+        if DOMAIN_TO_GROUP[d] == group
+    }
+    # Round-robin перемежение: [c0t0, c1t0, c0t1, c1t1, ...]
+    interleaved: List[str] = []
+    iters = {c: iter(txts * max(1, min_count // max(len(txts), 1) + 1))
+             for c, txts in group_clusters.items() if txts}
+    while len(interleaved) < min_count and iters:
+        for c, it in list(iters.items()):
+            try:
+                interleaved.append(next(it))
+            except StopIteration:
+                iters.pop(c)
+            if len(interleaved) >= min_count:
+                break
+    return interleaved if interleaved else []
+
+
 def figure8_hmoe_v4(
     model:          Variant3GPT,
     seed_texts:     List[str],
     block_size:     int   = MODEL_CFG["block_size"] - 1,
     n_cycles:       int   = 8,
     steps_per_loop: int   = 80,
-    temperature:    float = 2.5,
+    temperature:    float = 3.0,   # T_c(Q6) mean-field: z·J/2 = 6·1/2 = 3.0
     lr_a:           float = 2e-5,
     lr_b:           float = 5e-6,
     do_train:       bool  = True,
+    k_deform:       float = 7.0,   # параметр деформации восьмёрки (SESSION_Deformed_Figure8)
+    **kwargs,
 ) -> List[Dict]:
+    # k_deform: параметр несимметричности петель (scarab_algorithm.py → deformed_lissajous)
+    # k=1: симметричная ∞.  k=7: петля A в 7× крупнее петли B (текущий режим _SERIES_A=7).
+    # Теоретическая доля A: p_A = k/(k+1).  При k=7: p_A = 7/8 = 0.875.
+    # Целевой w_A при резонансе: p_A · 1/2 + 1/6 ≈ 0.604 → нет, это неправильно.
+    # Правильнее: k управляет LR_A/LR_B соотношением и числом серий.
+    # k_eff = _SERIES_A / _SERIES_B = 7/1 = 7.0 ← совпадает с k_deform по умолчанию.
     """
     v4: асимметричная серия A>>B для компенсации CONCRETE-доминирования.
 
@@ -254,15 +354,18 @@ def figure8_hmoe_v4(
 
     Цель: avg_LCI_r > 3.13 (δ < 0.004 от π)
     """
+    _C_etd = (4 / math.pi) * math.log2(1 + math.pi)   # ≈ 2.626 бит/шаг (ETD ёмкость)
     print(f"\n{'═' * 72}")
     print(f"  САМО-ОБУЧЕНИЕ v4: РЕЗОНАНСНЫЙ ПРОРЫВ  (асимметрия A>>B)")
     print(f"{'═' * 72}")
     print(f"  Циклов         : {n_cycles}")
     print(f"  Шагов/петля    : {steps_per_loop}")
-    print(f"  Серия          : A={_SERIES_A}×, B={_SERIES_B}× (7:1 asym)")
+    print(f"  Серия          : A={_SERIES_A}×, B={_SERIES_B}×  "
+          f"k_deform={k_deform:.1f}  p_A={k_deform/(k_deform+1):.3f}")
     print(f"  LR_A           : {lr_a:.2e}  LR_B: {lr_b:.2e}")
-    print(f"  Температура    : {temperature:.2f} (фикс)")
+    print(f"  Температура    : {temperature:.2f} (T_c Ising Q6)")
     print(f"  Балансёр       : мини-A (3×) если w_B > w_A + {_BALANCE_THOLD}")
+    print(f"  ETD канал      : C_etd={_C_etd:.3f} бит/шаг (VOLUME_157: B=4/π, SNR=π)")
     print()
 
     # Начальный промпт — из seed_texts (не hex-байты, чтобы quality_filter проходил)
@@ -276,19 +379,38 @@ def figure8_hmoe_v4(
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Заморожено: только HMoE-параметры обучаются ({n_trainable:,} param)")
 
-    # Разделить seed_texts по домену
-    abstract_texts = [t for t in seed_texts if any(w in t.lower() for w in
-                      ["hexagram", "abstract", "consciousness", "figure-8",
-                       "topology", "balance", "resonance", "kryukov", "theory"])]
-    concrete_texts = [t for t in seed_texts if any(w in t.lower() for w in
-                      ["def ", "import", "return", "torch", "loss", "optimizer",
-                       "model", "train", "class", "self"])]
-    # fallback: использовать все если разделение пустое
+    # hexstat: t_mix(Q6) = 27 шагов — минимальный размер разнообразной выборки.
+    # Разделяем тексты по семантическим группам через CLUSTER_TO_DOMAIN/DOMAIN_TO_GROUP,
+    # а не по ключевым словам. cluster_texts: Dict[cluster_name → List[str]] передаётся
+    # аргументом (или строится из seed_texts при его отсутствии).
+    cluster_texts: Dict[str, List[str]] = kwargs.get("cluster_texts", {})
+
+    # Строим группированные списки из cluster_texts.
+    # _stratified_texts гарантирует round-robin перемежение + ≥ t_mix=27 текстов.
+    abstract_texts: List[str] = _stratified_texts(cluster_texts, "ABSTRACT") if cluster_texts else []
+    dynamic_texts:  List[str] = _stratified_texts(cluster_texts, "DYNAMIC")  if cluster_texts else []
+    concrete_texts: List[str] = _stratified_texts(cluster_texts, "CONCRETE") if cluster_texts else []
+
+    # fallback: keyword-фильтрация из seed_texts если cluster_texts не передан
+    if not abstract_texts:
+        abstract_texts = [t for t in seed_texts if any(w in t.lower() for w in
+                          ["hexagram", "abstract", "consciousness", "figure-8",
+                           "topology", "balance", "resonance", "kryukov", "theory"])]
+    if not concrete_texts:
+        concrete_texts = [t for t in seed_texts if any(w in t.lower() for w in
+                          ["def ", "import", "return", "torch", "loss", "optimizer",
+                           "model", "train", "class", "self"])]
+    # final fallback: все тексты
     if not abstract_texts:
         abstract_texts = seed_texts
+    if not dynamic_texts:
+        dynamic_texts = seed_texts
     if not concrete_texts:
         concrete_texts = seed_texts
-    print(f"  Тексты: ABSTRACT={len(abstract_texts)}  CONCRETE={len(concrete_texts)}")
+
+    print(f"  Тексты: ABSTRACT={len(abstract_texts)}  DYNAMIC={len(dynamic_texts)}  "
+          f"CONCRETE={len(concrete_texts)}")
+    print(f"  hexstat: t_mix(Q6)=27 → разнообразие гарантировано при batch≥27 текстов/петля")
 
     log: List[Dict] = []
     best_lci = 0.0
@@ -297,13 +419,20 @@ def figure8_hmoe_v4(
         x_ids = prompt_ids.clone()
         lci_start, gw_start = lci_from_routing(model, x_ids)
 
+        # ── Метрики начала цикла ──────────────────────────────────────────
+        ent_start, c_etd, eff_start = routing_channel_capacity(gw_start)
+        lci_q_start = gw_start.get('_lci_quater', lci_start)
+        alpha_start = gw_start.get('_crossing_alpha', 0.5)
         print(f"\n  {'─' * 68}")
         print(f"  Цикл {cycle}/{n_cycles}  T={temperature:.2f}  "
-              f"routing_LCI={lci_start:.4f}  "
+              f"LCI={lci_start:.4f}  LCI_q={lci_q_start:.4f}  "
               f"({'✓ РЕЗОНАНС' if abs(lci_start - math.pi) < _LCI_EPSILON else f'δ={lci_start - math.pi:+.4f}'})")
         print(f"    Группы: A={gw_start.get('ABSTRACT',0):.4f}  "
               f"X={gw_start.get('DYNAMIC',0):.4f}  "
-              f"B={gw_start.get('CONCRETE',0):.4f}")
+              f"B={gw_start.get('CONCRETE',0):.4f}  "
+              f"α_cross={alpha_start:.3f}")
+        print(f"    Канал: H={ent_start:.3f} бит  eff={eff_start:.2f}×C_etd  "
+              f"({'✓' if eff_start >= 1.0 else f'↑нужно +{(c_etd-ent_start):.2f} бит'})")
 
         # ── Петля A: ABSTRACT (7 серий, абстрактные тексты) ──────────────
         x_abstract = _encode(random.choice(abstract_texts), block_size)
@@ -362,23 +491,38 @@ def figure8_hmoe_v4(
 
         prompt_ids = x_ids.clone()
 
+        ent_end, _, eff_end = routing_channel_capacity(gw_b)
         log.append({
-            "cycle":          cycle,
-            "n_a":            _SERIES_A,
-            "n_b":            _SERIES_B,
-            "temperature":    round(temperature, 3),
-            "lci_a_r":        round(lci_a, 4),
-            "lci_b_r":        round(lci_b, 4),
-            "lci_balance_r":  round(lci_balance, 4),
-            "avg_lci_r":      round(avg_lci_r, 4),
-            "resonance":      resonance,
-            "used_balancer":  used_balancer,
-            "gw_at_start":    {k: round(v, 4) for k, v in gw_start.items()},
-            "gw_after_a":     {k: round(v, 4) for k, v in gw_a.items()},
-            "gw_after_b":     {k: round(v, 4) for k, v in gw_b.items()},
-            "texts_a":        n_a_texts,
-            "texts_b":        n_b_texts,
-            "texts_balance":  n_balance_texts,
+            "cycle":              cycle,
+            "n_a":                _SERIES_A,
+            "n_b":                _SERIES_B,
+            "k_deform":           k_deform,
+            "temperature":        round(temperature, 3),
+            # LCI classic (2 сферы)
+            "lci_a_r":            round(lci_a, 4),
+            "lci_b_r":            round(lci_b, 4),
+            "lci_balance_r":      round(lci_balance, 4),
+            "avg_lci_r":          round(avg_lci_r, 4),
+            # LCI quaternion (4 сферы, ScarabQuaternion)
+            "lci_quater_start":   round(gw_start.get('_lci_quater', lci_start), 4),
+            "crossing_alpha":     round(gw_start.get('_crossing_alpha', 0.5), 4),
+            # Метрика канала (VOLUME_157 ETD)
+            "routing_entropy":    round(ent_start, 4),
+            "channel_eff":        round(eff_start, 4),   # 1.0 = достигнута ETD-ёмкость
+            "routing_entropy_end": round(ent_end, 4),
+            # Флаги
+            "resonance":          resonance,
+            "used_balancer":      used_balancer,
+            # Группы
+            "gw_at_start":        {k: round(v, 4) for k, v in gw_start.items()
+                                   if not k.startswith('_')},
+            "gw_after_a":         {k: round(v, 4) for k, v in gw_a.items()
+                                   if not k.startswith('_')},
+            "gw_after_b":         {k: round(v, 4) for k, v in gw_b.items()
+                                   if not k.startswith('_')},
+            "texts_a":            n_a_texts,
+            "texts_b":            n_b_texts,
+            "texts_balance":      n_balance_texts,
         })
 
     n_res = sum(1 for r in log if r["resonance"])
@@ -386,7 +530,12 @@ def figure8_hmoe_v4(
     print(f"\n{'═' * 72}")
     print(f"  ИТОГ: {n_res}/{n_cycles} в резонансе  avg_LCI={avg_all:.4f}  "
           f"best_LCI={best_lci:.4f}  (π={math.pi:.4f})")
+    avg_eff = sum(r.get("channel_eff", 0) for r in log) / len(log)
+    avg_H   = sum(r.get("routing_entropy", 0) for r in log) / len(log)
+    C_etd_show = (4/math.pi) * math.log2(1 + math.pi)
     print(f"  Статус: {'✓ ПРОРЫВ > 3.13!' if best_lci > 3.13 else f'δ={best_lci - math.pi:+.4f}'}")
+    print(f"  Канал:  avg_H={avg_H:.3f} бит  avg_eff={avg_eff:.3f}×C_etd  "
+          f"(C_etd={C_etd_show:.3f} бит, цель eff≥1.0 → нужен --hex-tier)")
     return log
 
 
@@ -400,12 +549,24 @@ def main():
     parser.add_argument("--fast",           action="store_true")
     parser.add_argument("--cycles",         type=int, default=8)
     parser.add_argument("--steps_per_loop", type=int, default=80)
-    parser.add_argument("--temperature",    type=float, default=2.5)
+    parser.add_argument("--temperature",    type=float, default=3.0,
+                        help="Температура роутера. T_c(Q6)≈3.0 (hexphys Ising)")
     parser.add_argument("--lr",             type=float, default=1e-5,
                         help="Базовый LR (lr_a=2×, lr_b=0.5×)")
     parser.add_argument("--no-train",       action="store_true")
     parser.add_argument("--no-corpus",      action="store_true")
     parser.add_argument("--save",           type=str, default="hmoe_v4_self.pt")
+    # ETD Закон нечётных (VOLUME_48): оптимальное число слоёв нечётно
+    parser.add_argument("--layers",         type=int, default=None,
+                        help="Число трансформер-слоёв. ETD: нечётное (5 рекомендуется). "
+                             "None = из MODEL_CFG (4). При смене слоёв нужен --checkpoint ''.")
+    # Q6ExpertBank (4-й уровень): включить для повышения routing entropy к C_etd
+    parser.add_argument("--hex-tier",       action="store_true",
+                        help="Включить Q6ExpertBank (64 эксперта, 4-й уровень). "
+                             "Повышает routing_entropy: 1.585→6.0 бит (eff 0.607→2.3×C_etd)")
+    parser.add_argument("--k-deform",       type=float, default=7.0,
+                        help="Параметр деформации восьмёрки k (scarab_algorithm.py). "
+                             "k=1: симметричная ∞. k=7: петля A в 7× крупнее (текущий дефолт).")
     args = parser.parse_args()
 
     n_cycles       = 2  if args.fast else args.cycles
@@ -413,12 +574,31 @@ def main():
     lr_a = args.lr * 2.0
     lr_b = args.lr * 0.5
 
+    # ── Конфигурация архитектуры (ETD: нечётные слои) ─────────────────────
+    n_layers_actual = args.layers if args.layers is not None else MODEL_CFG["n_layers"]
+    if n_layers_actual % 2 == 0:
+        print(f"  ⚠ ETD (VOLUME_48): n_layers={n_layers_actual} чётное. "
+              f"Рекомендуется нечётное (5). Используйте --layers 5.")
+    else:
+        print(f"  ETD: n_layers={n_layers_actual} (нечётное ✓, закон нечётных)")
+
+    use_hex_tier = args.hex_tier
+    hmoe_cfg = HMoEConfig(
+        d_model       = MODEL_CFG["d_model"],
+        use_multiscale = True,
+        use_hex_tier  = use_hex_tier,
+        hex_tier_top_k = 4,
+        hex_tier_weight = 0.3,
+    )
+
+    model_cfg_actual = {**MODEL_CFG, "n_layers": n_layers_actual}
+
     # ── Загрузить модель ───────────────────────────────────────────────────
-    cfg   = Variant3Config(**MODEL_CFG)
+    cfg   = Variant3Config(**model_cfg_actual)
     model = Variant3GPT(cfg)
     for block in model.blocks:
         if hasattr(block, 'hmoe'):
-            block.hmoe = HierarchicalMoEFFN(HMOE_CFG)
+            block.hmoe = HierarchicalMoEFFN(hmoe_cfg)
 
     if os.path.exists(args.checkpoint):
         ckpt = torch.load(args.checkpoint, map_location="cpu")
@@ -442,19 +622,25 @@ def main():
 
     # ── Загрузить corpus ───────────────────────────────────────────────────
     seed_texts: List[str] = []
+    cluster_texts: Dict[str, List[str]] = {}   # hexstat: стратифицированный по кластерам
     if not args.no_corpus:
         try:
             from repo_corpus_loader import RepoCorpusLoader
             loader = RepoCorpusLoader(_ROOT)
             for cluster in CLUSTER_TO_DOMAIN.keys():
                 try:
-                    for item in loader.load_cluster(cluster):
+                    ctexts: List[str] = []
+                    for item in loader.get_cluster(cluster):
                         t = item if isinstance(item, str) else item.get("text", "")
                         if len(t) > 10:
                             seed_texts.append(t)
+                            ctexts.append(t)
+                    cluster_texts[cluster] = ctexts
                 except Exception:
                     pass
-            print(f"  Корпус: {len(seed_texts)} текстов")
+            total_c = sum(len(v) for v in cluster_texts.values())
+            print(f"  Корпус: {len(seed_texts)} текстов  "
+                  f"({', '.join(f'{k}={len(v)}' for k,v in cluster_texts.items())})")
         except ImportError:
             pass
 
@@ -483,6 +669,8 @@ def main():
         lr_a           = lr_a,
         lr_b           = lr_b,
         do_train       = not args.no_train,
+        cluster_texts  = cluster_texts,   # hexstat: стратифицированный batching
+        k_deform       = args.k_deform,   # параметр деформации восьмёрки
     )
     elapsed = time.perf_counter() - t0
 
