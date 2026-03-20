@@ -71,6 +71,12 @@ CLUSTER_DEFS = {
             "data/svend4_corpus/data2/_clones/data2/VOLUME_217_InformationGeometry.md",
             "data/svend4_corpus/data2/_clones/data2/VOLUME_222_SpectralGraphTheory.md",
             "data/svend4_corpus/data2/_clones/data2/VOLUME_241_CategoryTheory.md",
+            # Приоритет C — полный охват vol 101–310 (Этап 8)
+            # glob-паттерны автоматически подхватывают все тома чистой математики;
+            # seen-множество dedupe-ит файлы из Приоритетов A/B выше.
+            "data/svend4_corpus/data2/_clones/data2/VOLUME_1[0-9][0-9]_*.md",
+            "data/svend4_corpus/data2/_clones/data2/VOLUME_2[0-9][0-9]_*.md",
+            "data/svend4_corpus/data2/_clones/data2/VOLUME_3[0-1][0-9]_*.md",
         ],
         "exclude_patterns": ["README", "PASSPORT", "PORTAL", ".git", ".pytest_cache"],
     },
