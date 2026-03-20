@@ -941,6 +941,7 @@ class HierarchicalMoEFFN(nn.Module):
             hex_weights = None
         total_lb_loss = total_lb_loss + lb_global
         info['group_weights'] = group_weights.detach()
+        info['group_weights_grad'] = group_weights  # с градиентами для supervision loss
 
         # ── 1b. Топологический loss уровней 1-3 (добавляется ДО масштабирования
         #        lb_loss_weight, чтобы иметь прямой контроль через lambda_*)
