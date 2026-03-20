@@ -1,0 +1,69 @@
+{
+  "description": "Ablation study: individual archetype patterns vs vanilla baseline (400 steps, d=128)",
+  "date": "2026-03-20",
+  "methodology": "Each pattern tested individually with 400 training steps on synthetic WikiText data",
+  "results": {
+    "vanilla": {
+      "ppl": 12.09,
+      "params": 858368,
+      "time_seconds": 114.2,
+      "note": "baseline without any archetype patterns"
+    },
+    "quadrant": {
+      "ppl": 12.09,
+      "params": 838964,
+      "time_seconds": 115.3,
+      "delta_vs_vanilla": "0%"
+    },
+    "recursive_cube": {
+      "ppl": 5.27,
+      "params": 1035556,
+      "time_seconds": 56.7,
+      "delta_vs_vanilla": "-56%",
+      "note": "CLEAR WINNER - dramatic improvement"
+    },
+    "weaving_loom": {
+      "ppl": 11.70,
+      "params": 1036072,
+      "time_seconds": 72.1,
+      "delta_vs_vanilla": "-3%"
+    },
+    "triangular": {
+      "ppl": 12.08,
+      "params": 838968,
+      "time_seconds": null,
+      "delta_vs_vanilla": "0%",
+      "note": "partial result (step 300), process OOM at step 400 twice"
+    },
+    "modular_group": {
+      "ppl": 12.08,
+      "params": 838964,
+      "time_seconds": 172.3,
+      "delta_vs_vanilla": "0%"
+    },
+    "fibonacci_spiral": {
+      "ppl": 12.08,
+      "params": 838964,
+      "time_seconds": 161.2,
+      "delta_vs_vanilla": "0%"
+    },
+    "wave_interference": {
+      "ppl": 12.06,
+      "params": 838964,
+      "time_seconds": 162.8,
+      "delta_vs_vanilla": "0%"
+    },
+    "golden_ratio": {
+      "ppl": 12.14,
+      "params": 838964,
+      "time_seconds": null,
+      "delta_vs_vanilla": "+0.4%",
+      "note": "partial result (step 300), process OOM at step 400"
+    }
+  },
+  "summary": {
+    "key_finding": "recursive_cube is the only pattern with significant impact (PPL 5.27 vs ~12 baseline)",
+    "all_other_patterns": "statistically indistinguishable from vanilla baseline (~12.06-12.14)",
+    "implication": "The recursive cube geometry provides meaningful inductive bias; other patterns do not"
+  }
+}
