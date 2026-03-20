@@ -385,10 +385,17 @@ class MultiScaleGlobalRouter(nn.Module):
 
     С Q4 (use_q4=True):
         Q2 (4)  →  Q4 (16)  →  Q3 (8)  →  Q6 (64)
-        Q4 = 4-куб {−1,+1}^4; 16 вершин = PseudoRAG архетипы
-        4 оси: Да/Нет · Свой/Чужой · Лево/Право · Верх/Низ
-        Полусферы: ABS(bitcount≥3)=5, DYN(bitcount=2)=6, CON(bitcount≤1)=5
-        → почти идеальный баланс vs Q6 WHT (7/20/7)
+        Q4 = 4-куб {−1,+1}^4; 16 вершин = PseudoRAG информационные архетипы
+        4 оси (из archetypes.py):
+          ось 0: M/A — Материальное(-1) / Абстрактное(+1)
+          ось 1: S/D — Статичное(-1)    / Динамичное(+1)
+          ось 2: E/C — Элементарное(-1) / Комплексное(+1)
+          ось 3: O/F — Упорядоченное(-1)/ Текучее(+1)
+        Квадранты → группы:
+          MS (Material+Static)   → CONCRETE  (устойчивая физика: Кристалл..Лес)
+          MD (Material+Dynamic)  → DYNAMIC   (движущееся: Механизм..Город)
+          AS (Abstract+Static)   → ABSTRACT  (устойчивые концепты: Аксиома..Культура)
+          AD (Abstract+Dynamic)  → DYNAMIC↔ABSTRACT (алгоритмы, идеи, программы)
 
     Смешивание:
         group_weights = softmax(w2·score_q2 + [w4·score_q4] + w3·score_q3 + w6·score_q6)
@@ -449,12 +456,15 @@ class MultiScaleGlobalRouter(nn.Module):
         self.register_buffer('q2_to_group', q2_to_group)    # (4, n_groups)
 
         # ── Q4 масштаб: PseudoRAG 16-архетипный куб (use_q4=True) ──────────────
-        # Q4 = {−1,+1}^4, 16 вершин = два Q3-куба; 4 смысловые оси:
-        #   бит 0: Да/Нет (утверждение vs отрицание)
-        #   бит 1: Свой/Чужой (внутренний vs внешний контекст)
-        #   бит 2: Лево/Право (аналитика vs синтез)
-        #   бит 3: Верх/Низ  (абстракция vs конкретика)
-        # Балансировка по битовому числу: ABS(≥3)=5, DYN(=2)=6, CON(≤1)=5
+        # Q4 = {−1,+1}^4, 16 вершин = два Q3-куба (Material-face и Abstract-face)
+        # Вершина i кодирует 4-буквенный PseudoRAG архетип через биты:
+        #   бит 3 (pos 0): 0=M (Материальное), 1=A (Абстрактное)
+        #   бит 2 (pos 1): 0=S (Статичное),    1=D (Динамичное)
+        #   бит 1 (pos 2): 0=E (Элементарное), 1=C (Комплексное)
+        #   бит 0 (pos 3): 0=O (Упорядоченное),1=F (Текучее)
+        # Маппинг квадрантов → группы (см. _build_q4_anchors):
+        #   MS(i=0..3)→CONCRETE, MD(i=4..7)→DYNAMIC,
+        #   AS(i=8..11)→ABSTRACT, AD(i=12..15)→DYN↔ABS blend
         if use_q4:
             self.register_buffer('q4_verts', _make_sub_hypercube(4))  # (16, 4)
             self.proj_q4 = nn.Linear(d_model, 4, bias=False)
@@ -540,45 +550,104 @@ class MultiScaleGlobalRouter(nn.Module):
         row_sum = q3_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
         return q3_map / row_sum
 
+    # Имена 16 PseudoRAG архетипов в порядке i=0..15 (из archetypes.py)
+    # Кодировка: бит3=M/A, бит2=S/D, бит1=E/C, бит0=O/F
+    _Q4_ARCHETYPE_NAMES = [
+        "MSEO/Кристалл",   # 0  = 0000: Material+Static+Elem+Ordered
+        "MSEF/Песок",      # 1  = 0001: Material+Static+Elem+Fluid
+        "MSCO/Здание",     # 2  = 0010: Material+Static+Complex+Ordered
+        "MSCF/Лес",        # 3  = 0011: Material+Static+Complex+Fluid
+        "MDEO/Механизм",   # 4  = 0100: Material+Dynamic+Elem+Ordered
+        "MDEF/Организм",   # 5  = 0101: Material+Dynamic+Elem+Fluid
+        "MDCO/Машина",     # 6  = 0110: Material+Dynamic+Complex+Ordered
+        "MDCF/Город",      # 7  = 0111: Material+Dynamic+Complex+Fluid
+        "ASEO/Аксиома",    # 8  = 1000: Abstract+Static+Elem+Ordered
+        "ASEF/Архетип",    # 9  = 1001: Abstract+Static+Elem+Fluid
+        "ASCO/Теория",     # 10 = 1010: Abstract+Static+Complex+Ordered
+        "ASCF/Культура",   # 11 = 1011: Abstract+Static+Complex+Fluid
+        "ADEO/Алгоритм",   # 12 = 1100: Abstract+Dynamic+Elem+Ordered
+        "ADEF/Интуиция",   # 13 = 1101: Abstract+Dynamic+Elem+Fluid
+        "ADCO/Программа",  # 14 = 1110: Abstract+Dynamic+Complex+Ordered
+        "ADCF/Общество",   # 15 = 1111: Abstract+Dynamic+Complex+Fluid
+    ]
+
     @staticmethod
     def _build_q4_anchors(n_groups: int) -> torch.Tensor:
         """Q4 (16 вершин, 4 бита) → soft group matrix (16, n_groups).
 
-        PseudoRAG / Kryukov двойной куб: Q4 = {−1,+1}^4.
-        Четыре смысловых оси: Да/Нет · Свой/Чужой · Лево/Право · Верх/Низ.
+        Маппинг основан на реальной семантике PseudoRAG (archetypes.py):
+          Ось 0 (бит 3): M(-1) / A(+1)  — Materiality
+          Ось 1 (бит 2): S(-1) / D(+1)  — Dynamics
+          Ось 2 (бит 1): E(-1) / C(+1)  — Scale
+          Ось 3 (бит 0): O(-1) / F(+1)  — Structure
 
-        Спектральный принцип (λ_k = 4−2k в Q4):
-          k=0 (λ=+4): 0 Yang-битов (----) → чистый CONCRETE (Kun×4)
-          k=1 (λ=+2): 1 Yang-бит          → CONCRETE тяготение
-          k=2 (λ= 0): 2 Yang-бита (экватор Q4, null-space) → DYNAMIC
-          k=3 (λ=−2): 3 Yang-бита          → ABSTRACT тяготение
-          k=4 (λ=−4): 4 Yang-бита (++++) → чистый ABSTRACT (Qian×4)
+        Квадрантная логика:
+          MS (i=0..3)  Material+Static   → CONCRETE:  кристалл, песок, здание, лес
+          MD (i=4..7)  Material+Dynamic  → DYNAMIC:   механизм, организм, машина, город
+          AS (i=8..11) Abstract+Static   → ABSTRACT:  аксиома, архетип, теория, культура
+          AD (i=12..15)Abstract+Dynamic  → смесь DYN↔ABS:
+              ADEO/Алгоритм    (E+O): procedure → DYNAMIC  (шаги = движение)
+              ADEF/Интуиция    (E+F): spontaneous → DYNAMIC  (поток мысли)
+              ADCO/Программа   (C+O): complex system → ABS 0.55 / DYN 0.45
+              ADCF/Общество    (C+F): social dynamics → DYN 0.6 / ABS 0.4
 
-        Балансировка:
-          CONCRETE: bitcount ≤ 1 → 1 + 4 = 5 вершин
-          DYNAMIC:  bitcount = 2 →         6 вершин  (λ=0, идеальный экватор)
-          ABSTRACT: bitcount ≥ 3 → 4 + 1 = 5 вершин
-          Итого: 5/6/5 — почти идеально (vs Q6 WHT: 7/20/7)
+        Связь с Q6/I Ching:
+          M(-1) ↔ Yin (земля, Kun-сторона) ↔ CONCRETE (low bitcount Q6)
+          A(+1) ↔ Yang (небо, Qian-сторона) ↔ ABSTRACT (high bitcount Q6)
+          S(-1) ↔ устойчивость (λ экстремум) ↔ полюса WHT (λ=±4)
+          D(+1) ↔ переход (λ≈0) ↔ экватор Q6 WHT (λ=0, bitcount=3)
+          E/C   ↔ масштаб иерархии Q2(Elementary) → Q6(Complex)
+          O/F   ↔ Ising T: Ordered=T<Tc (упорядоченная фаза), Fluid=T>Tc
         """
+        # Индексы групп: ABS=0, DYN=1, CON=2  (порядок из group_names)
+        ABS, DYN, CON = 0 % n_groups, 1 % n_groups, 2 % n_groups
         q4_map = torch.zeros(16, n_groups)
+
         for i in range(16):
-            yang = bin(i).count('1')    # число Yang-битов в i ∈ {0,1,2,3,4}
-            if yang == 0:
-                # (----) чистый CONCRETE
-                q4_map[i, 2 % n_groups] = 1.0
-            elif yang == 1:
-                # 1 Yang → CONCRETE (ближе к Kun)
-                q4_map[i, 2 % n_groups] = 1.0
-            elif yang == 2:
-                # экватор Q4 (λ=0) → DYNAMIC
-                q4_map[i, 1 % n_groups] = 1.0
-            elif yang == 3:
-                # 3 Yang → ABSTRACT тяготение (смешанно с DYNAMIC)
-                q4_map[i, 0 % n_groups] = 0.7
-                q4_map[i, 1 % n_groups] = 0.3
+            mat   = (i >> 3) & 1   # 0=Material, 1=Abstract
+            dyn   = (i >> 2) & 1   # 0=Static,   1=Dynamic
+            scale = (i >> 1) & 1   # 0=Elementary,1=Complex
+            fluid =  i       & 1   # 0=Ordered,  1=Fluid
+
+            if mat == 0 and dyn == 0:
+                # ── MS: Material+Static → CONCRETE ──────────────────────────
+                # MSCF/Лес (i=3): природная экосистема имеет слабую динамику
+                if scale == 1 and fluid == 1:      # MSCF = Лес (сложный + текучий)
+                    q4_map[i, CON] = 0.85
+                    q4_map[i, DYN] = 0.15
+                else:
+                    q4_map[i, CON] = 1.0
+
+            elif mat == 0 and dyn == 1:
+                # ── MD: Material+Dynamic → DYNAMIC ──────────────────────────
+                # MDCF/Город (i=7): сложная живая система с абстрактной надстройкой
+                if scale == 1 and fluid == 1:      # MDCF = Город (сложный + текучий)
+                    q4_map[i, DYN] = 0.80
+                    q4_map[i, ABS] = 0.20
+                else:
+                    q4_map[i, DYN] = 1.0
+
+            elif mat == 1 and dyn == 0:
+                # ── AS: Abstract+Static → ABSTRACT ──────────────────────────
+                # ASCF/Культура (i=11): традиции медленно меняются
+                if scale == 1 and fluid == 1:      # ASCF = Культура
+                    q4_map[i, ABS] = 0.85
+                    q4_map[i, DYN] = 0.15
+                else:
+                    q4_map[i, ABS] = 1.0
+
             else:
-                # (++++) чистый ABSTRACT
-                q4_map[i, 0 % n_groups] = 1.0
+                # ── AD: Abstract+Dynamic → DYN↔ABS blend ────────────────────
+                if scale == 1 and fluid == 0:      # ADCO/Программа: C+O = структурированная
+                    q4_map[i, ABS] = 0.55
+                    q4_map[i, DYN] = 0.45
+                elif scale == 1 and fluid == 1:    # ADCF/Общество: C+F = текучая
+                    q4_map[i, DYN] = 0.60
+                    q4_map[i, ABS] = 0.40
+                else:                              # ADEO/Алгоритм, ADEF/Интуиция: E = действие
+                    q4_map[i, DYN] = 0.75
+                    q4_map[i, ABS] = 0.25
+
         row_sum = q4_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
         return q4_map / row_sum
 
