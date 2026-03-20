@@ -235,7 +235,7 @@ def figure8_hmoe_v4(
     block_size:     int   = MODEL_CFG["block_size"] - 1,
     n_cycles:       int   = 8,
     steps_per_loop: int   = 80,
-    temperature:    float = 2.5,
+    temperature:    float = 3.0,   # T_c(Q6) mean-field: z·J/2 = 6·1/2 = 3.0
     lr_a:           float = 2e-5,
     lr_b:           float = 5e-6,
     do_train:       bool  = True,
@@ -400,7 +400,8 @@ def main():
     parser.add_argument("--fast",           action="store_true")
     parser.add_argument("--cycles",         type=int, default=8)
     parser.add_argument("--steps_per_loop", type=int, default=80)
-    parser.add_argument("--temperature",    type=float, default=2.5)
+    parser.add_argument("--temperature",    type=float, default=3.0,
+                        help="Температура роутера. T_c(Q6)≈3.0 (hexphys Ising)")
     parser.add_argument("--lr",             type=float, default=1e-5,
                         help="Базовый LR (lr_a=2×, lr_b=0.5×)")
     parser.add_argument("--no-train",       action="store_true")

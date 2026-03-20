@@ -412,6 +412,8 @@ def main():
                         help="λ₂ — баланс групп (Уровень 2, Архетип). Default: 0.3")
     parser.add_argument("--lambda_dynamic", type=float, default=0.3,
                         help="λ₃ — DYNAMIC≥0.20 (Уровень 3, Алгоритм). Default: 0.3")
+    parser.add_argument("--lambda_temp",    type=float, default=0.5,
+                        help="λ_T — Ising T_c регуляризация роутера (hexphys). Default: 0.5")
     args = parser.parse_args()
 
     steps = 50 if args.fast else args.steps_per_phase
@@ -433,9 +435,10 @@ def main():
             lambda_lci     = args.lambda_lci,
             lambda_balance = args.lambda_balance,
             lambda_dynamic = args.lambda_dynamic,
+            lambda_temp_reg = args.lambda_temp,
         )
         print(f"\n  Топологический loss ВКЛЮЧЁН (--topo):")
-        print(f"    λ₁ lci={args.lambda_lci}  λ₂ balance={args.lambda_balance}  λ₃ dynamic={args.lambda_dynamic}")
+        print(f"    λ₁ lci={args.lambda_lci}  λ₂ balance={args.lambda_balance}  λ₃ dynamic={args.lambda_dynamic}  λ_T={args.lambda_temp}")
     hmoe_cfg = HMoEConfig(**hmoe_cfg_kwargs)
 
     # ── Создать/загрузить модель ────────────────────────────────────────────

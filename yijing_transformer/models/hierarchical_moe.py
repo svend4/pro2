@@ -334,7 +334,12 @@ class GlobalRouter(nn.Module):
                 hexagrams[DOMAIN_Q6_IDX[d]] for d in DOMAIN_GROUPS[g]
             ])
             group_anchors.append(domain_vecs.mean(0))
-        self.register_buffer('group_anchors', torch.stack(group_anchors))
+        # hexgeom (Voronoi/Hamming): нормализуем якоря до единичной нормы.
+        # DYNAMIC якорь имеет norm≈1.414 vs ABSTRACT/CONCRETE norm≈2.0 —
+        # без нормализации DYNAMIC систематически проигрывает на 29%.
+        anch = torch.stack(group_anchors)
+        anch = F.normalize(anch, dim=-1)
+        self.register_buffer('group_anchors', anch)
 
     @property
     def temperature(self) -> torch.Tensor:
@@ -346,7 +351,9 @@ class GlobalRouter(nn.Module):
         sim       = soft_bits @ self.hexagrams.T
         hex_w     = F.softmax(sim / self.temperature, dim=-1)
         soft_hex  = hex_w @ self.hexagrams
-        group_scores  = soft_hex @ self.group_anchors.T
+        # hexgeom: нормализуем якоря on-the-fly — работает и при загрузке чекпоинта
+        anchors_norm  = F.normalize(self.group_anchors, dim=-1)
+        group_scores  = soft_hex @ anchors_norm.T
         group_weights = F.softmax(group_scores, dim=-1)
         mean_w  = group_weights.mean(dim=(0, 1))
         lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()
@@ -411,11 +418,15 @@ class MultiScaleGlobalRouter(nn.Module):
         self.q3_to_group = nn.Parameter(q3_init)             # (8, n_groups), обучаемый
 
         # Q6 якоря для групп (среднее по доменам группы)
+        # hexgeom: нормализуем до единичной нормы — иначе DYNAMIC anchor
+        # (norm≈1.414) проигрывает ABSTRACT/CONCRETE (norm≈2.0) на 29%.
         group_anchors = []
         for g in group_names:
             vecs = torch.stack([hexagrams[DOMAIN_Q6_IDX[d]] for d in DOMAIN_GROUPS[g]])
             group_anchors.append(vecs.mean(0))
-        self.register_buffer('group_anchors', torch.stack(group_anchors))  # (n_groups, 6)
+        anch = torch.stack(group_anchors)                   # (n_groups, 6)
+        anch = F.normalize(anch, dim=-1)                    # единичная норма
+        self.register_buffer('group_anchors', anch)         # (n_groups, 6)
 
     @staticmethod
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
@@ -479,7 +490,9 @@ class MultiScaleGlobalRouter(nn.Module):
         sim_q6   = soft_q6 @ self.hexagrams.T                         # (B, T, 64)
         hex_weights = F.softmax(sim_q6 / T_inv, dim=-1)               # (B, T, 64)
         soft_hex    = hex_weights @ self.hexagrams                     # (B, T, 6)
-        score_q6    = soft_hex @ self.group_anchors.T                  # (B, T, n_groups)
+        # hexgeom: нормализуем on-the-fly (устойчиво к чекпоинтам)
+        anchors_norm = F.normalize(self.group_anchors, dim=-1)         # (n_groups, 6)
+        score_q6    = soft_hex @ anchors_norm.T                        # (B, T, n_groups)
 
         # ── Смешивание масштабов ─────────────────────────────────────────────
         scale_mix    = F.softmax(self.log_scale_mix, dim=0)            # (3,)
@@ -522,6 +535,11 @@ class HMoEConfig:
     lambda_dynamic:     float = 0.0
     # Порог доминирования для lambda_balance (по умолчанию 40%)
     balance_threshold:  float = 0.40
+    # hexphys (Ising): температурная регуляризация роутера к T_c(Q6)=3.0
+    # T_c = z·J/2 = 6·1/2 = 3.0 (mean-field для 6-мерного гиперкуба)
+    # Штраф: (log_T - log_T_c)² если T < T_c (упорядоченная фаза → доминирование)
+    lambda_temp_reg:    float = 0.0
+    ising_T_c:          float = 3.0   # критическая температура Q6
 
 
 class HierarchicalMoEFFN(nn.Module):
@@ -604,15 +622,17 @@ class HierarchicalMoEFFN(nn.Module):
             DYNAMIC (точка пересечения) не схлопывается.
             Штраф: relu(0.20 - w_X) — если DYNAMIC < 20%.
         """
-        if (self.cfg.lambda_lci == 0.0 and
-                self.cfg.lambda_balance == 0.0 and
-                self.cfg.lambda_dynamic == 0.0):
+        all_zero = (self.cfg.lambda_lci == 0.0 and
+                    self.cfg.lambda_balance == 0.0 and
+                    self.cfg.lambda_dynamic == 0.0 and
+                    self.cfg.lambda_temp_reg == 0.0)
+        if all_zero:
             return torch.tensor(0.0, device=group_weights.device)
 
         gw = group_weights.mean(dim=(0, 1))     # (3,) — средние веса групп
         w_a, w_x, w_b = gw[0], gw[1], gw[2]    # ABSTRACT, DYNAMIC, CONCRETE
 
-        # Уровень 1: |w_A - w_B|² — баланс петель восьмёрки
+        # Уровень 1: |w_A - w_B|² — баланс петель восьмёрки (LCI → π)
         lci_loss = (w_a - w_b).pow(2)
 
         # Уровень 2: штраф за доминирование любой группы
@@ -621,12 +641,25 @@ class HierarchicalMoEFFN(nn.Module):
                         F.relu(w_b - thr).pow(2) +
                         F.relu(w_x - thr).pow(2))
 
-        # Уровень 3: DYNAMIC не схлопывается
+        # Уровень 3: DYNAMIC не схлопывается (≥ 20%)
         dynamic_loss = F.relu(0.20 - w_x)
 
-        return (self.cfg.lambda_lci     * lci_loss     +
-                self.cfg.lambda_balance * balance_loss  +
-                self.cfg.lambda_dynamic * dynamic_loss)
+        # hexphys (Ising T_c): роутер не должен уходить в упорядоченную фазу.
+        # T_c = 3.0 (mean-field Q6: z·J/2 = 6·1/2).
+        # Штраф только когда T < T_c (упорядоченная фаза → доминирование группы).
+        temp_reg_loss = torch.tensor(0.0, device=group_weights.device)
+        if self.cfg.lambda_temp_reg > 0.0:
+            router = self.global_router
+            if hasattr(router, 'log_temp'):
+                T_now = router.log_temp.exp()
+                T_c   = torch.tensor(self.cfg.ising_T_c, device=group_weights.device)
+                # Только если T < T_c (в упорядоченной фазе)
+                temp_reg_loss = F.relu(T_c - T_now).pow(2)
+
+        return (self.cfg.lambda_lci      * lci_loss      +
+                self.cfg.lambda_balance  * balance_loss   +
+                self.cfg.lambda_dynamic  * dynamic_loss   +
+                self.cfg.lambda_temp_reg * temp_reg_loss)
 
     def _run_group(self, x: torch.Tensor, group: str,
                    group_weights: torch.Tensor, g_idx: int
