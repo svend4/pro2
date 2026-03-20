@@ -376,15 +376,22 @@ class GlobalRouter(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class MultiScaleGlobalRouter(nn.Module):
-    """Matryoshka роутер: Q2→Q3→Q6 три масштаба, обучаемое смешивание.
+    """Matryoshka роутер: Q2→[Q4]→Q3→Q6 три (или четыре) масштаба.
 
-    Иерархия:
-        Q2 (4 вершины, 2 бита)  → грубый выбор группы (3 группы из 4 Q2-вершин)
-        Q3 (8 вершин,  3 бита)  → средний масштаб, уточнение доменов
+    Иерархия (use_q4=False):
+        Q2 (4 вершины,  2 бита) → грубый выбор группы
+        Q3 (8 вершин,   3 бита) → средний масштаб, уточнение доменов
         Q6 (64 вершины, 6 бит)  → точный Q6-сигнал + hex_weights для HexMoE
 
+    С Q4 (use_q4=True):
+        Q2 (4)  →  Q4 (16)  →  Q3 (8)  →  Q6 (64)
+        Q4 = 4-куб {−1,+1}^4; 16 вершин = PseudoRAG архетипы
+        4 оси: Да/Нет · Свой/Чужой · Лево/Право · Верх/Низ
+        Полусферы: ABS(bitcount≥3)=5, DYN(bitcount=2)=6, CON(bitcount≤1)=5
+        → почти идеальный баланс vs Q6 WHT (7/20/7)
+
     Смешивание:
-        group_weights = softmax(w2·score_q2 + w3·score_q3 + w6·score_q6)
+        group_weights = softmax(w2·score_q2 + [w4·score_q4] + w3·score_q3 + w6·score_q6)
         hex_weights   = softmax(Q6-сходство / T)  — для Q6ExpertBank
 
     Q2→группа маппинг:
@@ -410,8 +417,10 @@ class MultiScaleGlobalRouter(nn.Module):
     # компенсирует его структурное недопредставление на Q6-уровне.
     _Q2_TO_GROUP: List[int] = [2, 1, 1, 0]  # (−−)→CON, (−+)→DYN, (+−)→DYN, (++)→ABS
 
-    def __init__(self, d_model: int, group_names: List[str]):
+    def __init__(self, d_model: int, group_names: List[str],
+                 use_q4: bool = False):
         super().__init__()
+        self.use_q4 = use_q4
         hexagrams = _make_hexagrams()
         self.register_buffer('hexagrams', hexagrams)          # (64, 6)
         self.register_buffer('q2_verts', _make_sub_hypercube(2))  # (4, 2)
@@ -427,7 +436,10 @@ class MultiScaleGlobalRouter(nn.Module):
         self.log_temp = nn.Parameter(torch.log(torch.tensor(0.5)))
 
         # Обучаемые веса смешивания масштабов (log-domain для устойчивости)
-        self.log_scale_mix = nn.Parameter(torch.zeros(3))   # [w_Q2, w_Q3, w_Q6]
+        # use_q4=False → 3 масштаба [w_Q2, w_Q3, w_Q6] (backward-compat)
+        # use_q4=True  → 4 масштаба [w_Q2, w_Q4, w_Q3, w_Q6]
+        n_scales = 4 if use_q4 else 3
+        self.log_scale_mix = nn.Parameter(torch.zeros(n_scales))
 
         # Q2 → group matrix (фиксированный маппинг, не обучаемый)
         q2_to_group = torch.zeros(4, n_groups)
@@ -435,6 +447,19 @@ class MultiScaleGlobalRouter(nn.Module):
             if g_idx < n_groups:
                 q2_to_group[v_idx, g_idx] = 1.0
         self.register_buffer('q2_to_group', q2_to_group)    # (4, n_groups)
+
+        # ── Q4 масштаб: PseudoRAG 16-архетипный куб (use_q4=True) ──────────────
+        # Q4 = {−1,+1}^4, 16 вершин = два Q3-куба; 4 смысловые оси:
+        #   бит 0: Да/Нет (утверждение vs отрицание)
+        #   бит 1: Свой/Чужой (внутренний vs внешний контекст)
+        #   бит 2: Лево/Право (аналитика vs синтез)
+        #   бит 3: Верх/Низ  (абстракция vs конкретика)
+        # Балансировка по битовому числу: ABS(≥3)=5, DYN(=2)=6, CON(≤1)=5
+        if use_q4:
+            self.register_buffer('q4_verts', _make_sub_hypercube(4))  # (16, 4)
+            self.proj_q4 = nn.Linear(d_model, 4, bias=False)
+            q4_init = self._build_q4_anchors(n_groups)
+            self.q4_to_group = nn.Parameter(q4_init)         # (16, n_groups), обучаемый
 
         # Q3 якоря: обучаемый маппинг 8 Q3-вершин → n_groups
         # Инициализируем статическим приближением, затем дообучаем
@@ -515,6 +540,48 @@ class MultiScaleGlobalRouter(nn.Module):
         row_sum = q3_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
         return q3_map / row_sum
 
+    @staticmethod
+    def _build_q4_anchors(n_groups: int) -> torch.Tensor:
+        """Q4 (16 вершин, 4 бита) → soft group matrix (16, n_groups).
+
+        PseudoRAG / Kryukov двойной куб: Q4 = {−1,+1}^4.
+        Четыре смысловых оси: Да/Нет · Свой/Чужой · Лево/Право · Верх/Низ.
+
+        Спектральный принцип (λ_k = 4−2k в Q4):
+          k=0 (λ=+4): 0 Yang-битов (----) → чистый CONCRETE (Kun×4)
+          k=1 (λ=+2): 1 Yang-бит          → CONCRETE тяготение
+          k=2 (λ= 0): 2 Yang-бита (экватор Q4, null-space) → DYNAMIC
+          k=3 (λ=−2): 3 Yang-бита          → ABSTRACT тяготение
+          k=4 (λ=−4): 4 Yang-бита (++++) → чистый ABSTRACT (Qian×4)
+
+        Балансировка:
+          CONCRETE: bitcount ≤ 1 → 1 + 4 = 5 вершин
+          DYNAMIC:  bitcount = 2 →         6 вершин  (λ=0, идеальный экватор)
+          ABSTRACT: bitcount ≥ 3 → 4 + 1 = 5 вершин
+          Итого: 5/6/5 — почти идеально (vs Q6 WHT: 7/20/7)
+        """
+        q4_map = torch.zeros(16, n_groups)
+        for i in range(16):
+            yang = bin(i).count('1')    # число Yang-битов в i ∈ {0,1,2,3,4}
+            if yang == 0:
+                # (----) чистый CONCRETE
+                q4_map[i, 2 % n_groups] = 1.0
+            elif yang == 1:
+                # 1 Yang → CONCRETE (ближе к Kun)
+                q4_map[i, 2 % n_groups] = 1.0
+            elif yang == 2:
+                # экватор Q4 (λ=0) → DYNAMIC
+                q4_map[i, 1 % n_groups] = 1.0
+            elif yang == 3:
+                # 3 Yang → ABSTRACT тяготение (смешанно с DYNAMIC)
+                q4_map[i, 0 % n_groups] = 0.7
+                q4_map[i, 1 % n_groups] = 0.3
+            else:
+                # (++++) чистый ABSTRACT
+                q4_map[i, 0 % n_groups] = 1.0
+        row_sum = q4_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
+        return q4_map / row_sum
+
     @property
     def temperature(self) -> torch.Tensor:
         return self.log_temp.exp().clamp(0.1, 5.0)
@@ -535,6 +602,15 @@ class MultiScaleGlobalRouter(nn.Module):
         sim_q2   = soft_q2 @ self.q2_verts.T                          # (B, T, 4)
         w_q2     = F.softmax(sim_q2 / T_inv, dim=-1)                  # (B, T, 4)
         score_q2 = w_q2 @ self.q2_to_group                            # (B, T, n_groups)
+
+        # ── Q4 масштаб (PseudoRAG, use_q4=True) ────────────────────────────
+        if self.use_q4:
+            soft_q4  = torch.tanh(self.proj_q4(h))                    # (B, T, 4)
+            sim_q4   = soft_q4 @ self.q4_verts.T                      # (B, T, 16)
+            w_q4     = F.softmax(sim_q4 / T_inv, dim=-1)              # (B, T, 16)
+            # q4_to_group — обучаемый параметр; нормализуем строки на лету
+            q4_map   = F.softmax(self.q4_to_group, dim=-1)            # (16, n_groups)
+            score_q4 = w_q4 @ q4_map                                  # (B, T, n_groups)
 
         # ── Q3 масштаб ──────────────────────────────────────────────────────
         soft_q3  = torch.tanh(self.proj_q3(h))                        # (B, T, 3)
@@ -566,10 +642,18 @@ class MultiScaleGlobalRouter(nn.Module):
         score_q6  = (1.0 - wht_alpha) * score_q6_cos + wht_alpha * score_q6_wht
 
         # ── Смешивание масштабов ─────────────────────────────────────────────
-        scale_mix    = F.softmax(self.log_scale_mix, dim=0)            # (3,)
-        mixed_scores = (scale_mix[0] * score_q2 +
-                        scale_mix[1] * score_q3 +
-                        scale_mix[2] * score_q6)
+        scale_mix = F.softmax(self.log_scale_mix, dim=0)
+        if self.use_q4:
+            # 4 масштаба: [w_Q2, w_Q4, w_Q3, w_Q6]
+            mixed_scores = (scale_mix[0] * score_q2 +
+                            scale_mix[1] * score_q4 +
+                            scale_mix[2] * score_q3 +
+                            scale_mix[3] * score_q6)
+        else:
+            # 3 масштаба: [w_Q2, w_Q3, w_Q6]
+            mixed_scores = (scale_mix[0] * score_q2 +
+                            scale_mix[1] * score_q3 +
+                            scale_mix[2] * score_q6)
         group_weights = F.softmax(mixed_scores, dim=-1)                # (B, T, n_groups)
 
         # ── Load-balance loss ────────────────────────────────────────────────
@@ -593,6 +677,9 @@ class HMoEConfig:
     lb_loss_weight:     float = 0.01   # вес load-balancing loss
     bridge_weight:      float = 0.5    # вес BridgeExpert выходов
     use_multiscale:     bool  = True   # MultiScaleGlobalRouter vs GlobalRouter
+    use_q4:             bool  = False  # Q4 масштаб (16 вершин) между Q2 и Q3
+    #                                  # Q4 = 4-куб {−1,+1}^4; 16 вершин = 2 Q3-куба
+    #                                  # балансировка: ABS=5, DYN=6, CON=5 vs Q6's 7/20/7
     use_hex_tier:       bool  = False  # 4-й уровень: Q6ExpertBank (64 эксперта)
     hex_tier_top_k:     int   = 4      # top-k для Q6ExpertBank
     hex_tier_weight:    float = 0.3    # вес 4-го уровня в финальном выходе
@@ -641,7 +728,8 @@ class HierarchicalMoEFFN(nn.Module):
 
         # Уровень 1: Global router (MultiScale или legacy)
         if cfg.use_multiscale:
-            self.global_router = MultiScaleGlobalRouter(d, group_names)
+            self.global_router = MultiScaleGlobalRouter(
+                d, group_names, use_q4=cfg.use_q4)
         else:
             self.global_router = GlobalRouter(d, group_names)
 
