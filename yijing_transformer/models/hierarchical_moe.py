@@ -452,6 +452,21 @@ class MultiScaleGlobalRouter(nn.Module):
         anch = F.normalize(anch, dim=-1)                    # единичная норма
         self.register_buffer('group_anchors', anch)         # (n_groups, 6)
 
+        # ── WHT спектральные маски полусфер Q6 (Этап 7) ─────────────────────────
+        # Q6 гиперкуб: λ_k = 6-2k; полусферы по числу Yang-битов:
+        #   ABSTRACT  (λ=+4): bitcount ≥ 5  →  7 вершин  (Qian-сторона)
+        #   DYNAMIC   (λ= 0): bitcount = 3  → 20 вершин  (экватор, λ=0)
+        #   CONCRETE  (λ=-4): bitcount ≤ 1  →  7 вершин  (Kun-сторона)
+        # Нормировка / mask.sum() убирает структурный перевес DYNAMIC (20 vs 7).
+        _bits = torch.tensor([bin(i).count('1') for i in range(64)],
+                             dtype=torch.float32)
+        self.register_buffer('wht_abstract', (_bits >= 5).float())   # (64,)
+        self.register_buffer('wht_dynamic',  (_bits == 3).float())   # (64,)
+        self.register_buffer('wht_concrete', (_bits <= 1).float())   # (64,)
+        # Обучаемый скаляр смешения cosine↔WHT; init=-2 → sigmoid≈0.12 (WHT слаб
+        # при старте, позволяет загрузить существующий чекпоинт без потери качества)
+        self.log_wht_mix = nn.Parameter(torch.tensor(-2.0))
+
     @staticmethod
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
         """Q3 (8 вершин, 3 бита) → soft group matrix (8, n_groups).
@@ -535,8 +550,20 @@ class MultiScaleGlobalRouter(nn.Module):
         hex_weights = F.softmax(sim_q6 / T_inv, dim=-1)               # (B, T, 64)
         soft_hex    = hex_weights @ self.hexagrams                     # (B, T, 6)
         # hexgeom: нормализуем on-the-fly (устойчиво к чекпоинтам)
-        anchors_norm = F.normalize(self.group_anchors, dim=-1)         # (n_groups, 6)
-        score_q6    = soft_hex @ anchors_norm.T                        # (B, T, n_groups)
+        anchors_norm  = F.normalize(self.group_anchors, dim=-1)        # (n_groups, 6)
+        score_q6_cos  = soft_hex @ anchors_norm.T                      # (B, T, n_groups)
+
+        # ── WHT спектральный роутинг (Этап 7) ───────────────────────────────────
+        # Для каждой полусферы суммируем вероятности hex_weights и нормируем
+        # на размер полусферы → при равномерном hex_weights даёт 1/64 для всех,
+        # устраняя структурный перевес DYNAMIC (20 вершин vs 7 у ABSTRACT/CONCRETE).
+        score_q6_wht = torch.stack([
+            (hex_weights * self.wht_abstract).sum(-1) / self.wht_abstract.sum(),
+            (hex_weights * self.wht_dynamic ).sum(-1) / self.wht_dynamic.sum(),
+            (hex_weights * self.wht_concrete).sum(-1) / self.wht_concrete.sum(),
+        ], dim=-1)                                                      # (B, T, n_groups)
+        wht_alpha = torch.sigmoid(self.log_wht_mix)                    # ∈ (0,1)
+        score_q6  = (1.0 - wht_alpha) * score_q6_cos + wht_alpha * score_q6_wht
 
         # ── Смешивание масштабов ─────────────────────────────────────────────
         scale_mix    = F.softmax(self.log_scale_mix, dim=0)            # (3,)
@@ -707,8 +734,13 @@ class HierarchicalMoEFFN(nn.Module):
 
     def _run_group(self, x: torch.Tensor, group: str,
                    group_weights: torch.Tensor, g_idx: int
-                   ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Вычислить выход одной группы экспертов и её lb_loss."""
+                   ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Вычислить выход одной группы экспертов, её lb_loss и expert_weights.
+
+        Returns:
+            (weighted_out, lb_loss, expert_weights_mean)
+            expert_weights_mean: (n_clusters_in_group,) — средние веса экспертов
+        """
         clusters = self.group_to_clusters[group]
         expert_weights, _, lb = self.group_routers[group](
             x, top_k=self.cfg.top_k_experts)
@@ -717,7 +749,7 @@ class HierarchicalMoEFFN(nn.Module):
         )                                                      # (B, T, d, n)
         group_out = (expert_outs * expert_weights.unsqueeze(-2)).sum(-1)
         gw = group_weights[..., g_idx:g_idx+1]
-        return gw * group_out, lb
+        return gw * group_out, lb, expert_weights.mean(dim=(0, 1))  # (n,)
 
     def forward(self, x: torch.Tensor
                 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -758,12 +790,12 @@ class HierarchicalMoEFFN(nn.Module):
         topo_loss = self._topology_loss(group_weights)
 
         # ── 2. Петля A: ABSTRACT (верхняя полусфера, биты 0-2) ───────────────
-        out_a, lb_a = self._run_group(x, "ABSTRACT", group_weights, 0)
+        out_a, lb_a, ew_abs = self._run_group(x, "ABSTRACT", group_weights, 0)
         total_lb_loss = total_lb_loss + lb_a
         info['lb_ABSTRACT'] = lb_a.detach()
 
         # ── 3. Петля B: CONCRETE (нижняя полусфера, биты 3-5) ────────────────
-        out_b, lb_b = self._run_group(x, "CONCRETE", group_weights, 2)
+        out_b, lb_b, ew_con = self._run_group(x, "CONCRETE", group_weights, 2)
         total_lb_loss = total_lb_loss + lb_b
         info['lb_CONCRETE'] = lb_b.detach()
 
@@ -778,10 +810,30 @@ class HierarchicalMoEFFN(nn.Module):
         # ── 5. DYNAMIC: эксперты экватора получают x_crossing ────────────────
         #   Аналог «точки пересечения» в _figure8_walk:
         #   hexagrams with exactly 3 bits set → AERO, PYRO
-        out_d, lb_d = self._run_group(
+        out_d, lb_d, ew_dyn = self._run_group(
             x_crossing, "DYNAMIC", group_weights, 1)
         total_lb_loss = total_lb_loss + lb_d
         info['lb_DYNAMIC'] = lb_d.detach()
+
+        # ── 5b. 6-domain routing entropy (Этап 9) ────────────────────────────
+        # domain_w_i = group_w_g * expert_w_{g,i} — совместная вероятность
+        # порядок: [NOOS, COSMO, AERO, PYRO, GEO, HYDRO]
+        # (= [ABS×ew_abs[0], ABS×ew_abs[1], DYN×ew_dyn[0], DYN×ew_dyn[1],
+        #    CON×ew_con[0],   CON×ew_con[1]])
+        gw_mean = group_weights.mean(dim=(0, 1))               # (3,)
+        domain_w = torch.cat([
+            gw_mean[0] * ew_abs,   # ABSTRACT: NOOS, COSMO
+            gw_mean[1] * ew_dyn,   # DYNAMIC:  AERO, PYRO
+            gw_mean[2] * ew_con,   # CONCRETE: GEO,  HYDRO
+        ])                                                      # (6,)
+        domain_w = domain_w / (domain_w.sum() + 1e-8)          # нормировка
+        routing_entropy = -(domain_w * torch.log(domain_w + 1e-8)).sum()
+        # eff = H / log(6) ∈ [0,1]; eff=1 → равномерный роутинг
+        routing_eff = routing_entropy / (torch.log(
+            torch.tensor(6.0, device=x.device)) + 1e-8)
+        info['domain_weights']   = domain_w.detach()           # (6,)
+        info['routing_entropy']  = routing_entropy.detach()    # скаляр (бит)
+        info['routing_eff']      = routing_eff.detach()        # ∈[0,1]
 
         # ── 6. Финальный синтез: A + crossing + DYNAMIC + B ──────────────────
         combined = out_a + x_crossing + out_d + out_b
