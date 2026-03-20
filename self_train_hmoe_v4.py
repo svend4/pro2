@@ -229,6 +229,37 @@ def run_loop(model, x_ids, block_size, temperature, steps_per_loop,
 
 # ── Основной алгоритм ─────────────────────────────────────────────────────────
 
+def _stratified_texts(cluster_texts: Dict[str, List[str]], group: str,
+                      min_count: int = 27) -> List[str]:
+    """Стратифицированный список текстов для группы.
+
+    hexstat: t_mix(Q6)=27 — минимум для стабилизации routing entropy.
+    Возвращает список длиной ≥ min_count, циклически перемежая тексты
+    из всех кластеров группы (round-robin), чтобы каждые ~t_mix шагов
+    были представлены все домены группы.
+    """
+    from yijing_transformer.models.hierarchical_moe import DOMAIN_TO_GROUP, CLUSTER_TO_DOMAIN
+    # Собрать тексты по кластерам нужной группы
+    group_clusters: Dict[str, List[str]] = {
+        c: cluster_texts.get(c, [])
+        for c, d in CLUSTER_TO_DOMAIN.items()
+        if DOMAIN_TO_GROUP[d] == group
+    }
+    # Round-robin перемежение: [c0t0, c1t0, c0t1, c1t1, ...]
+    interleaved: List[str] = []
+    iters = {c: iter(txts * max(1, min_count // max(len(txts), 1) + 1))
+             for c, txts in group_clusters.items() if txts}
+    while len(interleaved) < min_count and iters:
+        for c, it in list(iters.items()):
+            try:
+                interleaved.append(next(it))
+            except StopIteration:
+                iters.pop(c)
+            if len(interleaved) >= min_count:
+                break
+    return interleaved if interleaved else []
+
+
 def figure8_hmoe_v4(
     model:          Variant3GPT,
     seed_texts:     List[str],
@@ -239,6 +270,7 @@ def figure8_hmoe_v4(
     lr_a:           float = 2e-5,
     lr_b:           float = 5e-6,
     do_train:       bool  = True,
+    **kwargs,
 ) -> List[Dict]:
     """
     v4: асимметричная серия A>>B для компенсации CONCRETE-доминирования.
@@ -276,19 +308,38 @@ def figure8_hmoe_v4(
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Заморожено: только HMoE-параметры обучаются ({n_trainable:,} param)")
 
-    # Разделить seed_texts по домену
-    abstract_texts = [t for t in seed_texts if any(w in t.lower() for w in
-                      ["hexagram", "abstract", "consciousness", "figure-8",
-                       "topology", "balance", "resonance", "kryukov", "theory"])]
-    concrete_texts = [t for t in seed_texts if any(w in t.lower() for w in
-                      ["def ", "import", "return", "torch", "loss", "optimizer",
-                       "model", "train", "class", "self"])]
-    # fallback: использовать все если разделение пустое
+    # hexstat: t_mix(Q6) = 27 шагов — минимальный размер разнообразной выборки.
+    # Разделяем тексты по семантическим группам через CLUSTER_TO_DOMAIN/DOMAIN_TO_GROUP,
+    # а не по ключевым словам. cluster_texts: Dict[cluster_name → List[str]] передаётся
+    # аргументом (или строится из seed_texts при его отсутствии).
+    cluster_texts: Dict[str, List[str]] = kwargs.get("cluster_texts", {})
+
+    # Строим группированные списки из cluster_texts.
+    # _stratified_texts гарантирует round-robin перемежение + ≥ t_mix=27 текстов.
+    abstract_texts: List[str] = _stratified_texts(cluster_texts, "ABSTRACT") if cluster_texts else []
+    dynamic_texts:  List[str] = _stratified_texts(cluster_texts, "DYNAMIC")  if cluster_texts else []
+    concrete_texts: List[str] = _stratified_texts(cluster_texts, "CONCRETE") if cluster_texts else []
+
+    # fallback: keyword-фильтрация из seed_texts если cluster_texts не передан
+    if not abstract_texts:
+        abstract_texts = [t for t in seed_texts if any(w in t.lower() for w in
+                          ["hexagram", "abstract", "consciousness", "figure-8",
+                           "topology", "balance", "resonance", "kryukov", "theory"])]
+    if not concrete_texts:
+        concrete_texts = [t for t in seed_texts if any(w in t.lower() for w in
+                          ["def ", "import", "return", "torch", "loss", "optimizer",
+                           "model", "train", "class", "self"])]
+    # final fallback: все тексты
     if not abstract_texts:
         abstract_texts = seed_texts
+    if not dynamic_texts:
+        dynamic_texts = seed_texts
     if not concrete_texts:
         concrete_texts = seed_texts
-    print(f"  Тексты: ABSTRACT={len(abstract_texts)}  CONCRETE={len(concrete_texts)}")
+
+    print(f"  Тексты: ABSTRACT={len(abstract_texts)}  DYNAMIC={len(dynamic_texts)}  "
+          f"CONCRETE={len(concrete_texts)}")
+    print(f"  hexstat: t_mix(Q6)=27 → разнообразие гарантировано при batch≥27 текстов/петля")
 
     log: List[Dict] = []
     best_lci = 0.0
@@ -443,19 +494,25 @@ def main():
 
     # ── Загрузить corpus ───────────────────────────────────────────────────
     seed_texts: List[str] = []
+    cluster_texts: Dict[str, List[str]] = {}   # hexstat: стратифицированный по кластерам
     if not args.no_corpus:
         try:
             from repo_corpus_loader import RepoCorpusLoader
             loader = RepoCorpusLoader(_ROOT)
             for cluster in CLUSTER_TO_DOMAIN.keys():
                 try:
+                    ctexts: List[str] = []
                     for item in loader.load_cluster(cluster):
                         t = item if isinstance(item, str) else item.get("text", "")
                         if len(t) > 10:
                             seed_texts.append(t)
+                            ctexts.append(t)
+                    cluster_texts[cluster] = ctexts
                 except Exception:
                     pass
-            print(f"  Корпус: {len(seed_texts)} текстов")
+            total_c = sum(len(v) for v in cluster_texts.values())
+            print(f"  Корпус: {len(seed_texts)} текстов  "
+                  f"({', '.join(f'{k}={len(v)}' for k,v in cluster_texts.items())})")
         except ImportError:
             pass
 
@@ -484,6 +541,7 @@ def main():
         lr_a           = lr_a,
         lr_b           = lr_b,
         do_train       = not args.no_train,
+        cluster_texts  = cluster_texts,   # hexstat: стратифицированный batching
     )
     elapsed = time.perf_counter() - t0
 

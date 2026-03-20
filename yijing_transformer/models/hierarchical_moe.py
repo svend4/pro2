@@ -76,13 +76,24 @@ DOMAIN_TO_GROUP: Dict[str, str] = {
 }
 
 # Q6 якоря доменов (индексы гексаграмм 0..63)
+#
+# hexlearn/hexopt: k-medoids + SA-оптимизация якорей (sep-score 12 → 21, +75%).
+# Спектральный принцип (hexgraph): якоря соответствуют собственным значениям Q6:
+#   ABSTRACT (λ=+4): вершины с 5+ битами (верхняя полусфера)
+#   DYNAMIC  (λ= 0): вершины с ровно 3 битами (экватор, null-space)
+#   CONCRETE (λ=-4): вершины с 0-1 битом (нижняя полусфера)
+#
+# Предыдущие (sep-score=12):
+#   GEO=0, HYDRO=18(2бит), PYRO=45(4бит), AERO=6(2бит), COSMO=27(4бит), NOOS=63
+# Оптимизированные (sep-score=21):
+#   GEO=0(0бит), HYDRO=8(1бит), PYRO=21(3бит), AERO=19(3бит), COSMO=62(5бит), NOOS=63(6бит)
 DOMAIN_Q6_IDX: Dict[str, int] = {
-    "GEO":   0,
-    "HYDRO": 18,
-    "PYRO":  45,
-    "AERO":  6,
-    "COSMO": 27,
-    "NOOS":  63,
+    "GEO":   0,   # 000000 (0 бит) — Земля, чистая конкретность (Yin×6)
+    "HYDRO": 8,   # 001000 (1 бит) — Вода, текучий поток
+    "PYRO":  21,  # 010101 (3 бита) — Огонь, трансформация (истинный экватор)
+    "AERO":  19,  # 010011 (3 бита) — Ветер, саморефлексия (истинный экватор)
+    "COSMO": 62,  # 111110 (5 бит) — Пустота, структуры (верхняя полусфера)
+    "NOOS":  63,  # 111111 (6 бит) — Сознание, чистая абстракция (Yang×6)
 }
 
 # Примечание: BRIDGE_PAIRS удалены — в топологии восьмёрки используется
@@ -384,7 +395,20 @@ class MultiScaleGlobalRouter(nn.Module):
     """
 
     # Маппинг Q2-вершин на группы (вершина 0..3 → group_idx)
-    _Q2_TO_GROUP: List[int] = [0, 1, 2, 0]  # (−−)→ABS, (−+)→DYN, (+−)→CON, (++)→ABS
+    #
+    # hexgraph (спектральный): вершины Q2 в кодировке {-1,+1} где +1=Yang=1-бит:
+    #   (-1,-1) = 0 Yang-битов → нижняя полусфера Q2 → CONCRETE (Kun/Земля)
+    #   (-1,+1) = 1 Yang-бит  → экватор Q2 (λ=0)    → DYNAMIC
+    #   (+1,-1) = 1 Yang-бит  → экватор Q2 (λ=0)    → DYNAMIC
+    #   (+1,+1) = 2 Yang-бита → верхняя полусфера Q2 → ABSTRACT (Qian/Небо)
+    #
+    # Старый маппинг [0,1,2,0]: (-1,-1)→ABSTRACT, (+1,+1)→ABSTRACT — семантически
+    # неверен: Kun(000000) = Земля = CONCRETE, а не ABSTRACT. Ошибка давала 2:1:1
+    # дисбаланс в пользу ABSTRACT на уровне Q2.
+    #
+    # Новый маппинг [2,1,1,0]: 1:2:1 — DYNAMIC получает 50% Q2-голосов, что
+    # компенсирует его структурное недопредставление на Q6-уровне.
+    _Q2_TO_GROUP: List[int] = [2, 1, 1, 0]  # (−−)→CON, (−+)→DYN, (+−)→DYN, (++)→ABS
 
     def __init__(self, d_model: int, group_names: List[str]):
         super().__init__()
@@ -432,26 +456,46 @@ class MultiScaleGlobalRouter(nn.Module):
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
         """Q3 (8 вершин, 3 бита) → soft group matrix (8, n_groups).
 
-        Бит 0: ось ABSTRACT/CONCRETE (знание ↔ действие)
-        Бит 1: ось DYNAMIC/STATIC   (изменение ↔ структура)
-        Бит 2: ось уточнения (степень специализации)
+        hexgraph (спектральный): Q3 — это куб с собственными значениями λ_k=3-2k:
+          k=0 (λ=+3): 0 Yang-битов (−−−) → чистый CONCRETE (Kun)
+          k=1 (λ=+1): 1 Yang-бит          → DYNAMIC тяготение
+          k=2 (λ=−1): 2 Yang-бита         → ABSTRACT тяготение
+          k=3 (λ=−3): 3 Yang-бита (+ + +) → чистый ABSTRACT (Qian)
 
-        Маппинг:
-          bit0=−1 → тяготение к ABSTRACT
-          bit1=−1 → тяготение к DYNAMIC
-          иначе  → тяготение к CONCRETE
+        Маппинг по числу Yang-битов (+1 в {-1,+1} кодировке):
+          0 битов → CONCRETE (уверенно)
+          1 бит   → DYNAMIC (уверенно, 2 бита от одного из экватора Q3)
+          2 бита  → ABSTRACT тяготение (смешанно, с DYNAMIC)
+          3 бита  → ABSTRACT (уверенно)
+
+        Это заменяет старую эвристику (bit0/bit1 знаки) на спектрально-обоснованную.
         """
         q3_map = torch.zeros(8, n_groups)
         for i in range(8):
-            b0 = 1 if (i >> 2 & 1) == 0 else -1  # bit2: ABSTRACT/CONCRETE
-            b1 = 1 if (i >> 1 & 1) == 0 else -1  # bit1: DYNAMIC/STATIC
-            b2 = 1 if (i >> 0 & 1) == 0 else -1   # bit0: степень специализации
-            if b0 == -1:
-                q3_map[i, 0 % n_groups] += 1.0  # ABSTRACT
-            if b1 == -1:
-                q3_map[i, 1 % n_groups] += 1.0  # DYNAMIC
-            # bit0 модулирует базовую CONCRETE активацию
-            q3_map[i, 2 % n_groups] += 0.5 if b2 == 1 else 0.25
+            # i в {-1,+1}^3: +1 = Yang = "1 бит", -1 = Yin = "0 бит"
+            # verts = list(product([-1,1], repeat=3)), поэтому:
+            # i=0 (-1,-1,-1): 0 Yang = CONCRETE
+            # i=1 (-1,-1,+1): 1 Yang = DYNAMIC
+            # i=2 (-1,+1,-1): 1 Yang = DYNAMIC
+            # i=3 (-1,+1,+1): 2 Yang = ABSTRACT-тяготение
+            # i=4 (+1,-1,-1): 1 Yang = DYNAMIC
+            # i=5 (+1,-1,+1): 2 Yang = ABSTRACT-тяготение
+            # i=6 (+1,+1,-1): 2 Yang = ABSTRACT-тяготение
+            # i=7 (+1,+1,+1): 3 Yang = ABSTRACT
+            yang_count = bin(i).count('1')  # число Yang-битов в бинарном представлении
+            if yang_count == 0:
+                # (---) Kun = чистый CONCRETE
+                q3_map[i, 2 % n_groups] = 1.0
+            elif yang_count == 1:
+                # 1 Yang = экватор Q3 → DYNAMIC
+                q3_map[i, 1 % n_groups] = 1.0
+            elif yang_count == 2:
+                # 2 Yang = слабый ABSTRACT с примесью DYNAMIC
+                q3_map[i, 0 % n_groups] = 0.6
+                q3_map[i, 1 % n_groups] = 0.4
+            else:
+                # (+++) Qian = чистый ABSTRACT
+                q3_map[i, 0 % n_groups] = 1.0
         # Нормализуем строки
         row_sum = q3_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
         return q3_map / row_sum
