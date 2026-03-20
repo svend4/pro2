@@ -1,0 +1,122 @@
+[
+  {
+    "cycle": 1,
+    "n_a": 1,
+    "n_b": 3,
+    "temperature": 1.4,
+    "lci_a_emb": 5.9019,
+    "lci_b_emb": 4.1669,
+    "lci_a_r": 2.8937,
+    "lci_b_r": 2.7834,
+    "avg_lci_emb": 5.0344,
+    "avg_lci_r": 2.8386,
+    "resonance": false,
+    "gw_at_start": {
+      "ABSTRACT": 0.1996,
+      "DYNAMIC": 0.2719,
+      "CONCRETE": 0.5285
+    },
+    "gw_after_a": {
+      "ABSTRACT": 0.3884,
+      "DYNAMIC": 0.3021,
+      "CONCRETE": 0.3095
+    },
+    "gw_after_b": {
+      "ABSTRACT": 0.3004,
+      "DYNAMIC": 0.2851,
+      "CONCRETE": 0.4144
+    },
+    "texts_a": 50,
+    "texts_b": 150
+  },
+  {
+    "cycle": 2,
+    "n_a": 3,
+    "n_b": 5,
+    "temperature": 1.6,
+    "lci_a_emb": 2.2155,
+    "lci_b_emb": 0.9174,
+    "lci_a_r": 2.8002,
+    "lci_b_r": 3.0269,
+    "avg_lci_emb": 1.5664,
+    "avg_lci_r": 2.9135,
+    "resonance": false,
+    "gw_at_start": {
+      "ABSTRACT": 0.3245,
+      "DYNAMIC": 0.302,
+      "CONCRETE": 0.3735
+    },
+    "gw_after_a": {
+      "ABSTRACT": 0.2925,
+      "DYNAMIC": 0.3062,
+      "CONCRETE": 0.4012
+    },
+    "gw_after_b": {
+      "ABSTRACT": 0.3317,
+      "DYNAMIC": 0.3002,
+      "CONCRETE": 0.3682
+    },
+    "texts_a": 150,
+    "texts_b": 250
+  },
+  {
+    "cycle": 3,
+    "n_a": 5,
+    "n_b": 7,
+    "temperature": 1.8,
+    "lci_a_emb": 0.729,
+    "lci_b_emb": 0.5196,
+    "lci_a_r": 3.0223,
+    "lci_b_r": 3.0985,
+    "avg_lci_emb": 0.6243,
+    "avg_lci_r": 3.0604,
+    "resonance": false,
+    "gw_at_start": {
+      "ABSTRACT": 0.3294,
+      "DYNAMIC": 0.2925,
+      "CONCRETE": 0.3781
+    },
+    "gw_after_a": {
+      "ABSTRACT": 0.3345,
+      "DYNAMIC": 0.369,
+      "CONCRETE": 0.2965
+    },
+    "gw_after_b": {
+      "ABSTRACT": 0.3284,
+      "DYNAMIC": 0.357,
+      "CONCRETE": 0.3147
+    },
+    "texts_a": 250,
+    "texts_b": 350
+  },
+  {
+    "cycle": 4,
+    "n_a": 7,
+    "n_b": 1,
+    "temperature": 2.0,
+    "lci_a_emb": 0.4426,
+    "lci_b_emb": 0.7316,
+    "lci_a_r": 2.9069,
+    "lci_b_r": 2.9403,
+    "avg_lci_emb": 0.5871,
+    "avg_lci_r": 2.9236,
+    "resonance": false,
+    "gw_at_start": {
+      "ABSTRACT": 0.3265,
+      "DYNAMIC": 0.3559,
+      "CONCRETE": 0.3176
+    },
+    "gw_after_a": {
+      "ABSTRACT": 0.3687,
+      "DYNAMIC": 0.3374,
+      "CONCRETE": 0.2939
+    },
+    "gw_after_b": {
+      "ABSTRACT": 0.3574,
+      "DYNAMIC": 0.3492,
+      "CONCRETE": 0.2934
+    },
+    "texts_a": 350,
+    "texts_b": 50
+  }
+]
