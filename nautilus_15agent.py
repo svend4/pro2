@@ -41,7 +41,7 @@ from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
 from self_train_hmoe import (
     lci_from_routing, lci_from_embeddings, micro_train, quality_filter,
     RagBuffer, _generate, _ids_to_text, _encode, _hex_prompt,
-    _get_emb, _get_moes, MODEL_CFG, _LCI_EPSILON,
+    _get_emb, _get_q6_vertex, _get_moes, MODEL_CFG, _LCI_EPSILON,
 )
 
 try:
@@ -113,7 +113,8 @@ def _agent_step(
         gen_text = _ids_to_text(gen_ids)
         if do_train and quality_filter(gen_text):
             micro_train(model, gen_ids, lr=lr, n_steps=1)
-            rag.add(gen_text, _get_emb(model, gen_ids))
+            rag.add(gen_text, _get_emb(model, gen_ids),
+                    q6_vert=_get_q6_vertex(model, gen_ids))
             n_gen += 1
         ids = gen_ids
 
@@ -141,7 +142,8 @@ def _meta_coordination_15(
     for ids in agent_ids:
         txt = _ids_to_text(ids)
         if quality_filter(txt):
-            rag_shared.add(txt, _get_emb(model, ids))
+            rag_shared.add(txt, _get_emb(model, ids),
+                           q6_vert=_get_q6_vertex(model, ids))
 
     if not agent_lcis:
         return _PI, 1.0
@@ -161,7 +163,10 @@ def _meta_coordination_15(
             # Берём совет у ближайшего из топ-3 (по Hamming к центру Q4-i)
             best_i = min(top3, key=lambda j: abs(agent_lcis[j] - _PI))
             if len(agent_rags[best_i]) > 0:
-                near = agent_rags[best_i].retrieve(_get_emb(model, agent_ids[i]), top_k=1)
+                near = agent_rags[best_i].retrieve(
+                    _get_emb(model, agent_ids[i]), top_k=1,
+                    query_q6=_get_q6_vertex(model, agent_ids[i]),
+                )
                 if near:
                     agent_ids[i] = _encode(near[0], block_size)
 
@@ -206,7 +211,7 @@ def nautilus_15agent(
     for text in seed_texts[:60]:
         ids = _encode(text, block_size)
         emb = _get_emb(model, ids)
-        rag_shared.add(text, emb)
+        rag_shared.add(text, emb, q6_vert=_get_q6_vertex(model, ids))
 
     # Инициализируем каждый агент со случайной вершиной его Q4-тессеракта
     agent_ids: List[torch.Tensor] = []
@@ -234,7 +239,10 @@ def nautilus_15agent(
         for i, ag in enumerate(agents):
             # Обогатить из shared RAG
             if len(rag_shared) > 3:
-                near = rag_shared.retrieve(_get_emb(model, agent_ids[i]), top_k=1)
+                near = rag_shared.retrieve(
+                    _get_emb(model, agent_ids[i]), top_k=1,
+                    query_q6=_get_q6_vertex(model, agent_ids[i]),
+                )
                 if near:
                     agent_ids[i] = _encode(near[0], block_size)
 

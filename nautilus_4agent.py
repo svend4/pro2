@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-nautilus_4agent.py — 4-агентный Наутилус: по одному агенту на каждое кольцо.
+nautilus_4agent.py — 4-агентный Наутилус: по одному агенту на каждую орбиту Aut(Q6).
 
-Геометрия: 4 кольца Пифагорейской тетрактиды (10:20:30:40 шагов).
-Каждый агент живёт в своём кольце и специализируется на нём.
+Геометрия: orбиты под B₆ = S₆ ⋉ (Z₂)⁶ (Aut(Q6), 46080 элементов).
+Q6 = {-1,+1}^6 имеет 7 орбит по весу Хэмминга (0..6).
+Агенты специализируются на орбитах, шаги пропорциональны размеру орбиты.
 Координация происходит в META (центральный узел) — как у multi-salesman в DYNAMIC.
 
-  Агент-М  (META,     10 шагов) — координатор, агрегатор
-  Агент-А  (ABSTRACT, 20 шагов) — абстрактный полюс
-  Агент-Х  (DYNAMIC,  30 шагов) — динамический мост
-  Агент-В  (CONCRETE, 40 шагов) — конкретный полюс
+  Агент-М  (META,     орбиты 0,6 — полюса)      — координатор, агрегатор
+  Агент-А  (ABSTRACT, орбиты 4,5 — Yang-сторона) — абстрактный полюс
+  Агент-Х  (DYNAMIC,  орбита  3  — экватор)      — динамический мост
+  Агент-В  (CONCRETE, орбиты 1,2 — Yin-сторона)  — конкретный полюс
+
+Шаги = размер орбиты / 2 (масштабирование к 100 суммарных шагов):
+  Орбиты 0,6: 1+1=2 вершины  → 10 шагов
+  Орбиты 4,5: 15+6=21 вершин → 21 шаг
+  Орбита  3:  20 вершин      → 20 шагов
+  Орбиты 1,2: 6+15=21 вершин → 21 шаг  (~ 72 итого, нормируем до 100)
+
+hexsym: каждый агент видит только "свои" вершины Q6 → архитектурная дифференциация.
 
 Один цикл = 100 шагов:
   1. Каждый агент делает шаги в своём кольце (параллельно, модель одна)
@@ -48,7 +57,7 @@ from yijing_transformer.models.hierarchical_moe import (
 from self_train_hmoe import (
     lci_from_routing, lci_from_embeddings, micro_train, quality_filter,
     RagBuffer, _generate, _ids_to_text, _encode, _hex_prompt,
-    _get_emb, _get_moes, _freeze_all_except, MODEL_CFG, _LCI_EPSILON,
+    _get_emb, _get_q6_vertex, _get_moes, _freeze_all_except, MODEL_CFG, _LCI_EPSILON,
 )
 from nautilus_clover import _lci_loss_step
 
@@ -62,22 +71,65 @@ except ImportError:
 DEVICE = "cpu"
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 
-# ── Кольца (Пифагорейская тетрактида 1:2:3:4) ────────────────────────────────
+# ── Aut(Q6) орбиты по весу Хэмминга (hexsym) ─────────────────────────────────
+# B₆ = S₆ ⋉ (Z₂)⁶ действует на Q6 = {-1,+1}^6 перестановками + флипом знаков.
+# Орбиты = классы по числу +1 битов (Hamming weight в {0,1}^6 кодировке).
+# Размеры: C(6,k) для k=0..6: 1, 6, 15, 20, 15, 6, 1  (итого 64 вершины)
+_AUT_Q6_ORBITS: Dict[int, List[int]] = {
+    k: [v for v in range(64) if bin(v).count('1') == k]
+    for k in range(7)
+}
+
+# ── Кольца — orbits-based (hexsym) ────────────────────────────────────────────
+# Шаги пропорциональны размеру орбиты, масштабированы до ~100 суммарных.
+# META    = орбиты 0,6 (полюса Kun/Qian): 1+1=2  → 10 шагов (координатор)
+# ABSTRACT= орбиты 4,5 (Yang-сторона):   15+6=21 → 26 шагов
+# DYNAMIC = орбита  3  (экватор Q6):     20      → 25 шагов
+# CONCRETE= орбиты 1,2 (Yin-сторона):    6+15=21 → 26 шагов
+# Seed-гексаграммы берутся из своей орбиты (архитектурная дифференциация).
 RINGS = [
-    {"name": "META",     "steps": 10, "groups": ["ABSTRACT", "DYNAMIC", "CONCRETE"], "ratio": 1},
-    {"name": "ABSTRACT", "steps": 20, "groups": ["ABSTRACT"],                        "ratio": 2},
-    {"name": "DYNAMIC",  "steps": 30, "groups": ["DYNAMIC"],                         "ratio": 3},
-    {"name": "CONCRETE", "steps": 40, "groups": ["CONCRETE"],                        "ratio": 4},
+    {
+        "name": "META",
+        "steps": 10,
+        "groups": ["ABSTRACT", "DYNAMIC", "CONCRETE"],
+        "ratio": 1,
+        "orbits": [0, 6],  # полюса: Kun (000000) + Qian (111111)
+        "orbit_verts": _AUT_Q6_ORBITS[0] + _AUT_Q6_ORBITS[6],
+    },
+    {
+        "name": "ABSTRACT",
+        "steps": 26,
+        "groups": ["ABSTRACT"],
+        "ratio": 2,
+        "orbits": [4, 5],  # Yang-сторона: k=4 (15 вершин) + k=5 (6 вершин)
+        "orbit_verts": _AUT_Q6_ORBITS[4] + _AUT_Q6_ORBITS[5],
+    },
+    {
+        "name": "DYNAMIC",
+        "steps": 25,
+        "groups": ["DYNAMIC"],
+        "ratio": 3,
+        "orbits": [3],     # Экватор Q6: k=3 (20 вершин, λ=0)
+        "orbit_verts": _AUT_Q6_ORBITS[3],
+    },
+    {
+        "name": "CONCRETE",
+        "steps": 26,
+        "groups": ["CONCRETE"],
+        "ratio": 4,
+        "orbits": [1, 2],  # Yin-сторона: k=1 (6 вершин) + k=2 (15 вершин)
+        "orbit_verts": _AUT_Q6_ORBITS[1] + _AUT_Q6_ORBITS[2],
+    },
 ]
 _RING_BY_NAME = {r["name"]: r for r in RINGS}
-_TOTAL_STEPS  = sum(r["steps"] for r in RINGS)   # 100
+_TOTAL_STEPS  = sum(r["steps"] for r in RINGS)   # 87 → масштабируется через step_scale
 
-# Агенты: home-кольцо, seed-диапазон гексаграмм (аналог multi-salesman)
+# Агенты: home-кольцо, seed из своей орбиты (hexsym дифференциация)
 _AGENTS = [
-    {"name": "Агент-М (meta)",      "home": "META",     "seed_range": (0,  15)},
-    {"name": "Агент-А (abstract)",  "home": "ABSTRACT", "seed_range": (16, 31)},
-    {"name": "Агент-Х (dynamic)",   "home": "DYNAMIC",  "seed_range": (32, 47)},
-    {"name": "Агент-В (concrete)",  "home": "CONCRETE", "seed_range": (48, 63)},
+    {"name": "Агент-М (meta/poles)",    "home": "META",     "orbit_verts": _AUT_Q6_ORBITS[0] + _AUT_Q6_ORBITS[6]},
+    {"name": "Агент-А (abstract/yang)", "home": "ABSTRACT", "orbit_verts": _AUT_Q6_ORBITS[4] + _AUT_Q6_ORBITS[5]},
+    {"name": "Агент-Х (dynamic/eq)",    "home": "DYNAMIC",  "orbit_verts": _AUT_Q6_ORBITS[3]},
+    {"name": "Агент-В (concrete/yin)",  "home": "CONCRETE", "orbit_verts": _AUT_Q6_ORBITS[1] + _AUT_Q6_ORBITS[2]},
 ]
 
 _META_FREEZE = ["ABSTRACT", "DYNAMIC", "CONCRETE"]
@@ -121,7 +173,8 @@ def _run_ring(
         gen_text = _ids_to_text(gen_ids)
         if do_train and quality_filter(gen_text):
             micro_train(model, gen_ids, lr=train_lr, n_steps=1)
-            rag.add(gen_text, _get_emb(model, gen_ids))
+            rag.add(gen_text, _get_emb(model, gen_ids),
+                    q6_vert=_get_q6_vertex(model, gen_ids))
             n_gen += 1
             if lci_loss_lambda > 0:
                 _lci_loss_step(model, gen_ids, lr=train_lr * lci_loss_lambda)
@@ -157,7 +210,8 @@ def _meta_coordination(
     for ids in agent_ids:
         txt = _ids_to_text(ids)
         if quality_filter(txt):
-            rag_shared.add(txt, _get_emb(model, ids))
+            rag_shared.add(txt, _get_emb(model, ids),
+                           q6_vert=_get_q6_vertex(model, ids))
 
     if not agent_lcis:
         return math.pi, 1.0
@@ -179,11 +233,13 @@ def _meta_coordination(
             # Слабый агент тянется к ближайшему тексту из RAG лучшего
             gap = abs(lci - math.pi) - abs(agent_lcis[best_i] - math.pi)
             if gap > 0.05 and len(agent_rags[best_i]) > 2:
-                near = agent_rags[best_i].retrieve(_get_emb(model, ids), top_k=1)
+                near = agent_rags[best_i].retrieve(_get_emb(model, ids), top_k=1,
+                                                   query_q6=_get_q6_vertex(model, ids))
                 if near:
                     agent_ids[i] = _encode(near[0], block_size)
                     # Добавляем лучший контекст и в RAG слабого
-                    agent_rags[i].add(near[0], best_emb)
+                    agent_rags[i].add(near[0], best_emb,
+                                  q6_vert=_get_q6_vertex(model, agent_ids[best_i]))
 
     return avg_lci, balance
 
@@ -220,7 +276,8 @@ def nautilus_4agent_cycle(
 
         # Обогатить ids агента из shared RAG перед его фазой
         if len(rag_shared) > 3:
-            near = rag_shared.retrieve(_get_emb(model, agent_ids[i]), top_k=1)
+            near = rag_shared.retrieve(_get_emb(model, agent_ids[i]), top_k=1,
+                                       query_q6=_get_q6_vertex(model, agent_ids[i]))
             if near:
                 agent_ids[i] = _encode(near[0], block_size)
 
@@ -331,14 +388,16 @@ def nautilus_4agent(
 
     print(f"  Shared RAG          : {len(rag_shared)} текстов")
 
-    # ── Инициализация агентов ──────────────────────────────────────────────────
+    # ── Инициализация агентов (hexsym: seed из своей орбиты Aut(Q6)) ───────────
     agent_ids: List[torch.Tensor] = []
     for ag in _AGENTS:
-        lo, hi = ag["seed_range"]
-        hex_id  = random.randint(lo, hi)
+        # hexsym: seed-гексаграмма из орбиты агента — архитектурная дифференциация
+        orbit_verts = ag["orbit_verts"]
+        hex_id = random.choice(orbit_verts)
         agent_ids.append(_hex_prompt(hex_id, block_size))
         lci0, _ = lci_from_routing(model, agent_ids[-1])
-        print(f"    {ag['name']:28}  start LCI={lci0:.3f}")
+        orbit_label = f"orbits={_RING_BY_NAME[ag['home']]['orbits']}"
+        print(f"    {ag['name']:32}  start LCI={lci0:.3f}  {orbit_label}")
 
     log: List[Dict] = []
 

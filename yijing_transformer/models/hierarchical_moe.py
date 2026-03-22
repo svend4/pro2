@@ -364,7 +364,9 @@ class GlobalRouter(nn.Module):
                 hprior[_h, _g_idx] = math.exp(-_min_d / _sigma_h)
         hprior = hprior / hprior.sum(dim=1, keepdim=True).clamp(min=1e-8)
         self.register_buffer('hamming_prior_matrix', hprior)
-        self.log_hamming_mix = nn.Parameter(torch.tensor(-1.0))
+        # hexnet hard prior: init=2.0 → sigmoid(2)≈0.88 (88% Hamming).
+        # clamp(min=0.0) в forward → Hamming всегда ≥ 50%, не коллапсирует к gate≈0.5.
+        self.log_hamming_mix = nn.Parameter(torch.tensor(2.0))
 
     @property
     def temperature(self) -> torch.Tensor:
@@ -380,9 +382,9 @@ class GlobalRouter(nn.Module):
         anchors_norm  = F.normalize(self.group_anchors, dim=-1)
         group_scores  = soft_hex @ anchors_norm.T
         group_weights_learned = F.softmax(group_scores, dim=-1)
-        # Hamming prior blend (hexnet)
+        # hexnet hard prior: Hamming основа (≥50%), learned — fine-tune коррекция.
         hamming_prior = hex_w.detach() @ self.hamming_prior_matrix
-        hamming_alpha = torch.sigmoid(self.log_hamming_mix)
+        hamming_alpha = torch.sigmoid(self.log_hamming_mix.clamp(min=0.0))
         group_weights = (1.0 - hamming_alpha) * group_weights_learned + hamming_alpha * hamming_prior
         mean_w  = group_weights.mean(dim=(0, 1))
         lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()
@@ -536,10 +538,10 @@ class MultiScaleGlobalRouter(nn.Module):
                 hprior[_h, _g_idx] = math.exp(-_min_d / _sigma_h)
         hprior = hprior / hprior.sum(dim=1, keepdim=True).clamp(min=1e-8)
         self.register_buffer('hamming_prior_matrix', hprior)  # (64, n_groups)
-        # Обучаемый blend: hamming_alpha = sigmoid(log_hamming_mix)
-        # init=-1.0 → alpha≈0.27: лёгкое геометрическое смещение.
+        # hexnet hard prior: init=2.0 → sigmoid(2)≈0.88 (88% Hamming как основа).
+        # clamp(min=0.0) в forward → alpha ∈ [0.5, 1.0], Hamming всегда доминирует.
         # Не ломает существующие чекпоинты (strict=False загрузка).
-        self.log_hamming_mix = nn.Parameter(torch.tensor(-1.0))
+        self.log_hamming_mix = nn.Parameter(torch.tensor(2.0))
 
     @staticmethod
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
@@ -768,7 +770,8 @@ class MultiScaleGlobalRouter(nn.Module):
         # hex_weights → (B, T, 64) @ (64, n_groups) = (B, T, n_groups)
         # detach(): prior не backprop через hex_weights повторно
         hamming_prior = hex_weights.detach() @ self.hamming_prior_matrix
-        hamming_alpha = torch.sigmoid(self.log_hamming_mix)            # ∈ (0, 1)
+        # hexnet hard prior: clamp(min=0.0) → alpha ∈ [0.5, 1.0], Hamming всегда ≥ 50%.
+        hamming_alpha = torch.sigmoid(self.log_hamming_mix.clamp(min=0.0))  # ∈ [0.5, 1.0)
         group_weights = ((1.0 - hamming_alpha) * group_weights_learned
                          + hamming_alpha * hamming_prior)              # (B, T, n_groups)
 

@@ -202,27 +202,47 @@ def _ids_to_text(ids: torch.Tensor) -> str:
 # ── RAG-буфер ────────────────────────────────────────────────────────────────
 
 class RagBuffer:
-    """Простой буфер текстов с поиском по эмбеддингам."""
+    """Буфер текстов с поиском по Q6-геометрии (Hamming distance).
+
+    hexlearn: вместо косинусного сходства в евклидовом пространстве
+    проецируем эмбеддинг на ближайшую вершину Q6 {-1,+1}^6 и ищем
+    по расстоянию Хэмминга. Различает все 64 архетипа гиперкуба.
+    Предотвращает вырождение RAG в кластер одинаковых текстов.
+    """
 
     def __init__(self, max_size: int = 200):
         self.max_size = max_size
-        self.texts: List[str] = []
-        self.embs:  List[torch.Tensor] = []
+        self.texts:     List[str] = []
+        self.embs:      List[torch.Tensor] = []
+        self.q6_verts:  List[int] = []          # Q6 вершина как int 0..63
 
-    def add(self, text: str, emb: torch.Tensor) -> None:
+    def add(self, text: str, emb: torch.Tensor, q6_vert: int = -1) -> None:
         self.texts.append(text)
         self.embs.append(emb.detach().cpu())
+        self.q6_verts.append(q6_vert)
         if len(self.texts) > self.max_size:
             self.texts.pop(0)
             self.embs.pop(0)
+            self.q6_verts.pop(0)
 
-    def retrieve(self, query_emb: torch.Tensor, top_k: int = 3) -> List[str]:
+    def retrieve(self, query_emb: torch.Tensor, top_k: int = 3,
+                 query_q6: int = -1) -> List[str]:
         if not self.embs:
             return []
-        q = F.normalize(query_emb.float().cpu().unsqueeze(0), dim=-1)
-        sims = [F.cosine_similarity(q, F.normalize(e.unsqueeze(0), dim=-1)).item()
-                for e in self.embs]
-        top_idx = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:top_k]
+        # hexlearn: если оба имеют Q6 вершину — используем Hamming distance
+        if query_q6 >= 0 and any(v >= 0 for v in self.q6_verts):
+            dists = [
+                bin(query_q6 ^ v).count('1') if v >= 0
+                else 6  # максимальный штраф для неизвестных вершин
+                for v in self.q6_verts
+            ]
+            top_idx = sorted(range(len(dists)), key=lambda i: dists[i])[:top_k]
+        else:
+            # Fallback: косинусное сходство (обратная совместимость)
+            q = F.normalize(query_emb.float().cpu().unsqueeze(0), dim=-1)
+            sims = [F.cosine_similarity(q, F.normalize(e.unsqueeze(0), dim=-1)).item()
+                    for e in self.embs]
+            top_idx = sorted(range(len(sims)), key=lambda i: sims[i], reverse=True)[:top_k]
         return [self.texts[i] for i in top_idx]
 
     def __len__(self):
@@ -316,7 +336,9 @@ def figure8_hmoe(
             for block in model.blocks:
                 h = block(h)
         emb = h.mean(dim=1).squeeze(0).detach()
-        rag.add(text, emb)
+        # hexlearn: добавляем Q6-вершину для Hamming-поиска
+        q6v = _get_q6_vertex(model, ids)
+        rag.add(text, emb, q6_vert=q6v)
 
     print(f"  RAG-буфер      : {len(rag)} текстов")
 
@@ -362,7 +384,8 @@ def figure8_hmoe(
             # Micro-train если качественный
             if do_train and quality_filter(gen_text):
                 micro_train(model, gen_ids, lr=train_lr, n_steps=2)
-                rag.add(gen_text, _get_emb(model, gen_ids))
+                gen_emb = _get_emb(model, gen_ids)
+                rag.add(gen_text, gen_emb, q6_vert=_get_q6_vertex(model, gen_ids))
                 a_texts_generated.append(gen_text)
 
             # Обновляем x_ids — движение по петле
@@ -381,7 +404,8 @@ def figure8_hmoe(
 
         # Получить новый промпт из RAG (обогатить контекст)
         if len(rag) > 5:
-            retrieved = rag.retrieve(a_end_emb, top_k=2)
+            retrieved = rag.retrieve(a_end_emb, top_k=2,
+                                     query_q6=_get_q6_vertex(model, x_ids))
             # Объединить: конец петли A + RAG → промпт для петли B
             combined_text = " ".join(retrieved[:1])
             x_ids = _encode(combined_text, block_size)
@@ -402,7 +426,8 @@ def figure8_hmoe(
 
             if do_train and quality_filter(gen_text):
                 micro_train(model, gen_ids, lr=train_lr * 0.5, n_steps=2)
-                rag.add(gen_text, _get_emb(model, gen_ids))
+                gen_emb = _get_emb(model, gen_ids)
+                rag.add(gen_text, gen_emb, q6_vert=_get_q6_vertex(model, gen_ids))
                 b_texts_generated.append(gen_text)
 
             x_ids = gen_ids
@@ -489,6 +514,35 @@ def _get_emb(model: Variant3GPT, ids: torch.Tensor) -> torch.Tensor:
         for block in model.blocks:
             h = block(h)
     return h.mean(dim=1).squeeze(0)
+
+
+def _get_q6_vertex(model: Variant3GPT, ids: torch.Tensor) -> int:
+    """hexlearn: проецирует эмбеддинг на ближайшую вершину Q6 {-1,+1}^6.
+
+    Использует proj_q6 (или q6_proj) из GlobalRouter первого HMoE-блока.
+    Возвращает индекс вершины 0..63 (бинарное кодирование знаков).
+    """
+    model.eval()
+    with torch.no_grad():
+        emb = _get_emb(model, ids)                         # (d_model,)
+        # Берём Q6-проекцию из первого HMoE-блока
+        proj = None
+        for block in model.blocks:
+            if hasattr(block, 'hmoe'):
+                router = block.hmoe.global_router
+                # MultiScaleGlobalRouter: proj_q6; GlobalRouter: q6_proj
+                if hasattr(router, 'proj_q6'):
+                    proj = router.proj_q6
+                elif hasattr(router, 'q6_proj'):
+                    proj = router.q6_proj
+                break
+        if proj is None:
+            return -1  # fallback: нет Q6-проекции
+        soft_bits = torch.tanh(proj(emb.unsqueeze(0)))    # (1, 6)
+        hard_bits = (soft_bits > 0).squeeze(0).int()      # {0, 1}^6
+        # Кодируем биты как int: bit0 = LSB
+        vertex = sum(int(hard_bits[i].item()) << i for i in range(6))
+    return int(vertex)
 
 
 def _get_moes(model: Variant3GPT) -> List[HierarchicalMoEFFN]:
