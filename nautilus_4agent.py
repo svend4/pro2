@@ -131,31 +131,53 @@ def _meta_coordination(
     model: Variant3GPT,
     agent_ids: List[torch.Tensor],
     agent_lcis: List[float],
+    agent_rags: List[RagBuffer],
     rag_shared: RagBuffer,
     block_size: int,
+    cross_pollinate: bool = False,
 ) -> Tuple[float, float]:
     """
-    Koordinacja: все 4 агента встречаются в META.
-    - Каждый добавляет свой лучший контекст в shared RAG
-    - Считаем load_balance (аналог multi-salesman)
-    - Возвращаем avg_lci и balance
+    Координация в META: все 4 агента встречаются.
+
+    Если cross_pollinate=True:
+      - Ранжируем агентов по |LCI - π| (лучший = ближайший к π)
+      - Лучший агент делится контекстом (ids + RAG) со слабыми
+      - Слабые агенты дополнительно обогащаются из RAG лучшего
 
     Returns: (avg_lci, load_balance)
     """
-    # Каждый агент вносит свой текст в shared RAG
+    # Все агенты вносят контекст в shared RAG
     for ids in agent_ids:
         txt = _ids_to_text(ids)
         if quality_filter(txt):
             rag_shared.add(txt, _get_emb(model, ids))
 
-    # Load balance: насколько равномерно распределены LCI агентов
     if not agent_lcis:
         return math.pi, 1.0
-    avg_lci  = sum(agent_lcis) / len(agent_lcis)
-    max_lci  = max(agent_lcis)
-    min_lci  = min(agent_lcis)
-    balance  = 1.0 - (max_lci - min_lci) / (math.pi + 1e-8)
-    balance  = max(0.0, min(1.0, balance))
+
+    avg_lci = sum(agent_lcis) / len(agent_lcis)
+    max_lci = max(agent_lcis)
+    min_lci = min(agent_lcis)
+    balance = 1.0 - (max_lci - min_lci) / (math.pi + 1e-8)
+    balance = max(0.0, min(1.0, balance))
+
+    if cross_pollinate and len(agent_lcis) > 1:
+        # Лучший агент = ближайший LCI к π
+        best_i = min(range(len(agent_lcis)), key=lambda i: abs(agent_lcis[i] - math.pi))
+        best_emb = _get_emb(model, agent_ids[best_i])
+
+        for i, (ids, lci) in enumerate(zip(agent_ids, agent_lcis)):
+            if i == best_i:
+                continue
+            # Слабый агент тянется к ближайшему тексту из RAG лучшего
+            gap = abs(lci - math.pi) - abs(agent_lcis[best_i] - math.pi)
+            if gap > 0.05 and len(agent_rags[best_i]) > 2:
+                near = agent_rags[best_i].retrieve(_get_emb(model, ids), top_k=1)
+                if near:
+                    agent_ids[i] = _encode(near[0], block_size)
+                    # Добавляем лучший контекст и в RAG слабого
+                    agent_rags[i].add(near[0], best_emb)
+
     return avg_lci, balance
 
 
@@ -172,6 +194,7 @@ def nautilus_4agent_cycle(
     step_scale: float,
     block_size: int,
     lci_loss_lambda: float = 0.0,
+    cross_pollinate: bool = False,
 ) -> Tuple[List[torch.Tensor], Dict]:
     """
     Один цикл 4-агентного Наутилуса (100 × step_scale шагов).
@@ -212,13 +235,15 @@ def nautilus_4agent_cycle(
     # ── Координация в META ────────────────────────────────────────────────────
     agent_lcis = [lci_log[r["name"]]["lci_r"] for r in RINGS]
     avg_lci, balance = _meta_coordination(
-        model, agent_ids, agent_lcis, rag_shared, block_size
+        model, agent_ids, agent_lcis, agent_rags, rag_shared,
+        block_size, cross_pollinate=cross_pollinate,
     )
     kirchhoff_val = avg_lci
     kirchhoff_ok  = abs(kirchhoff_val - math.pi) < _LCI_EPSILON
+    cp_s = " [cross✓]" if cross_pollinate else ""
 
     print(f"    Координация META: avg_LCI={avg_lci:.3f}  balance={balance:.3f}"
-          f"  {'✓ KIRCHHOFF' if kirchhoff_ok else '✗'}")
+          f"  {'✓ KIRCHHOFF' if kirchhoff_ok else '✗'}{cp_s}")
 
     # ── Итоговый LCI (Forward = META агент) ──────────────────────────────────
     lci_r_final, _ = lci_from_routing(model, agent_ids[0])
@@ -258,6 +283,7 @@ def nautilus_4agent(
     train_lr: float = 1e-5,
     do_train: bool = True,
     lci_loss_lambda: float = 0.0,
+    cross_pollinate: bool = False,
     block_size: int = MODEL_CFG["block_size"] - 1,
 ) -> List[Dict]:
 
@@ -312,6 +338,7 @@ def nautilus_4agent(
             train_lr=train_lr, temperature=temperature,
             do_train=do_train, step_scale=cur_scale, block_size=block_size,
             lci_loss_lambda=lci_loss_lambda,
+            cross_pollinate=cross_pollinate,
         )
         result["step_scale"] = round(cur_scale, 3)
 
@@ -391,6 +418,9 @@ def main():
     parser.add_argument("--lci-loss",    type=float, default=0.0,
                         dest="lci_loss", metavar="λ",
                         help="Kirchhoff-штраф λ (0=выкл, рекомендуется 0.05)")
+    parser.add_argument("--cross-pollinate", action="store_true",
+                        dest="cross_pollinate",
+                        help="META: лучший агент обучает слабых")
     parser.add_argument("--no-train",    action="store_true")
     parser.add_argument("--save",        type=str,   default="hmoe_nautilus_4agent_v1.pt")
     args = parser.parse_args()
@@ -418,6 +448,7 @@ def main():
         train_lr=args.lr,
         do_train=not args.no_train,
         lci_loss_lambda=args.lci_loss,
+        cross_pollinate=args.cross_pollinate,
         block_size=block_size,
     )
 

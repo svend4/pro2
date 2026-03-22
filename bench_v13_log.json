@@ -1,81 +1,81 @@
 [
   {
     "cycle": 1,
-    "lci_r0": 2.9784,
+    "lci_r0": 3.0365,
     "rings": {
       "META": {
-        "lci_r": 3.0781,
-        "lci_emb": 0.9725,
+        "lci_r": 2.9005,
+        "lci_emb": 0.8384,
         "steps": 3,
         "gen": 3
       },
       "ABSTRACT": {
-        "lci_r": 3.1409,
-        "lci_emb": 2.3967,
+        "lci_r": 2.8038,
+        "lci_emb": 3.1622,
         "steps": 6,
         "gen": 6
       },
       "DYNAMIC": {
-        "lci_r": 3.13,
-        "lci_emb": 2.0386,
+        "lci_r": 3.0847,
+        "lci_emb": 2.9965,
         "steps": 9,
         "gen": 9
       },
       "CONCRETE": {
-        "lci_r": 2.8611,
-        "lci_emb": 2.3663,
+        "lci_r": 2.9511,
+        "lci_emb": 3.3436,
         "steps": 12,
         "gen": 12
       }
     },
-    "avg_lci_all": 3.0525,
-    "lci_r_final": 3.117,
+    "avg_lci_all": 2.935,
+    "lci_r_final": 2.8756,
     "kirchhoff": true,
-    "kirchhoff_val": 3.0525,
-    "load_balance": 0.9109,
+    "kirchhoff_val": 2.935,
+    "load_balance": 0.9106,
     "n_resonant": 4,
     "n_generated": 30,
-    "elapsed_s": 11.94,
+    "elapsed_s": 12.29,
     "resonant": true,
     "step_scale": 0.3
   },
   {
     "cycle": 2,
-    "lci_r0": 3.117,
+    "lci_r0": 2.8756,
     "rings": {
       "META": {
-        "lci_r": 3.1184,
-        "lci_emb": 2.0695,
+        "lci_r": 2.9019,
+        "lci_emb": 3.1621,
         "steps": 3,
         "gen": 3
       },
       "ABSTRACT": {
-        "lci_r": 3.0223,
-        "lci_emb": 1.5149,
+        "lci_r": 3.0784,
+        "lci_emb": 2.2989,
         "steps": 6,
         "gen": 6
       },
       "DYNAMIC": {
-        "lci_r": 2.9173,
-        "lci_emb": 0.6569,
+        "lci_r": 2.9759,
+        "lci_emb": 1.9629,
         "steps": 9,
         "gen": 9
       },
       "CONCRETE": {
-        "lci_r": 3.0645,
-        "lci_emb": 0.9178,
+        "lci_r": 2.9725,
+        "lci_emb": 1.2575,
         "steps": 12,
         "gen": 12
       }
     },
-    "avg_lci_all": 3.0306,
-    "lci_r_final": 3.0563,
+    "avg_lci_all": 2.9822,
+    "lci_r_final": 2.8941,
     "kirchhoff": true,
-    "kirchhoff_val": 3.0306,
-    "load_balance": 0.936,
+    "kirchhoff_val": 2.9822,
+    "load_balance": 0.9438,
     "n_resonant": 4,
     "n_generated": 30,
-    "elapsed_s": 11.29,
+    "elapsed_s": 11.93,
     "resonant": true,
     "step_scale": 0.3
   }
