@@ -214,6 +214,78 @@ def tsp_expert_order(
     return order
 
 
+# ── LCI-loss шаг (Kirchhoff как явный штраф) ─────────────────────────────────
+
+def _lci_loss_step(model: Variant3GPT, ids: torch.Tensor, lr: float) -> float:
+    """
+    Один шаг градиентного спуска по Kirchhoff-отклонению:
+      loss = |routing_LCI - π|
+    Обучает gating-сеть напрямую двигать LCI к π.
+    """
+    model.train()
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    if not trainable:
+        return 0.0
+    opt = torch.optim.AdamW(trainable, lr=lr, weight_decay=0.0)
+
+    group_weights_list = []
+    inp = ids[:, :-1] if ids.shape[1] > 1 else ids
+    _ = model(inp)
+    for block in model.blocks:
+        info = getattr(block, '_last_moe_info', None)
+        if info and 'group_weights' in info:
+            gw = info['group_weights']
+            if not torch.isnan(gw).any():
+                if gw.dim() == 3:
+                    gw = gw.mean(dim=(0, 1))
+                elif gw.dim() == 2:
+                    gw = gw.mean(dim=0)
+                group_weights_list.append(gw)
+
+    if not group_weights_list:
+        return 0.0
+
+    avg_gw = torch.stack(group_weights_list).mean(0)
+    groups = list(DOMAIN_GROUPS.keys())
+    gw_dict = {g: avg_gw[i] for i, g in enumerate(groups)}
+
+    w_a = gw_dict.get("ABSTRACT", torch.tensor(0.33))
+    w_b = gw_dict.get("CONCRETE", torch.tensor(0.33))
+    w_d = gw_dict.get("DYNAMIC",  torch.tensor(0.33))
+    w_total = w_a + w_b + w_d + 1e-8
+    imbalance = torch.abs(w_a / w_total - w_b / w_total)
+    lci_tensor = (1.0 - imbalance) * math.pi
+    lci_loss = torch.abs(lci_tensor - math.pi)  # цель: LCI → π → loss → 0
+
+    opt.zero_grad()
+    lci_loss.backward()
+    torch.nn.utils.clip_grad_norm_(trainable, 0.5)
+    opt.step()
+    return lci_loss.item()
+
+
+def _tsp_2opt(order: List[str], cost_fn) -> List[str]:
+    """
+    2-opt улучшение TSP маршрута.
+    Переставляет пары рёбер пока есть улучшение.
+    cost_fn(expert) → float (меньше = лучше).
+    """
+    def route_cost(route):
+        return sum(cost_fn(e) for e in route)
+
+    best = list(order)
+    improved = True
+    while improved:
+        improved = False
+        for i in range(1, len(best) - 1):
+            for j in range(i + 1, len(best)):
+                new_route = best[:i] + best[i:j+1][::-1] + best[j+1:]
+                if route_cost(new_route) < route_cost(best) - 1e-6:
+                    best = new_route
+                    improved = True
+    return best
+
+
 # ── Одна фаза эксперта ────────────────────────────────────────────────────────
 
 def run_expert_phase(
@@ -227,6 +299,7 @@ def run_expert_phase(
     do_train: bool,
     rag: RagBuffer,
     do_recirculate: bool = True,
+    lci_loss_lambda: float = 0.0,
 ) -> Tuple[torch.Tensor, float, float, int]:
     """
     Выполнить одну фазу (станцию) турбины для данного эксперта.
@@ -275,6 +348,9 @@ def run_expert_phase(
         if do_train and quality_filter(gen_text):
             lr_scale = 0.5 if expert == "CONCRETE" else (0.3 if expert == "META" else 1.0)
             micro_train(model, gen_ids, lr=train_lr * lr_scale, n_steps=2)
+            # LCI-loss: явный штраф Kirchhoff после micro_train
+            if lci_loss_lambda > 0.0:
+                _lci_loss_step(model, gen_ids, train_lr * lr_scale * lci_loss_lambda)
             rag.add(gen_text, _get_emb(model, gen_ids))
             n_generated += 1
 
@@ -299,7 +375,9 @@ def turbine_figure8(
     train_lr: float = 1e-5,
     do_train: bool = True,
     use_tsp: bool = True,
+    use_tsp_2opt: bool = False,
     do_recirculate: bool = True,
+    lci_loss_lambda: float = 0.0,
 ) -> List[Dict]:
     """
     Турбинное само-обучение HMoE.
@@ -318,8 +396,10 @@ def turbine_figure8(
     print(f"  Циклов              : {n_cycles}")
     print(f"  Шагов/эксперт       : {steps_per_expert}")
     print(f"  Температура         : {temperature:.2f}  (фиксированная)")
-    print(f"  TSP-маршрутизация   : {'ДА (динамический порядок)' if use_tsp else 'НЕТ (A→X→B→META)'}")
+    tsp_mode = ("2-opt" if use_tsp_2opt else "greedy") if use_tsp else "НЕТ (A→X→B→META)"
+    print(f"  TSP-маршрутизация   : {tsp_mode}")
     print(f"  Рециркуляция        : {'ДА (внутренние мини-петли)' if do_recirculate else 'НЕТ'}")
+    print(f"  LCI-loss λ          : {lci_loss_lambda:.3f}  {'(активен)' if lci_loss_lambda > 0 else '(выкл)'}")
     print()
     print(f"  Станции турбины:")
     for e, role in _TURBINE_ROLES.items():
@@ -365,6 +445,10 @@ def turbine_figure8(
         # ── TSP-порядок экспертов ────────────────────────────────────────────
         if use_tsp:
             expert_order = tsp_expert_order(model, current_ids, expert_lci_history)
+            if use_tsp_2opt:
+                _, gw_tmp = lci_from_routing(model, current_ids)
+                cost_fn = lambda e: abs(expert_lci_history.get(e, math.pi) - math.pi)
+                expert_order = _tsp_2opt(expert_order, cost_fn)
         else:
             expert_order = ["ABSTRACT", "DYNAMIC", "CONCRETE", "META"]
 
@@ -394,7 +478,8 @@ def turbine_figure8(
                 train_lr     = train_lr,
                 do_train     = do_train,
                 rag          = rag,
-                do_recirculate = do_recirculate,
+                do_recirculate   = do_recirculate,
+                lci_loss_lambda  = lci_loss_lambda,
             )
 
             current_ids = new_ids
@@ -535,6 +620,10 @@ def main() -> None:
                         help="Фиксированный порядок A→X→B→META (без TSP)")
     parser.add_argument("--no-recirculate",  action="store_true",
                         help="Без внутренних семантических мини-петель")
+    parser.add_argument("--tsp-2opt",        action="store_true",
+                        help="2-opt улучшение TSP маршрута после greedy")
+    parser.add_argument("--lci-loss",        type=float, default=0.0,
+                        help="λ для LCI-loss (Kirchhoff штраф в micro_train, default 0=выкл)")
     parser.add_argument("--save",            type=str, default="hmoe_turbine.pt")
     args = parser.parse_args()
 
@@ -564,7 +653,9 @@ def main() -> None:
         train_lr         = args.lr,
         do_train         = not args.no_train,
         use_tsp          = not args.no_tsp,
+        use_tsp_2opt     = args.tsp_2opt,
         do_recirculate   = not args.no_recirculate,
+        lci_loss_lambda  = args.lci_loss,
     )
     elapsed = time.perf_counter() - t0
 
