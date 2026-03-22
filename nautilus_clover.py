@@ -218,7 +218,9 @@ def _bidir_crossing(
     model: Variant3GPT,
     ids_fwd: torch.Tensor,
     ids_rev: torch.Tensor,
-    rag: RagBuffer,
+    rag_fwd: RagBuffer,
+    rag_rev: RagBuffer,
+    rag_shared: RagBuffer,
     steps: int,
     train_lr: float,
     temperature: float,
@@ -226,44 +228,53 @@ def _bidir_crossing(
     block_size: int = MODEL_CFG["block_size"] - 1,
 ) -> Tuple[torch.Tensor, torch.Tensor, float, float]:
     """
-    Точка пересечения двух лепестков (восьмёрка через META).
-    Два агента (Forward / Reverse) встречаются, обмениваются контекстом через RAG,
-    и делают по steps//2 шагов в точке META (bidir-turbine стиль).
+    Точка пересечения (восьмёрка через META) с раздельными RAG-буферами.
+
+    Каждый агент хранит свой контекст (rag_fwd / rag_rev).
+    В точке crossing оба обмениваются 1 текстом через rag_shared —
+    не полным RAG, иначе они коллапсируют в одну точку.
 
     Returns: (ids_fwd, ids_rev, lci_fwd, lci_rev)
     """
     _freeze_for(model, "META")
     half = max(1, steps // 2)
 
-    # Оба агента добавляют свой контекст в общий RAG (обмен знаниями)
-    for text, ids_ag in [(_ids_to_text(ids_fwd), ids_fwd),
-                          (_ids_to_text(ids_rev), ids_rev)]:
-        if quality_filter(text):
-            rag.add(text, _get_emb(model, ids_ag))
+    # Обмен: каждый агент кладёт свой лучший текст в shared-RAG соперника
+    txt_f0 = _ids_to_text(ids_fwd)
+    txt_r0 = _ids_to_text(ids_rev)
+    if quality_filter(txt_f0):
+        rag_rev.add(txt_f0, _get_emb(model, ids_fwd))     # fwd → rev видит
+        rag_shared.add(txt_f0, _get_emb(model, ids_fwd))
+    if quality_filter(txt_r0):
+        rag_fwd.add(txt_r0, _get_emb(model, ids_rev))     # rev → fwd видит
+        rag_shared.add(txt_r0, _get_emb(model, ids_rev))
 
     for _ in range(half):
-        # Forward
+        # Forward: тренируется, тянется к своему RAG (не к RAG реверса)
         gen_f = _generate(model, ids_fwd, block_size, temperature, n_tokens=8)
         txt_f = _ids_to_text(gen_f)
         if do_train and quality_filter(txt_f):
             micro_train(model, gen_f, lr=train_lr, n_steps=1)
-            rag.add(txt_f, _get_emb(model, gen_f))
+            rag_fwd.add(txt_f, _get_emb(model, gen_f))
+            rag_shared.add(txt_f, _get_emb(model, gen_f))
         ids_fwd = gen_f
 
-        # Reverse
+        # Reverse: тренируется, тянется к своему RAG
         gen_r = _generate(model, ids_rev, block_size, temperature, n_tokens=8)
         txt_r = _ids_to_text(gen_r)
         if do_train and quality_filter(txt_r):
             micro_train(model, gen_r, lr=train_lr, n_steps=1)
-            rag.add(txt_r, _get_emb(model, gen_r))
+            rag_rev.add(txt_r, _get_emb(model, gen_r))
+            rag_shared.add(txt_r, _get_emb(model, gen_r))
         ids_rev = gen_r
 
-        # Обогащение из RAG (каждый агент тянется к ближайшему соседу)
-        if len(rag) > 3:
-            near_f = rag.retrieve(_get_emb(model, ids_fwd), top_k=1)
-            near_r = rag.retrieve(_get_emb(model, ids_rev), top_k=1)
+        # Каждый тянется к своему собственному RAG — дивергенция сохраняется
+        if len(rag_fwd) > 3:
+            near_f = rag_fwd.retrieve(_get_emb(model, ids_fwd), top_k=1)
             if near_f:
                 ids_fwd = _encode(near_f[0], block_size)
+        if len(rag_rev) > 3:
+            near_r = rag_rev.retrieve(_get_emb(model, ids_rev), top_k=1)
             if near_r:
                 ids_rev = _encode(near_r[0], block_size)
 
@@ -279,6 +290,8 @@ def nautilus_cycle(
     ids_fwd: torch.Tensor,
     ids_rev: Optional[torch.Tensor],
     rag: RagBuffer,
+    rag_fwd: Optional[RagBuffer],
+    rag_rev: Optional[RagBuffer],
     train_lr: float,
     temperature: float,
     do_train: bool,
@@ -293,8 +306,8 @@ def nautilus_cycle(
     Forward agent: META(10) → ABSTRACT(20) → DYNAMIC(30) → CONCRETE(40)
     Reverse agent: CONCRETE(40) → DYNAMIC(30) → ABSTRACT(20) → META(10)
 
-    Переходы через META = figure-8 crossing (bidir обмен).
-    Внутри каждого лепестка = roundabout (ранний выход при LCI ≈ π).
+    Переходы через META = figure-8 crossing с раздельными RAG-буферами.
+    Дивергенция сохраняется: каждый агент живёт в своём контексте.
     """
     t0          = time.perf_counter()
     n_gen       = 0
@@ -304,27 +317,34 @@ def nautilus_cycle(
     if ids_rev is None and bidir:
         ids_rev = _hex_prompt(random.randint(0, 63), block_size)
 
+    # Раздельные RAG: если не переданы — создать новые (однократное использование)
+    _rag_fwd    = rag_fwd    if rag_fwd    is not None else RagBuffer(max_size=200)
+    _rag_rev    = rag_rev    if rag_rev    is not None else RagBuffer(max_size=200)
+
     for ring in RINGS:
         name  = ring["name"]
         steps = max(1, int(ring["steps"] * step_scale))
 
         if bidir and name == "META":
-            # ─ Точка пересечения: figure-8, оба агента ─
+            # ─ Точка пересечения: figure-8, раздельные RAG ─
             ids_fwd, ids_rev, lci_f, lci_r2 = _bidir_crossing(
-                model, ids_fwd, ids_rev, rag, steps,
-                train_lr, temperature, do_train, block_size,
+                model, ids_fwd, ids_rev,
+                _rag_fwd, _rag_rev, rag,   # shared = общий RAG для train
+                steps, train_lr, temperature, do_train, block_size,
             )
+            diff = abs(lci_f - lci_r2)
             ring_log[name] = {
                 "steps": steps, "lci_r_fwd": round(lci_f, 4),
                 "lci_r_rev": round(lci_r2, 4),
                 "avg_lci": round((lci_f + lci_r2) / 2, 4),
+                "divergence": round(diff, 4),
                 "mode": "bidir_crossing",
             }
             mark = "✓" if abs((lci_f + lci_r2) / 2 - math.pi) < _LCI_EPSILON else "✗"
             print(f"    [{'META':10}] ×{steps:2d}шаг  lci_fwd={lci_f:.3f}  lci_rev={lci_r2:.3f}"
-                  f"  bidir {mark}")
+                  f"  Δ={diff:.3f}  bidir {mark}")
         else:
-            # ─ Внутри лепестка: roundabout ─
+            # ─ Внутри лепестка: roundabout, используем общий RAG ─
             ids_fwd, lci_r, lci_emb, ng, early = _run_ring(
                 model, name, ids_fwd, rag, steps,
                 train_lr, temperature, do_train, lci_loss_lambda,
@@ -341,13 +361,13 @@ def nautilus_cycle(
             print(f"    [{name:10}] ×{steps:2d}шаг  "
                   f"lci_r={lci_r:.3f}  emb={lci_emb:.3f}  {mark}{early_s}")
 
-    # Если bidir — Reverse agent делает анти-Наутилус (без META, уже пройден)
+    # Reverse agent: анти-Наутилус в своём RAG (без META, уже пройден)
     if bidir and ids_rev is not None:
-        for ring_name in _SPIRAL_REV[:-1]:   # пропускаем META (она уже пройдена)
+        for ring_name in _SPIRAL_REV[:-1]:
             ring = _RING_BY_NAME[ring_name]
             rev_steps = max(1, int(ring["steps"] * step_scale * 0.5))
             ids_rev, _, _, ng, _ = _run_ring(
-                model, ring_name, ids_rev, rag, rev_steps,
+                model, ring_name, ids_rev, _rag_rev, rev_steps,
                 train_lr * 0.7, temperature, do_train, 0.0,
                 early_exit=True, block_size=block_size,
             )
@@ -414,12 +434,21 @@ def nautilus_clover(
     print(f"    Итого:             {total_steps_per_cycle} шагов = 100%")
     print()
 
-    rag = RagBuffer(max_size=500)
+    # Общий RAG (обучение + seed), раздельные RAG для bidir-агентов
+    rag     = RagBuffer(max_size=500)
+    rag_fwd = RagBuffer(max_size=200) if bidir else None
+    rag_rev = RagBuffer(max_size=200) if bidir else None
+
     model.eval()
     for text in seed_texts[:50]:
         ids = _encode(text, block_size)
-        rag.add(text, _get_emb(model, ids))
-    print(f"  RAG-буфер           : {len(rag)} текстов")
+        emb = _get_emb(model, ids)
+        rag.add(text, emb)
+        if bidir:
+            rag_fwd.add(text, emb)
+            rag_rev.add(text, emb)
+    print(f"  RAG-буфер           : {len(rag)} текстов  "
+          f"({'раздельные fwd/rev' if bidir else 'единый'})")
 
     ids_fwd = _hex_prompt(random.randint(0, 63), block_size)
     ids_rev = _hex_prompt(random.randint(32, 63), block_size) if bidir else None
@@ -432,7 +461,7 @@ def nautilus_clover(
         print(f"\n  Цикл {cycle}/{n_cycles}  routing_LCI={lci_r0:.3f}  {res_mark}")
 
         ids_fwd, ids_rev, result = nautilus_cycle(
-            model, ids_fwd, ids_rev, rag,
+            model, ids_fwd, ids_rev, rag, rag_fwd, rag_rev,
             train_lr=train_lr,
             temperature=temperature,
             do_train=do_train,

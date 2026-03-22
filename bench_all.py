@@ -144,6 +144,22 @@ VARIANTS = [
         "log_key": "nautilus_log",
         "type":  "nautilus",
     },
+    {
+        "id":    13,
+        "name":  "nautilus-4agent",
+        "script": "nautilus_4agent.py",
+        "args":  "--fast",
+        "log_key": "nautilus4agent_log",
+        "type":  "nautilus4agent",
+    },
+    {
+        "id":    14,
+        "name":  "multi-salesman-3 (fixed)",
+        "script": "multi_salesman.py",
+        "args":  "--fast --agents 3 --steps 3",
+        "log_key": "ms3fixed_log",
+        "type":  "multisalesman",
+    },
 ]
 
 
@@ -159,9 +175,17 @@ def extract_metrics(log: List[Dict], variant_type: str) -> Dict:
 
     if variant_type == "figure8":
         avg_lci_r      = sum(r.get("avg_lci_r", r.get("lci_a_r", 0)) for r in log) / n
-        resonance_rate = sum(1 for r in log if r.get("resonance", False)) / n
-        kirchhoff_ok   = resonance_rate   # у figure8 нет Kirchhoff, считаем как resonance
-        gen_per_cycle  = sum(r.get("gen_a", 0) + r.get("gen_b", 0) for r in log) / n
+        # resonance: проверяем routing_LCI (как у остальных вариантов)
+        resonance_rate = sum(
+            1 for r in log
+            if abs(r.get("avg_lci_r", r.get("lci_a_r", 0)) - _PI) < 0.5
+        ) / n
+        kirchhoff_ok   = resonance_rate
+        # поля генерации: texts_a/texts_b (не gen_a/gen_b)
+        gen_per_cycle  = sum(
+            r.get("texts_a", r.get("gen_a", 0)) + r.get("texts_b", r.get("gen_b", 0))
+            for r in log
+        ) / n
 
     elif variant_type == "turbine":
         avg_lci_r      = sum(r.get("avg_lci_r", r.get("lci_r0", _PI)) for r in log) / n
@@ -197,6 +221,16 @@ def extract_metrics(log: List[Dict], variant_type: str) -> Dict:
         n_rings        = 4  # META + ABSTRACT + DYNAMIC + CONCRETE
         resonance_rate = sum(r.get("n_resonant", 0) / n_rings for r in log) / n
         kirchhoff_ok   = sum(1 for r in log if r.get("kirchhoff", False)) / n
+        gen_per_cycle  = sum(r.get("n_generated", 0) for r in log) / n
+
+    elif variant_type == "nautilus4agent":
+        # nautilus_4agent log: [{avg_lci_all, kirchhoff, load_balance, n_resonant, n_generated, resonant}, ...]
+        avg_lci_r      = sum(r.get("avg_lci_all", _PI) for r in log) / n
+        resonance_rate = sum(1 for r in log if r.get("resonant", False)) / n
+        kirchhoff_ok   = sum(1 for r in log if r.get("kirchhoff", False)) / n
+        # Бонус за load_balance (аналог multi-salesman)
+        avg_balance    = sum(r.get("load_balance", 0) for r in log) / n
+        kirchhoff_ok   = (kirchhoff_ok + avg_balance) / 2
         gen_per_cycle  = sum(r.get("n_generated", 0) for r in log) / n
 
     else:

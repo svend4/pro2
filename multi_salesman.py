@@ -151,11 +151,15 @@ class Agent:
             gen_text = _ids_to_text(gen_ids)
 
             if do_train and quality_filter(gen_text):
-                lr_scale = 0.5 if expert == "CONCRETE" else 1.0
-                micro_train(model, gen_ids, lr=train_lr * lr_scale, n_steps=2)
-                emb = _get_emb(model, gen_ids)
-                self.rag.add(gen_text, emb)
-                self.n_generated += 1
+                # LCI-gating: обучаем только если LCI не деградирует
+                new_lci, _ = lci_from_routing(model, gen_ids)
+                prev_lci = self.expert_lci.get(expert, math.pi)
+                lci_ok = abs(new_lci - math.pi) <= abs(prev_lci - math.pi) + 0.1
+                if lci_ok:
+                    micro_train(model, gen_ids, lr=train_lr, n_steps=1)
+                    emb = _get_emb(model, gen_ids)
+                    self.rag.add(gen_text, emb)
+                    self.n_generated += 1
 
             self.ids = gen_ids
 

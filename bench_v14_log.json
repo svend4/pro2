@@ -2,8 +2,8 @@
   {
     "cycle": 1,
     "lci_r_starts": [
-      3.0667,
-      3.0592
+      3.0789,
+      3.0612
     ],
     "agent_results": [
       {
@@ -13,10 +13,10 @@
           "CONCRETE"
         ],
         "lci": [
-          3.1109,
-          3.0419
+          3.0887,
+          3.0331
         ],
-        "avg_lci": 3.0764
+        "avg_lci": 3.0609
       },
       {
         "agent": "Агент-X (динамический)",
@@ -25,24 +25,24 @@
           "CONCRETE"
         ],
         "lci": [
-          3.066,
-          3.0678
+          3.0516,
+          3.0732
         ],
-        "avg_lci": 3.0669
+        "avg_lci": 3.0624
       }
     ],
-    "kirchhoff_val": 3.0659,
-    "load_balance": 0.9971,
-    "avg_lci_all": 3.0716,
+    "kirchhoff_val": 3.0516,
+    "load_balance": 0.9953,
+    "avg_lci_all": 3.0617,
     "resonant": true,
-    "n_generated": 18,
-    "elapsed_s": 9.73
+    "n_generated": 16,
+    "elapsed_s": 9.15
   },
   {
     "cycle": 2,
     "lci_r_starts": [
-      3.0651,
-      3.0765
+      3.0808,
+      3.0659
     ],
     "agent_results": [
       {
@@ -52,10 +52,10 @@
           "CONCRETE"
         ],
         "lci": [
-          3.0336,
-          3.0519
+          3.0205,
+          3.0154
         ],
-        "avg_lci": 3.0428
+        "avg_lci": 3.018
       },
       {
         "agent": "Агент-X (динамический)",
@@ -64,17 +64,17 @@
           "CONCRETE"
         ],
         "lci": [
-          3.0155,
-          3.0321
+          3.0535,
+          2.9853
         ],
-        "avg_lci": 3.0238
+        "avg_lci": 3.0194
       }
     ],
-    "kirchhoff_val": 3.0228,
-    "load_balance": 0.9993,
-    "avg_lci_all": 3.0333,
+    "kirchhoff_val": 3.0026,
+    "load_balance": 0.9955,
+    "avg_lci_all": 3.0187,
     "resonant": true,
-    "n_generated": 36,
-    "elapsed_s": 8.63
+    "n_generated": 34,
+    "elapsed_s": 9.61
   }
 ]
