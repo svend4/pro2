@@ -1,0 +1,60 @@
+{
+  "config": {
+    "vocab_size": 256,
+    "d_model": 128,
+    "n_layers": 4,
+    "n_heads": 4,
+    "block_size": 256,
+    "dropout": 0.0,
+    "steps": 50,
+    "batch_size": 8,
+    "lr": 0.0003,
+    "warmup_steps": 200,
+    "grad_clip": 1.0,
+    "n_experts": 6,
+    "routing_temperature": 0.5,
+    "log_every": 10,
+    "conf_every": 25,
+    "save_every": 9999,
+    "target_confidence": 0.15
+  },
+  "baseline_ppl": 1.51,
+  "steps": [
+    1,
+    10,
+    20,
+    30,
+    40,
+    50
+  ],
+  "losses": [
+    5.4856,
+    5.5319,
+    5.4262,
+    5.3283,
+    5.2036,
+    5.0093
+  ],
+  "ppls": [
+    241.1957,
+    252.6245,
+    227.2937,
+    206.0848,
+    181.9307,
+    149.7962
+  ],
+  "routing_confidences": [
+    {
+      "step": 25,
+      "conf": 0.3236
+    },
+    {
+      "step": 50,
+      "conf": 0.3242
+    }
+  ],
+  "final_ppl": 149.7962,
+  "routing_confidence": 0.3242,
+  "verdict": "inconclusive",
+  "total_time_s": 678.8
+}
