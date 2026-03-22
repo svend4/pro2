@@ -1,0 +1,42 @@
+[
+  {
+    "cycle": 1,
+    "lci_r0": 2.9711,
+    "lci_a": [
+      2.8986,
+      2.8919,
+      2.9551
+    ],
+    "lci_b": [
+      2.8895,
+      2.8871,
+      2.7853
+    ],
+    "lci_meet": 2.9645,
+    "meet_angle_deg": 13.78,
+    "avg_lci": 2.896,
+    "resonant": true,
+    "n_generated": 18,
+    "elapsed_s": 12.99
+  },
+  {
+    "cycle": 2,
+    "lci_r0": 2.9645,
+    "lci_a": [
+      2.905,
+      2.9281,
+      2.9697
+    ],
+    "lci_b": [
+      2.9596,
+      2.934,
+      2.9338
+    ],
+    "lci_meet": 2.8727,
+    "meet_angle_deg": 4.13,
+    "avg_lci": 2.929,
+    "resonant": true,
+    "n_generated": 18,
+    "elapsed_s": 11.88
+  }
+]
