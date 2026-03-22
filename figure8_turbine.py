@@ -60,6 +60,13 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# meta_q6: temperature annealing из svend4/meta
+try:
+    from meta_q6 import metropolis_temperature
+    _META_Q6_AVAILABLE = True
+except ImportError:
+    _META_Q6_AVAILABLE = False
+
 from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
 from yijing_transformer.models.hierarchical_moe import (
     HMoEConfig,
@@ -378,6 +385,7 @@ def turbine_figure8(
     n_cycles: int = 4,
     steps_per_expert: int = 20,
     temperature: float = 1.4,
+    temp_decay: float = 0.0,
     train_lr: float = 1e-5,
     do_train: bool = True,
     use_tsp: bool = True,
@@ -401,7 +409,8 @@ def turbine_figure8(
     print(f"{'═' * 72}")
     print(f"  Циклов              : {n_cycles}")
     print(f"  Шагов/эксперт       : {steps_per_expert}")
-    print(f"  Температура         : {temperature:.2f}  (фиксированная)")
+    t_mode = f"Metropolis decay={temp_decay:.2f}" if temp_decay > 0 else "фиксированная"
+    print(f"  Температура         : {temperature:.2f}  ({t_mode})")
     tsp_mode = ("2-opt" if use_tsp_2opt else "greedy") if use_tsp else "НЕТ (A→X→B→META)"
     print(f"  TSP-маршрутизация   : {tsp_mode}")
     print(f"  Рециркуляция        : {'ДА (внутренние мини-петли)' if do_recirculate else 'НЕТ'}")
@@ -435,6 +444,15 @@ def turbine_figure8(
     for cycle in range(1, n_cycles + 1):
         cycle_start_time = time.perf_counter()
 
+        # Metropolis temperature annealing
+        if temp_decay > 0:
+            if _META_Q6_AVAILABLE:
+                cur_temp = metropolis_temperature(cycle - 1, n_cycles, temperature, T_min=0.5, decay=temp_decay)
+            else:
+                cur_temp = max(0.5, temperature * (temp_decay ** (cycle - 1)))
+        else:
+            cur_temp = temperature
+
         # ── Точка X: измерить текущее состояние ─────────────────────────────
         lci_r0, gw0 = lci_from_routing(model, current_ids)
 
@@ -442,7 +460,7 @@ def turbine_figure8(
             "✓ РЕЗОНАНС" if abs(lci_r0 - math.pi) < _LCI_EPSILON else
             f"δ={lci_r0 - math.pi:+.3f}"
         )
-        print(f"\n  Цикл {cycle}/{n_cycles}  T={temperature:.2f}  "
+        print(f"\n  Цикл {cycle}/{n_cycles}  T={cur_temp:.3f}  "
               f"routing_LCI={lci_r0:.3f}  {resonance_mark}")
         print(f"    Веса: A={gw0.get('ABSTRACT',0):.3f}  "
               f"X={gw0.get('DYNAMIC',0):.3f}  "
@@ -479,7 +497,7 @@ def turbine_figure8(
                 ids          = current_ids,
                 expert       = expert,
                 n_steps      = steps_per_expert,
-                temperature  = temperature,
+                temperature  = cur_temp,
                 block_size   = block_size,
                 train_lr     = train_lr,
                 do_train     = do_train,
@@ -630,6 +648,10 @@ def main() -> None:
                         help="2-opt улучшение TSP маршрута после greedy")
     parser.add_argument("--lci-loss",        type=float, default=0.0,
                         help="λ для LCI-loss (Kirchhoff штраф в micro_train, default 0=выкл)")
+    parser.add_argument("--temp-decay",      type=float, default=0.0,
+                        dest="temp_decay", metavar="γ",
+                        help="[meta_q6] Metropolis temperature decay (0=выкл, рек. 0.85). "
+                             "T(c)=max(0.5, T0*γ^c). Устраняет осцилляции ±0.05.")
     parser.add_argument("--save",            type=str, default="hmoe_turbine.pt")
     args = parser.parse_args()
 
@@ -656,6 +678,7 @@ def main() -> None:
         n_cycles         = args.cycles,
         steps_per_expert = args.steps_per_expert,
         temperature      = args.temperature,
+        temp_decay       = args.temp_decay,
         train_lr         = args.lr,
         do_train         = not args.no_train,
         use_tsp          = not args.no_tsp,

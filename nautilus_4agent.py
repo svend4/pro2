@@ -52,6 +52,13 @@ from self_train_hmoe import (
 )
 from nautilus_clover import _lci_loss_step
 
+# meta_q6: интеграция с svend4/meta (bent seeds, temperature annealing)
+try:
+    from meta_q6 import bent_seed_texts, metropolis_temperature, cosine_temperature
+    _META_Q6_AVAILABLE = True
+except ImportError:
+    _META_Q6_AVAILABLE = False
+
 DEVICE = "cpu"
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 
@@ -280,22 +287,30 @@ def nautilus_4agent(
     step_scale: float = 1.0,
     adaptive: bool = False,
     temperature: float = 1.4,
+    temp_decay: float = 0.0,
     train_lr: float = 1e-5,
     do_train: bool = True,
     lci_loss_lambda: float = 0.0,
     cross_pollinate: bool = False,
     block_size: int = MODEL_CFG["block_size"] - 1,
 ) -> List[Dict]:
+    """
+    temp_decay > 0: Metropolis temperature annealing.
+      T(c) = max(0.5, T0 * temp_decay^c)
+      Рекомендуемые значения: 0.85 (агрессивно), 0.92 (мягко).
+      Устраняет осцилляции ±0.05 в поздних циклах.
+    """
 
     total_per_cycle = int(_TOTAL_STEPS * step_scale)
     mode_s = "адаптивный 0.3→1.0" if adaptive else f"фикс {step_scale:.2f}"
+    t_mode = f"Metropolis decay={temp_decay:.2f}" if temp_decay > 0 else f"фикс {temperature:.2f}"
 
     print(f"\n{'═' * 72}")
     print(f"  САМО-ОБУЧЕНИЕ ∞ 4-АГЕНТНЫЙ НАУТИЛУС + HMoE")
     print(f"{'═' * 72}")
     print(f"  Циклов              : {n_cycles}")
     print(f"  Шагов/цикл          : {total_per_cycle}  (={_TOTAL_STEPS}×{step_scale:.2f})  [{mode_s}]")
-    print(f"  Температура         : {temperature:.2f}")
+    print(f"  Температура         : {temperature:.2f}  [{t_mode}]")
     print(f"\n  Агенты (кольца Пифагорейской тетрактиды 1:2:3:4):")
     for i, (ag, ring) in enumerate(zip(_AGENTS, RINGS)):
         steps = max(1, int(ring["steps"] * step_scale))
@@ -331,16 +346,28 @@ def nautilus_4agent(
         lci_r0, _ = lci_from_routing(model, agent_ids[0])
         res_mark = "✓ РЕЗОНАНС" if abs(lci_r0 - math.pi) < _LCI_EPSILON else f"δ={lci_r0 - math.pi:+.3f}"
         cur_scale = _adaptive_scale(cycle, n_cycles) if adaptive else step_scale
-        print(f"\n  Цикл {cycle}/{n_cycles}  LCI_Агент-М={lci_r0:.3f}  {res_mark}  scale={cur_scale:.2f}")
+
+        # Metropolis temperature annealing (meta_q6 или встроенный)
+        if temp_decay > 0:
+            if _META_Q6_AVAILABLE:
+                cur_temp = metropolis_temperature(cycle - 1, n_cycles, temperature, T_min=0.5, decay=temp_decay)
+            else:
+                cur_temp = max(0.5, temperature * (temp_decay ** (cycle - 1)))
+        else:
+            cur_temp = temperature
+
+        print(f"\n  Цикл {cycle}/{n_cycles}  LCI_Агент-М={lci_r0:.3f}  {res_mark}"
+              f"  scale={cur_scale:.2f}  T={cur_temp:.3f}")
 
         agent_ids, result = nautilus_4agent_cycle(
             model, agent_ids, agent_rags, rag_shared,
-            train_lr=train_lr, temperature=temperature,
+            train_lr=train_lr, temperature=cur_temp,
             do_train=do_train, step_scale=cur_scale, block_size=block_size,
             lci_loss_lambda=lci_loss_lambda,
             cross_pollinate=cross_pollinate,
         )
         result["step_scale"] = round(cur_scale, 3)
+        result["temperature"] = round(cur_temp, 3)
 
         k_s = "✓ KIRCHHOFF" if result["kirchhoff"] else f"✗ {result['n_resonant']}/{len(RINGS)}"
         print(f"    → avg_LCI={result['avg_lci_all']:.3f}  balance={result['load_balance']:.3f}"
@@ -382,19 +409,30 @@ def _load_model(path: str) -> Variant3GPT:
     return m
 
 
-def _load_seeds(block_size: int) -> List[str]:
-    texts = [
-        "def forward(self, x): return self.linear(x)",
-        "loss.backward(); optimizer.zero_grad(); scheduler.step()",
-        "x = x + self.crossing(out_a, out_b)",
-        "The hexagram represents the intersection of abstract and concrete.",
-        "consciousness emerges from recursive self-reference in Q6 space",
-        "The Pythagorean tetractys: 1+2+3+4=10, the decade of nature",
-        "spiral growth: each ring proportionally larger than the previous",
-        "nautilus shell: logarithmic spiral, self-similar at every scale",
-        "four agents, four rings, one coordination point at META",
-        "load balance: all agents converge to the same LCI = π",
-    ] * 5
+def _load_seeds(block_size: int, use_bent: bool = False) -> List[str]:
+    """
+    Загрузить seed-тексты для инициализации RAG.
+
+    use_bent=True: использовать bent-функции из meta_q6 вместо ручных строк.
+    Bent-функции — математически оптимальные архетипы с гарантированным
+    разнообразием (nl=28, равномерный WHT-спектр), устраняют diversity collapse.
+    """
+    if use_bent and _META_Q6_AVAILABLE:
+        texts = bent_seed_texts(n=20, block_size=block_size)
+        print(f"  [meta_q6] Bent seeds: {len(texts)} архетипов (nl=28, WHT равномерный)")
+    else:
+        texts = [
+            "def forward(self, x): return self.linear(x)",
+            "loss.backward(); optimizer.zero_grad(); scheduler.step()",
+            "x = x + self.crossing(out_a, out_b)",
+            "The hexagram represents the intersection of abstract and concrete.",
+            "consciousness emerges from recursive self-reference in Q6 space",
+            "The Pythagorean tetractys: 1+2+3+4=10, the decade of nature",
+            "spiral growth: each ring proportionally larger than the previous",
+            "nautilus shell: logarithmic spiral, self-similar at every scale",
+            "four agents, four rings, one coordination point at META",
+            "load balance: all agents converge to the same LCI = π",
+        ] * 5
     for h in range(64):
         texts.append(_ids_to_text(_hex_prompt(h, block_size)))
     return texts
@@ -422,6 +460,14 @@ def main():
                         dest="cross_pollinate",
                         help="META: лучший агент обучает слабых")
     parser.add_argument("--no-train",    action="store_true")
+    # meta_q6 интеграция
+    parser.add_argument("--bent-seeds",  action="store_true",
+                        dest="bent_seeds",
+                        help="[meta_q6] Bent-функции Q6 как seed-архетипы RAG (nl=28)")
+    parser.add_argument("--temp-decay",  type=float, default=0.0,
+                        dest="temp_decay", metavar="γ",
+                        help="[meta_q6] Metropolis temperature decay (0=выкл, рек. 0.85). "
+                             "T(c)=max(0.5, T0*γ^c). Устраняет осцилляции ±0.05.")
     parser.add_argument("--save",        type=str,   default="hmoe_nautilus_4agent_v1.pt")
     args = parser.parse_args()
 
@@ -435,7 +481,7 @@ def main():
     print(f"  4-АГЕНТНЫЙ НАУТИЛУС HMoE")
     print(f"{'═' * 72}")
     model      = _load_model(args.checkpoint)
-    seed_texts = _load_seeds(block_size)
+    seed_texts = _load_seeds(block_size, use_bent=args.bent_seeds)
     print(f"  Seed текстов: {len(seed_texts)}")
 
     log = nautilus_4agent(
@@ -445,6 +491,7 @@ def main():
         step_scale=args.step_scale,
         adaptive=args.adaptive,
         temperature=args.temperature,
+        temp_decay=args.temp_decay,
         train_lr=args.lr,
         do_train=not args.no_train,
         lci_loss_lambda=args.lci_loss,
