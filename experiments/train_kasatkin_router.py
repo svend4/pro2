@@ -169,7 +169,8 @@ def train(cfg: dict):
     print(f"{'='*64}")
     print(f"  Устройство     : {device}")
     print(f"  Шаги           : {cfg['steps']}")
-    print(f"  Baseline PPL   : {baseline_ppl:.4f if baseline_ppl else 'не готов'}")
+    baseline_str = f"{baseline_ppl:.4f}" if baseline_ppl else "не готов"
+    print(f"  Baseline PPL   : {baseline_str}")
     print(f"  n_experts      : {cfg['n_experts']} (= 6 осей куба)")
     print(f"  routing_T      : {cfg['routing_temperature']}")
     print(f"  Цель           : routing_conf > {cfg['target_confidence']}")
