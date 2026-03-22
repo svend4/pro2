@@ -1,0 +1,66 @@
+{
+  "config": {
+    "vocab_size": 256,
+    "d_model": 128,
+    "n_layers": 4,
+    "n_heads": 4,
+    "block_size": 256,
+    "dropout": 0.0,
+    "steps": 50,
+    "batch_size": 8,
+    "lr": 0.0003,
+    "warmup_steps": 200,
+    "grad_clip": 1.0,
+    "n_archetypes": 64,
+    "interlingua_warmup": 3000,
+    "diversity_weight": 0.01,
+    "log_every": 10,
+    "xerox_every": 25,
+    "save_every": 9999
+  },
+  "baseline_ppl": 1.51,
+  "steps": [
+    1,
+    10,
+    20,
+    30,
+    40,
+    50
+  ],
+  "losses": [
+    5.3272,
+    5.3084,
+    5.3742,
+    5.0578,
+    5.3146,
+    4.8436
+  ],
+  "ppls": [
+    205.8667,
+    202.0226,
+    215.777,
+    157.2463,
+    203.2799,
+    126.9248
+  ],
+  "diversity_losses": [
+    0.0018,
+    -0.0039,
+    0.0034,
+    -0.0157,
+    0.0032,
+    0.0086
+  ],
+  "temperatures": [
+    1.0,
+    0.9996,
+    0.9983,
+    0.9963,
+    0.9933,
+    0.9896
+  ],
+  "final_ppl": 126.9248,
+  "best_loss": 4.843594551086426,
+  "verdict": "inconclusive",
+  "total_time_s": 4.6
+}
