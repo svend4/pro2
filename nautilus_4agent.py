@@ -50,6 +50,7 @@ from self_train_hmoe import (
     RagBuffer, _generate, _ids_to_text, _encode, _hex_prompt,
     _get_emb, _get_moes, _freeze_all_except, MODEL_CFG, _LCI_EPSILON,
 )
+from nautilus_clover import _lci_loss_step
 
 DEVICE = "cpu"
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
@@ -97,9 +98,11 @@ def _run_ring(
     temperature: float,
     do_train: bool,
     block_size: int,
+    lci_loss_lambda: float = 0.0,
 ) -> Tuple[torch.Tensor, float, float, int]:
     """
     Тренировка агента в своём кольце за steps шагов.
+    lci_loss_lambda > 0 → добавляем Kirchhoff-штраф к каждому шагу.
     Returns: (new_ids, lci_r, lci_emb, n_gen)
     """
     _freeze_for(model, ring_name)
@@ -113,6 +116,8 @@ def _run_ring(
             micro_train(model, gen_ids, lr=train_lr, n_steps=1)
             rag.add(gen_text, _get_emb(model, gen_ids))
             n_gen += 1
+            if lci_loss_lambda > 0:
+                _lci_loss_step(model, gen_ids, lr=train_lr * lci_loss_lambda)
         ids = gen_ids
 
     lci_r   = lci_from_routing(model, ids)[0]
@@ -166,6 +171,7 @@ def nautilus_4agent_cycle(
     do_train: bool,
     step_scale: float,
     block_size: int,
+    lci_loss_lambda: float = 0.0,
 ) -> Tuple[List[torch.Tensor], Dict]:
     """
     Один цикл 4-агентного Наутилуса (100 × step_scale шагов).
@@ -191,6 +197,7 @@ def nautilus_4agent_cycle(
         new_ids, lci_r, lci_emb, ng = _run_ring(
             model, name, agent_ids[i], agent_rags[i],
             steps, train_lr, temperature, do_train, block_size,
+            lci_loss_lambda=lci_loss_lambda,
         )
         agent_ids[i] = new_ids
         n_gen       += ng
@@ -235,24 +242,33 @@ def nautilus_4agent_cycle(
 
 # ── Основная функция ──────────────────────────────────────────────────────────
 
+def _adaptive_scale(cycle: int, n_cycles: int) -> float:
+    """Warmup schedule: 0.3 → ramp → 1.0 по параболе."""
+    t = (cycle - 1) / max(1, n_cycles - 1)   # 0.0 .. 1.0
+    return 0.3 + 0.7 * (t ** 0.7)            # начало=0.3, конец=1.0
+
+
 def nautilus_4agent(
     model: Variant3GPT,
     seed_texts: List[str],
     n_cycles: int = 4,
     step_scale: float = 1.0,
+    adaptive: bool = False,
     temperature: float = 1.4,
     train_lr: float = 1e-5,
     do_train: bool = True,
+    lci_loss_lambda: float = 0.0,
     block_size: int = MODEL_CFG["block_size"] - 1,
 ) -> List[Dict]:
 
     total_per_cycle = int(_TOTAL_STEPS * step_scale)
+    mode_s = "адаптивный 0.3→1.0" if adaptive else f"фикс {step_scale:.2f}"
 
     print(f"\n{'═' * 72}")
     print(f"  САМО-ОБУЧЕНИЕ ∞ 4-АГЕНТНЫЙ НАУТИЛУС + HMoE")
     print(f"{'═' * 72}")
     print(f"  Циклов              : {n_cycles}")
-    print(f"  Шагов/цикл          : {total_per_cycle}  (={_TOTAL_STEPS}×{step_scale:.2f})")
+    print(f"  Шагов/цикл          : {total_per_cycle}  (={_TOTAL_STEPS}×{step_scale:.2f})  [{mode_s}]")
     print(f"  Температура         : {temperature:.2f}")
     print(f"\n  Агенты (кольца Пифагорейской тетрактиды 1:2:3:4):")
     for i, (ag, ring) in enumerate(zip(_AGENTS, RINGS)):
@@ -288,13 +304,16 @@ def nautilus_4agent(
     for cycle in range(1, n_cycles + 1):
         lci_r0, _ = lci_from_routing(model, agent_ids[0])
         res_mark = "✓ РЕЗОНАНС" if abs(lci_r0 - math.pi) < _LCI_EPSILON else f"δ={lci_r0 - math.pi:+.3f}"
-        print(f"\n  Цикл {cycle}/{n_cycles}  LCI_Агент-М={lci_r0:.3f}  {res_mark}")
+        cur_scale = _adaptive_scale(cycle, n_cycles) if adaptive else step_scale
+        print(f"\n  Цикл {cycle}/{n_cycles}  LCI_Агент-М={lci_r0:.3f}  {res_mark}  scale={cur_scale:.2f}")
 
         agent_ids, result = nautilus_4agent_cycle(
             model, agent_ids, agent_rags, rag_shared,
             train_lr=train_lr, temperature=temperature,
-            do_train=do_train, step_scale=step_scale, block_size=block_size,
+            do_train=do_train, step_scale=cur_scale, block_size=block_size,
+            lci_loss_lambda=lci_loss_lambda,
         )
+        result["step_scale"] = round(cur_scale, 3)
 
         k_s = "✓ KIRCHHOFF" if result["kirchhoff"] else f"✗ {result['n_resonant']}/{len(RINGS)}"
         print(f"    → avg_LCI={result['avg_lci_all']:.3f}  balance={result['load_balance']:.3f}"
@@ -367,6 +386,11 @@ def main():
     parser.add_argument("--step-scale",  type=float, default=1.0)
     parser.add_argument("--temperature", type=float, default=1.4)
     parser.add_argument("--lr",          type=float, default=1e-5)
+    parser.add_argument("--adaptive",    action="store_true",
+                        help="адаптивный step_scale: warmup 0.3→1.0")
+    parser.add_argument("--lci-loss",    type=float, default=0.0,
+                        dest="lci_loss", metavar="λ",
+                        help="Kirchhoff-штраф λ (0=выкл, рекомендуется 0.05)")
     parser.add_argument("--no-train",    action="store_true")
     parser.add_argument("--save",        type=str,   default="hmoe_nautilus_4agent_v1.pt")
     args = parser.parse_args()
@@ -389,9 +413,11 @@ def main():
         seed_texts=seed_texts,
         n_cycles=args.cycles,
         step_scale=args.step_scale,
+        adaptive=args.adaptive,
         temperature=args.temperature,
         train_lr=args.lr,
         do_train=not args.no_train,
+        lci_loss_lambda=args.lci_loss,
         block_size=block_size,
     )
 

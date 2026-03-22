@@ -152,6 +152,14 @@ VARIANTS = [
         "log_key": "nautilus4agent_log",
         "type":  "nautilus4agent",
     },
+    {
+        "id":    14,
+        "name":  "multi-salesman-3 (fixed)",
+        "script": "multi_salesman.py",
+        "args":  "--fast --agents 3 --steps 3",
+        "log_key": "ms3fixed_log",
+        "type":  "multisalesman",
+    },
 ]
 
 

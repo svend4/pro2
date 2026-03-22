@@ -1,34 +1,34 @@
 [
   {
     "cycle": 1,
-    "lci_r0": 2.9582,
-    "lci_r_end": 2.922,
+    "lci_r0": 2.9782,
+    "lci_r_end": 3.0102,
     "n_laps": 1,
     "exited_early": true,
     "n_generated": 12,
     "laps": [
       {
         "lap": 1,
-        "avg_lci_r": 2.9328,
+        "avg_lci_r": 2.9649,
         "resonant": true
       }
     ],
-    "elapsed_s": 8.96
+    "elapsed_s": 5.56
   },
   {
     "cycle": 2,
-    "lci_r0": 2.922,
-    "lci_r_end": 2.8946,
+    "lci_r0": 3.0102,
+    "lci_r_end": 2.9092,
     "n_laps": 1,
     "exited_early": true,
     "n_generated": 12,
     "laps": [
       {
         "lap": 1,
-        "avg_lci_r": 2.8994,
+        "avg_lci_r": 2.9225,
         "resonant": true
       }
     ],
-    "elapsed_s": 8.09
+    "elapsed_s": 5.08
   }
 ]

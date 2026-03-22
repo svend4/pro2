@@ -1,90 +1,90 @@
 [
   {
     "cycle": 1,
-    "lci_r0": 2.9792,
+    "lci_r0": 2.9718,
     "rings": {
       "META": {
         "steps": 3,
-        "lci_r_fwd": 2.9588,
-        "lci_r_rev": 2.9553,
-        "avg_lci": 2.957,
-        "divergence": 0.0035,
+        "lci_r_fwd": 2.9511,
+        "lci_r_rev": 2.957,
+        "avg_lci": 2.9541,
+        "divergence": 0.0059,
         "mode": "bidir_crossing"
       },
       "ABSTRACT": {
         "steps": 6,
-        "lci_r": 2.9327,
-        "lci_emb": 0.0547,
+        "lci_r": 2.9241,
+        "lci_emb": 0.086,
         "early_exit": true,
         "gen": 2,
         "mode": "roundabout"
       },
       "DYNAMIC": {
         "steps": 9,
-        "lci_r": 2.8996,
-        "lci_emb": 0.1872,
+        "lci_r": 2.9038,
+        "lci_emb": 0.1625,
         "early_exit": true,
         "gen": 3,
         "mode": "roundabout"
       },
       "CONCRETE": {
         "steps": 12,
-        "lci_r": 2.9351,
-        "lci_emb": 0.3984,
+        "lci_r": 2.8967,
+        "lci_emb": 0.5569,
         "early_exit": true,
         "gen": 4,
         "mode": "roundabout"
       }
     },
-    "lci_r_final": 2.9129,
-    "lci_emb_final": 0.4676,
+    "lci_r_final": 2.8859,
+    "lci_emb_final": 0.6371,
     "n_resonant": 4,
     "kirchhoff": true,
     "n_generated": 13,
-    "elapsed_s": 12.13
+    "elapsed_s": 7.35
   },
   {
     "cycle": 2,
-    "lci_r0": 2.9129,
+    "lci_r0": 2.8859,
     "rings": {
       "META": {
         "steps": 3,
-        "lci_r_fwd": 3.0322,
-        "lci_r_rev": 2.93,
-        "avg_lci": 2.9811,
-        "divergence": 0.1022,
+        "lci_r_fwd": 2.9702,
+        "lci_r_rev": 2.9396,
+        "avg_lci": 2.9549,
+        "divergence": 0.0306,
         "mode": "bidir_crossing"
       },
       "ABSTRACT": {
         "steps": 6,
-        "lci_r": 3.0514,
-        "lci_emb": 0.5969,
+        "lci_r": 2.9532,
+        "lci_emb": 0.4431,
         "early_exit": true,
         "gen": 2,
         "mode": "roundabout"
       },
       "DYNAMIC": {
         "steps": 9,
-        "lci_r": 3.0424,
-        "lci_emb": 0.6496,
+        "lci_r": 2.9615,
+        "lci_emb": 0.2172,
         "early_exit": true,
         "gen": 3,
         "mode": "roundabout"
       },
       "CONCRETE": {
         "steps": 12,
-        "lci_r": 2.9083,
-        "lci_emb": 0.5585,
+        "lci_r": 2.886,
+        "lci_emb": 0.6475,
         "early_exit": true,
         "gen": 4,
         "mode": "roundabout"
       }
     },
-    "lci_r_final": 2.8982,
-    "lci_emb_final": 0.3232,
+    "lci_r_final": 2.8768,
+    "lci_emb_final": 0.5848,
     "n_resonant": 4,
     "kirchhoff": true,
     "n_generated": 13,
-    "elapsed_s": 11.49
+    "elapsed_s": 6.46
   }
 ]

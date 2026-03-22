@@ -1,42 +1,42 @@
 [
   {
     "cycle": 1,
-    "lci_r0": 2.9646,
+    "lci_r0": 2.9777,
     "lci_a": [
-      2.8981,
-      2.9189,
-      2.9599
+      2.9187,
+      2.9106,
+      2.9126
     ],
     "lci_b": [
-      2.9292,
-      2.9415,
-      2.9602
+      2.9325,
+      2.9084,
+      2.9054
     ],
-    "lci_meet": 2.9901,
-    "meet_angle_deg": 3.16,
-    "avg_lci": 2.9425,
+    "lci_meet": 2.8712,
+    "meet_angle_deg": 5.22,
+    "avg_lci": 2.9085,
     "resonant": true,
     "n_generated": 18,
-    "elapsed_s": 19.59
+    "elapsed_s": 11.7
   },
   {
     "cycle": 2,
-    "lci_r0": 2.9901,
+    "lci_r0": 2.8712,
     "lci_a": [
-      2.915,
-      3.0044,
-      2.9553
+      2.6844,
+      2.7624,
+      2.8256
     ],
     "lci_b": [
-      2.9102,
-      2.9667,
-      2.9145
+      2.7556,
+      2.7639,
+      2.7783
     ],
-    "lci_meet": 2.951,
-    "meet_angle_deg": 4.84,
-    "avg_lci": 2.9453,
+    "lci_meet": 2.8617,
+    "meet_angle_deg": 11.32,
+    "avg_lci": 2.776,
     "resonant": true,
     "n_generated": 18,
-    "elapsed_s": 19.41
+    "elapsed_s": 10.34
   }
 ]
