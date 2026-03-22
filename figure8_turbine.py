@@ -220,7 +220,7 @@ def _lci_loss_step(model: Variant3GPT, ids: torch.Tensor, lr: float) -> float:
     """
     Один шаг градиентного спуска по Kirchhoff-отклонению:
       loss = |routing_LCI - π|
-    Обучает gating-сеть напрямую двигать LCI к π.
+    Получает group_weights напрямую из GlobalRouter (с живым графом).
     """
     model.train()
     trainable = [p for p in model.parameters() if p.requires_grad]
@@ -228,19 +228,27 @@ def _lci_loss_step(model: Variant3GPT, ids: torch.Tensor, lr: float) -> float:
         return 0.0
     opt = torch.optim.AdamW(trainable, lr=lr, weight_decay=0.0)
 
-    group_weights_list = []
     inp = ids[:, :-1] if ids.shape[1] > 1 else ids
-    _ = model(inp)
-    for block in model.blocks:
-        info = getattr(block, '_last_moe_info', None)
-        if info and 'group_weights' in info:
-            gw = info['group_weights']
-            if not torch.isnan(gw).any():
-                if gw.dim() == 3:
-                    gw = gw.mean(dim=(0, 1))
-                elif gw.dim() == 2:
-                    gw = gw.mean(dim=0)
-                group_weights_list.append(gw)
+
+    # Собрать group_weights с живым графом через GlobalRouter напрямую
+    group_weights_list = []
+    try:
+        x = model.tok_emb(inp)
+        for block in model.blocks:
+            # Запустить global_router с grad
+            moe = getattr(block, 'hmoe', None)
+            if moe is not None and hasattr(moe, 'global_router'):
+                result = moe.global_router(x)
+                gw = result[0] if isinstance(result, tuple) else result
+                if not torch.isnan(gw).any():
+                    if gw.dim() == 3:
+                        gw = gw.mean(dim=(0, 1))
+                    elif gw.dim() == 2:
+                        gw = gw.mean(dim=0)
+                    group_weights_list.append(gw)
+            x = block(x)
+    except Exception:
+        return 0.0
 
     if not group_weights_list:
         return 0.0
@@ -249,13 +257,11 @@ def _lci_loss_step(model: Variant3GPT, ids: torch.Tensor, lr: float) -> float:
     groups = list(DOMAIN_GROUPS.keys())
     gw_dict = {g: avg_gw[i] for i, g in enumerate(groups)}
 
-    w_a = gw_dict.get("ABSTRACT", torch.tensor(0.33))
-    w_b = gw_dict.get("CONCRETE", torch.tensor(0.33))
-    w_d = gw_dict.get("DYNAMIC",  torch.tensor(0.33))
-    w_total = w_a + w_b + w_d + 1e-8
+    w_a = gw_dict.get("ABSTRACT", avg_gw[0])
+    w_b = gw_dict.get("CONCRETE", avg_gw[2] if len(avg_gw) > 2 else avg_gw[0])
+    w_total = avg_gw.sum() + 1e-8
     imbalance = torch.abs(w_a / w_total - w_b / w_total)
-    lci_tensor = (1.0 - imbalance) * math.pi
-    lci_loss = torch.abs(lci_tensor - math.pi)  # цель: LCI → π → loss → 0
+    lci_loss = imbalance * math.pi   # цель: imbalance→0 → LCI→π → loss→0
 
     opt.zero_grad()
     lci_loss.backward()
