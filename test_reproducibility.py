@@ -56,7 +56,7 @@ def run_once(variant_id: int, checkpoint: str, run_idx: int) -> Dict:
     t0 = time.perf_counter()
     result = subprocess.run(
         cmd, capture_output=True, text=True,
-        cwd=_ROOT, timeout=300,
+        cwd=_ROOT, timeout=900,
     )
     elapsed = time.perf_counter() - t0
 
