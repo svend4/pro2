@@ -11,6 +11,7 @@ repo_corpus_loader.py — Загрузчик ВСЕХ файлов самого 
   Кластер 5 «Scripts»  (HYDRO, α=−4): scripts/*.py, yijing_transformer/scripts/*.py
   Кластер 6 «Portal»   (COSMO, α=+2): nautilus/*.py, adapters, passports, portal docs
   Кластер 7 «Self»     (METHOD, α= 0): корневые .py, логи обучения, отчёты
+  Кластер 8 «Data»    (HYDRO,  α=−4): svend4_corpus knowledge/infosystems/ai_agents
 
 Используется в train_e2_clusters.py для многократного применения E2-схемы.
 
@@ -142,6 +143,24 @@ CLUSTER_DEFS = {
         ],
         "exclude_patterns": ["__pycache__", "_clones"],
     },
+    "Data": {
+        "domain":      "HYDRO",
+        "alpha":       -4,
+        "e2_phase":    1,        # GlyphLevel (α=−4)
+        "description": "Данные/поток: svend4_corpus knowledge, infosystems, ai_agents, _clones",
+        "globs": [
+            "data/svend4_corpus/knowledge/**/*.txt",
+            "data/svend4_corpus/knowledge/**/*.md",
+            "data/svend4_corpus/infosystems/**/*.md",
+            "data/svend4_corpus/infosystems/**/*.txt",
+            "data/svend4_corpus/ai_agents/**/*.md",
+            "data/svend4_corpus/algorithms/**/*.md",
+            # Внешние клоны (разнообразный практический корпус)
+            "data/svend4_corpus/_clones/**/*.md",
+            "data/svend4_corpus/_clones/**/*.txt",
+        ],
+        "exclude_patterns": ["__pycache__", ".git", "manifest.json"],
+    },
     "Self": {
         "domain":      "METHOD",
         "alpha":       0,
@@ -216,7 +235,7 @@ def _file_to_text(path: Path) -> str | None:
 # ══════════════════════════════════════════════════════════════════════════════
 class RepoCorpusLoader:
     """
-    Загружает файлы самого репозитория pro2 в 7 тематических кластеров.
+    Загружает файлы самого репозитория pro2 в 8 тематических кластеров.
 
     Аналог corpus_loader.CorpusLoader — но для ВНУТРЕННИХ файлов проекта,
     не для внешних клонов.  Применяется в train_e2_clusters.py для
