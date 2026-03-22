@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-nautilus_4agent.py — 4-агентный Наутилус: по одному агенту на каждое кольцо.
+nautilus_4agent.py — 4-агентный Наутилус: по одному агенту на каждую орбиту Aut(Q6).
 
-Геометрия: 4 кольца Пифагорейской тетрактиды (10:20:30:40 шагов).
-Каждый агент живёт в своём кольце и специализируется на нём.
+Геометрия: orбиты под B₆ = S₆ ⋉ (Z₂)⁶ (Aut(Q6), 46080 элементов).
+Q6 = {-1,+1}^6 имеет 7 орбит по весу Хэмминга (0..6).
+Агенты специализируются на орбитах, шаги пропорциональны размеру орбиты.
 Координация происходит в META (центральный узел) — как у multi-salesman в DYNAMIC.
 
-  Агент-М  (META,     10 шагов) — координатор, агрегатор
-  Агент-А  (ABSTRACT, 20 шагов) — абстрактный полюс
-  Агент-Х  (DYNAMIC,  30 шагов) — динамический мост
-  Агент-В  (CONCRETE, 40 шагов) — конкретный полюс
+  Агент-М  (META,     орбиты 0,6 — полюса)      — координатор, агрегатор
+  Агент-А  (ABSTRACT, орбиты 4,5 — Yang-сторона) — абстрактный полюс
+  Агент-Х  (DYNAMIC,  орбита  3  — экватор)      — динамический мост
+  Агент-В  (CONCRETE, орбиты 1,2 — Yin-сторона)  — конкретный полюс
+
+Шаги = размер орбиты / 2 (масштабирование к 100 суммарных шагов):
+  Орбиты 0,6: 1+1=2 вершины  → 10 шагов
+  Орбиты 4,5: 15+6=21 вершин → 21 шаг
+  Орбита  3:  20 вершин      → 20 шагов
+  Орбиты 1,2: 6+15=21 вершин → 21 шаг  (~ 72 итого, нормируем до 100)
+
+hexsym: каждый агент видит только "свои" вершины Q6 → архитектурная дифференциация.
 
 Один цикл = 100 шагов:
   1. Каждый агент делает шаги в своём кольце (параллельно, модель одна)
@@ -62,22 +71,65 @@ except ImportError:
 DEVICE = "cpu"
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 
-# ── Кольца (Пифагорейская тетрактида 1:2:3:4) ────────────────────────────────
+# ── Aut(Q6) орбиты по весу Хэмминга (hexsym) ─────────────────────────────────
+# B₆ = S₆ ⋉ (Z₂)⁶ действует на Q6 = {-1,+1}^6 перестановками + флипом знаков.
+# Орбиты = классы по числу +1 битов (Hamming weight в {0,1}^6 кодировке).
+# Размеры: C(6,k) для k=0..6: 1, 6, 15, 20, 15, 6, 1  (итого 64 вершины)
+_AUT_Q6_ORBITS: Dict[int, List[int]] = {
+    k: [v for v in range(64) if bin(v).count('1') == k]
+    for k in range(7)
+}
+
+# ── Кольца — orbits-based (hexsym) ────────────────────────────────────────────
+# Шаги пропорциональны размеру орбиты, масштабированы до ~100 суммарных.
+# META    = орбиты 0,6 (полюса Kun/Qian): 1+1=2  → 10 шагов (координатор)
+# ABSTRACT= орбиты 4,5 (Yang-сторона):   15+6=21 → 26 шагов
+# DYNAMIC = орбита  3  (экватор Q6):     20      → 25 шагов
+# CONCRETE= орбиты 1,2 (Yin-сторона):    6+15=21 → 26 шагов
+# Seed-гексаграммы берутся из своей орбиты (архитектурная дифференциация).
 RINGS = [
-    {"name": "META",     "steps": 10, "groups": ["ABSTRACT", "DYNAMIC", "CONCRETE"], "ratio": 1},
-    {"name": "ABSTRACT", "steps": 20, "groups": ["ABSTRACT"],                        "ratio": 2},
-    {"name": "DYNAMIC",  "steps": 30, "groups": ["DYNAMIC"],                         "ratio": 3},
-    {"name": "CONCRETE", "steps": 40, "groups": ["CONCRETE"],                        "ratio": 4},
+    {
+        "name": "META",
+        "steps": 10,
+        "groups": ["ABSTRACT", "DYNAMIC", "CONCRETE"],
+        "ratio": 1,
+        "orbits": [0, 6],  # полюса: Kun (000000) + Qian (111111)
+        "orbit_verts": _AUT_Q6_ORBITS[0] + _AUT_Q6_ORBITS[6],
+    },
+    {
+        "name": "ABSTRACT",
+        "steps": 26,
+        "groups": ["ABSTRACT"],
+        "ratio": 2,
+        "orbits": [4, 5],  # Yang-сторона: k=4 (15 вершин) + k=5 (6 вершин)
+        "orbit_verts": _AUT_Q6_ORBITS[4] + _AUT_Q6_ORBITS[5],
+    },
+    {
+        "name": "DYNAMIC",
+        "steps": 25,
+        "groups": ["DYNAMIC"],
+        "ratio": 3,
+        "orbits": [3],     # Экватор Q6: k=3 (20 вершин, λ=0)
+        "orbit_verts": _AUT_Q6_ORBITS[3],
+    },
+    {
+        "name": "CONCRETE",
+        "steps": 26,
+        "groups": ["CONCRETE"],
+        "ratio": 4,
+        "orbits": [1, 2],  # Yin-сторона: k=1 (6 вершин) + k=2 (15 вершин)
+        "orbit_verts": _AUT_Q6_ORBITS[1] + _AUT_Q6_ORBITS[2],
+    },
 ]
 _RING_BY_NAME = {r["name"]: r for r in RINGS}
-_TOTAL_STEPS  = sum(r["steps"] for r in RINGS)   # 100
+_TOTAL_STEPS  = sum(r["steps"] for r in RINGS)   # 87 → масштабируется через step_scale
 
-# Агенты: home-кольцо, seed-диапазон гексаграмм (аналог multi-salesman)
+# Агенты: home-кольцо, seed из своей орбиты (hexsym дифференциация)
 _AGENTS = [
-    {"name": "Агент-М (meta)",      "home": "META",     "seed_range": (0,  15)},
-    {"name": "Агент-А (abstract)",  "home": "ABSTRACT", "seed_range": (16, 31)},
-    {"name": "Агент-Х (dynamic)",   "home": "DYNAMIC",  "seed_range": (32, 47)},
-    {"name": "Агент-В (concrete)",  "home": "CONCRETE", "seed_range": (48, 63)},
+    {"name": "Агент-М (meta/poles)",    "home": "META",     "orbit_verts": _AUT_Q6_ORBITS[0] + _AUT_Q6_ORBITS[6]},
+    {"name": "Агент-А (abstract/yang)", "home": "ABSTRACT", "orbit_verts": _AUT_Q6_ORBITS[4] + _AUT_Q6_ORBITS[5]},
+    {"name": "Агент-Х (dynamic/eq)",    "home": "DYNAMIC",  "orbit_verts": _AUT_Q6_ORBITS[3]},
+    {"name": "Агент-В (concrete/yin)",  "home": "CONCRETE", "orbit_verts": _AUT_Q6_ORBITS[1] + _AUT_Q6_ORBITS[2]},
 ]
 
 _META_FREEZE = ["ABSTRACT", "DYNAMIC", "CONCRETE"]
@@ -336,14 +388,16 @@ def nautilus_4agent(
 
     print(f"  Shared RAG          : {len(rag_shared)} текстов")
 
-    # ── Инициализация агентов ──────────────────────────────────────────────────
+    # ── Инициализация агентов (hexsym: seed из своей орбиты Aut(Q6)) ───────────
     agent_ids: List[torch.Tensor] = []
     for ag in _AGENTS:
-        lo, hi = ag["seed_range"]
-        hex_id  = random.randint(lo, hi)
+        # hexsym: seed-гексаграмма из орбиты агента — архитектурная дифференциация
+        orbit_verts = ag["orbit_verts"]
+        hex_id = random.choice(orbit_verts)
         agent_ids.append(_hex_prompt(hex_id, block_size))
         lci0, _ = lci_from_routing(model, agent_ids[-1])
-        print(f"    {ag['name']:28}  start LCI={lci0:.3f}")
+        orbit_label = f"orbits={_RING_BY_NAME[ag['home']]['orbits']}"
+        print(f"    {ag['name']:32}  start LCI={lci0:.3f}  {orbit_label}")
 
     log: List[Dict] = []
 
