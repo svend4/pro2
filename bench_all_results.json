@@ -1,107 +1,57 @@
 [
   {
-    "avg_lci_r": 2.92,
-    "resonance_rate": 0.0,
-    "kirchhoff_ok": 0.0,
-    "gen_per_cycle": 0.0,
-    "score": 0.372,
-    "id": 1,
-    "name": "figure-8 baseline",
-    "elapsed_s": 40.2,
-    "error": false
-  },
-  {
-    "avg_lci_r": 2.865,
-    "resonance_rate": 0.0,
-    "kirchhoff_ok": 0.0,
-    "gen_per_cycle": 0.0,
-    "score": 0.365,
-    "id": 2,
-    "name": "figure-8 fixed-T",
-    "elapsed_s": 34.9,
-    "error": false
-  },
-  {
-    "avg_lci_r": 2.915,
-    "resonance_rate": 1.0,
-    "kirchhoff_ok": 1.0,
-    "gen_per_cycle": 20.0,
-    "score": 0.971,
-    "id": 3,
-    "name": "turbine greedy-TSP",
-    "elapsed_s": 29.0,
-    "error": false
-  },
-  {
-    "avg_lci_r": 2.908,
-    "resonance_rate": 1.0,
-    "kirchhoff_ok": 1.0,
-    "gen_per_cycle": 20.0,
-    "score": 0.97,
-    "id": 4,
-    "name": "turbine 2opt-TSP",
-    "elapsed_s": 28.7,
-    "error": false
-  },
-  {
-    "id": 5,
-    "name": "turbine LCI-loss λ=0.1",
-    "error": true,
-    "elapsed_s": 5.4
-  },
-  {
-    "avg_lci_r": 2.886,
-    "resonance_rate": 1.0,
-    "kirchhoff_ok": 1.0,
-    "gen_per_cycle": 20.0,
-    "score": 0.967,
-    "id": 6,
-    "name": "turbine no-TSP",
-    "elapsed_s": 27.3,
-    "error": false
-  },
-  {
-    "avg_lci_r": 2.947,
+    "avg_lci_r": 3.003,
     "resonance_rate": 1.0,
     "kirchhoff_ok": 1.0,
     "gen_per_cycle": 12.0,
-    "score": 0.975,
+    "score": 0.982,
     "id": 7,
     "name": "roundabout",
-    "elapsed_s": 14.2,
+    "elapsed_s": 23.0,
     "error": false
   },
   {
-    "avg_lci_r": 2.919,
-    "resonance_rate": 1.0,
-    "kirchhoff_ok": 1.0,
-    "gen_per_cycle": 18.0,
-    "score": 0.972,
-    "id": 8,
-    "name": "bidir-turbine",
-    "elapsed_s": 28.3,
-    "error": false
-  },
-  {
-    "avg_lci_r": 3.052,
+    "avg_lci_r": 3.049,
     "resonance_rate": 1.0,
     "kirchhoff_ok": 1.0,
     "gen_per_cycle": 27.0,
-    "score": 0.989,
+    "score": 0.988,
     "id": 9,
     "name": "multi-salesman (2 агента)",
-    "elapsed_s": 24.0,
+    "elapsed_s": 36.9,
     "error": false
   },
   {
-    "avg_lci_r": 3.038,
+    "avg_lci_r": 3.033,
     "resonance_rate": 1.0,
     "kirchhoff_ok": 1.0,
     "gen_per_cycle": 27.0,
-    "score": 0.987,
+    "score": 0.986,
     "id": 10,
     "name": "multi-salesman (3 агента)",
-    "elapsed_s": 25.7,
+    "elapsed_s": 36.1,
+    "error": false
+  },
+  {
+    "avg_lci_r": 2.856,
+    "resonance_rate": 1.0,
+    "kirchhoff_ok": 1.0,
+    "gen_per_cycle": 13.0,
+    "score": 0.964,
+    "id": 11,
+    "name": "nautilus-clover (bidir)",
+    "elapsed_s": 29.6,
+    "error": false
+  },
+  {
+    "avg_lci_r": 2.997,
+    "resonance_rate": 1.0,
+    "kirchhoff_ok": 1.0,
+    "gen_per_cycle": 13.0,
+    "score": 0.982,
+    "id": 12,
+    "name": "nautilus-clover + LCI-loss",
+    "elapsed_s": 32.1,
     "error": false
   }
 ]

@@ -128,6 +128,22 @@ VARIANTS = [
         "log_key": "multisalesman_log",
         "type":  "multisalesman",
     },
+    {
+        "id":    11,
+        "name":  "nautilus-clover (bidir)",
+        "script": "nautilus_clover.py",
+        "args":  "--fast",
+        "log_key": "nautilus_log",
+        "type":  "nautilus",
+    },
+    {
+        "id":    12,
+        "name":  "nautilus-clover + LCI-loss",
+        "script": "nautilus_clover.py",
+        "args":  "--fast --lci-loss 0.1",
+        "log_key": "nautilus_log",
+        "type":  "nautilus",
+    },
 ]
 
 
@@ -173,6 +189,14 @@ def extract_metrics(log: List[Dict], variant_type: str) -> Dict:
         resonance_rate = sum(1 for r in log if r.get("resonant", False)) / n
         kirchhoff_ok   = sum(1 for r in log if r.get("kirchhoff_val", 99) and
                              abs(r.get("kirchhoff_val", 99) - _PI) < 0.5) / n
+        gen_per_cycle  = sum(r.get("n_generated", 0) for r in log) / n
+
+    elif variant_type == "nautilus":
+        # nautilus_clover log: [{lci_r_final, lci_emb_final, n_resonant, kirchhoff, n_generated, rings}, ...]
+        avg_lci_r      = sum(r.get("lci_r_final", _PI) for r in log) / n
+        n_rings        = 4  # META + ABSTRACT + DYNAMIC + CONCRETE
+        resonance_rate = sum(r.get("n_resonant", 0) / n_rings for r in log) / n
+        kirchhoff_ok   = sum(1 for r in log if r.get("kirchhoff", False)) / n
         gen_per_cycle  = sum(r.get("n_generated", 0) for r in log) / n
 
     else:
