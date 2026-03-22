@@ -254,7 +254,7 @@ def train(cfg: dict):
     print(f"{'='*64}")
     print(f"  Final PPL         : {final_ppl:.4f}")
     print(f"  Routing confidence: {final_conf:.4f} (цель: > {cfg['target_confidence']})")
-    print(f"  Baseline PPL      : {baseline_ppl:.4f if baseline_ppl else 'N/A'}")
+    print(f"  Baseline PPL      : {f'{baseline_ppl:.4f}' if baseline_ppl else 'N/A'}")
 
     verdict = "inconclusive"
     if cfg['steps'] < 3000:
