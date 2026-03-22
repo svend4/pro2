@@ -275,6 +275,7 @@ def figure8_hmoe(
     temperature:    float = 1.2,
     train_lr:       float = 1e-5,
     do_train:       bool  = True,
+    fixed_temperature: bool = False,
 ) -> List[Dict]:
     """
     Само-обучение HMoE по паттерну фигуры-8 Крюкова.
@@ -294,7 +295,8 @@ def figure8_hmoe(
     print(f"{'═' * 72}")
     print(f"  Циклов         : {n_cycles}")
     print(f"  Шагов/петля    : {steps_per_loop}")
-    print(f"  Температура    : {temperature:.2f}  (авто-масштаб по LCI → π)")
+    t_mode = "ФИКСИРОВАННАЯ" if fixed_temperature else "авто-масштаб по LCI → π"
+    print(f"  Температура    : {temperature:.2f}  ({t_mode})")
     print(f"  Серии          : {_ODD_SERIES}  (нечётные, Крюков)")
     print()
     print(f"  Маппинг восьмёрки → HMoE группы:")
@@ -374,7 +376,8 @@ def figure8_hmoe(
               f"routing_LCI={lci_a_r:.3f}  gen={len(a_texts_generated)} текстов")
 
         # ── Возврат в X (LCI_A) ───────────────────────────────────────────
-        temperature = _scale_temperature(temperature, lci_a_emb)
+        if not fixed_temperature:
+            temperature = _scale_temperature(temperature, lci_a_emb)
 
         # Получить новый промпт из RAG (обогатить контекст)
         if len(rag) > 5:
@@ -412,7 +415,8 @@ def figure8_hmoe(
               f"routing_LCI={lci_b_r:.3f}  gen={len(b_texts_generated)} текстов")
 
         # ── Возврат в X (LCI_B) ───────────────────────────────────────────
-        temperature = _scale_temperature(temperature, lci_b_emb)
+        if not fixed_temperature:
+            temperature = _scale_temperature(temperature, lci_b_emb)
 
         # Разморозить DYNAMIC для точки X (BidirBridgeExpert)
         set_moe_stage(model.blocks[0].hmoe if hasattr(model.blocks[0], 'hmoe') else None, 4)
@@ -529,6 +533,8 @@ def main():
                         help="Начальная температура (default: 1.2)")
     parser.add_argument("--lr",             type=float, default=1e-5,
                         help="LR для micro-train (default: 1e-5)")
+    parser.add_argument("--fixed-temperature", action="store_true",
+                        help="Не масштабировать температуру по LCI (фиксированная T)")
     parser.add_argument("--no-train",       action="store_true",
                         help="Только генерация, без micro-train")
     parser.add_argument("--no-corpus",      action="store_true",
@@ -609,9 +615,10 @@ def main():
         block_size     = MODEL_CFG["block_size"] - 1,
         n_cycles       = n_cycles,
         steps_per_loop = steps_per_loop,
-        temperature    = args.temperature,
-        train_lr       = args.lr,
-        do_train       = not args.no_train,
+        temperature        = args.temperature,
+        train_lr           = args.lr,
+        do_train           = not args.no_train,
+        fixed_temperature  = args.fixed_temperature,
     )
     elapsed = time.perf_counter() - t0
 
