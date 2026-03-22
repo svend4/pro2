@@ -48,7 +48,7 @@ from yijing_transformer.models.hierarchical_moe import (
 from self_train_hmoe import (
     lci_from_routing, lci_from_embeddings, micro_train, quality_filter,
     RagBuffer, _generate, _ids_to_text, _encode, _hex_prompt,
-    _get_emb, _get_moes, _freeze_all_except, MODEL_CFG, _LCI_EPSILON,
+    _get_emb, _get_q6_vertex, _get_moes, _freeze_all_except, MODEL_CFG, _LCI_EPSILON,
 )
 from nautilus_clover import _lci_loss_step
 
@@ -121,7 +121,8 @@ def _run_ring(
         gen_text = _ids_to_text(gen_ids)
         if do_train and quality_filter(gen_text):
             micro_train(model, gen_ids, lr=train_lr, n_steps=1)
-            rag.add(gen_text, _get_emb(model, gen_ids))
+            rag.add(gen_text, _get_emb(model, gen_ids),
+                    q6_vert=_get_q6_vertex(model, gen_ids))
             n_gen += 1
             if lci_loss_lambda > 0:
                 _lci_loss_step(model, gen_ids, lr=train_lr * lci_loss_lambda)
@@ -157,7 +158,8 @@ def _meta_coordination(
     for ids in agent_ids:
         txt = _ids_to_text(ids)
         if quality_filter(txt):
-            rag_shared.add(txt, _get_emb(model, ids))
+            rag_shared.add(txt, _get_emb(model, ids),
+                           q6_vert=_get_q6_vertex(model, ids))
 
     if not agent_lcis:
         return math.pi, 1.0
@@ -179,11 +181,13 @@ def _meta_coordination(
             # Слабый агент тянется к ближайшему тексту из RAG лучшего
             gap = abs(lci - math.pi) - abs(agent_lcis[best_i] - math.pi)
             if gap > 0.05 and len(agent_rags[best_i]) > 2:
-                near = agent_rags[best_i].retrieve(_get_emb(model, ids), top_k=1)
+                near = agent_rags[best_i].retrieve(_get_emb(model, ids), top_k=1,
+                                                   query_q6=_get_q6_vertex(model, ids))
                 if near:
                     agent_ids[i] = _encode(near[0], block_size)
                     # Добавляем лучший контекст и в RAG слабого
-                    agent_rags[i].add(near[0], best_emb)
+                    agent_rags[i].add(near[0], best_emb,
+                                  q6_vert=_get_q6_vertex(model, agent_ids[best_i]))
 
     return avg_lci, balance
 
@@ -220,7 +224,8 @@ def nautilus_4agent_cycle(
 
         # Обогатить ids агента из shared RAG перед его фазой
         if len(rag_shared) > 3:
-            near = rag_shared.retrieve(_get_emb(model, agent_ids[i]), top_k=1)
+            near = rag_shared.retrieve(_get_emb(model, agent_ids[i]), top_k=1,
+                                       query_q6=_get_q6_vertex(model, agent_ids[i]))
             if near:
                 agent_ids[i] = _encode(near[0], block_size)
 
