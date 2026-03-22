@@ -8,43 +8,43 @@
       "ABSTRACT"
     ],
     "temperature": 1.4,
-    "lci_r0": 2.9588,
-    "avg_lci_emb": 0.51,
-    "avg_lci_r": 2.9602,
-    "kirchhoff_val": 2.9594,
-    "kirchhoff_dev": 0.1822,
+    "lci_r0": 2.9716,
+    "avg_lci_emb": 0.3727,
+    "avg_lci_r": 2.9094,
+    "kirchhoff_val": 2.9088,
+    "kirchhoff_dev": 0.2328,
     "n_resonant": 4,
     "n_generated": 20,
     "expert_lci": {
-      "DYNAMIC": 2.8946,
-      "CONCRETE": 2.9754,
-      "META": 3.014,
-      "ABSTRACT": 2.9568
+      "DYNAMIC": 2.8988,
+      "CONCRETE": 2.9172,
+      "META": 2.9232,
+      "ABSTRACT": 2.8986
     },
-    "elapsed_s": 19.99
+    "elapsed_s": 20.45
   },
   {
     "cycle": 2,
     "expert_order": [
-      "DYNAMIC",
+      "ABSTRACT",
       "META",
       "CONCRETE",
-      "ABSTRACT"
+      "DYNAMIC"
     ],
     "temperature": 1.4,
-    "lci_r0": 2.9568,
-    "avg_lci_emb": 0.5056,
-    "avg_lci_r": 2.9805,
-    "kirchhoff_val": 2.9817,
-    "kirchhoff_dev": 0.1599,
+    "lci_r0": 2.8986,
+    "avg_lci_emb": 0.5812,
+    "avg_lci_r": 2.9229,
+    "kirchhoff_val": 2.9223,
+    "kirchhoff_dev": 0.2193,
     "n_resonant": 4,
     "n_generated": 20,
     "expert_lci": {
-      "DYNAMIC": 2.9706,
-      "META": 2.9801,
-      "CONCRETE": 2.9386,
-      "ABSTRACT": 3.0327
+      "ABSTRACT": 2.8978,
+      "META": 2.967,
+      "CONCRETE": 2.9202,
+      "DYNAMIC": 2.9067
     },
-    "elapsed_s": 19.82
+    "elapsed_s": 19.16
   }
 ]

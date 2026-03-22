@@ -159,9 +159,17 @@ def extract_metrics(log: List[Dict], variant_type: str) -> Dict:
 
     if variant_type == "figure8":
         avg_lci_r      = sum(r.get("avg_lci_r", r.get("lci_a_r", 0)) for r in log) / n
-        resonance_rate = sum(1 for r in log if r.get("resonance", False)) / n
-        kirchhoff_ok   = resonance_rate   # у figure8 нет Kirchhoff, считаем как resonance
-        gen_per_cycle  = sum(r.get("gen_a", 0) + r.get("gen_b", 0) for r in log) / n
+        # resonance: проверяем routing_LCI (как у остальных вариантов)
+        resonance_rate = sum(
+            1 for r in log
+            if abs(r.get("avg_lci_r", r.get("lci_a_r", 0)) - _PI) < 0.5
+        ) / n
+        kirchhoff_ok   = resonance_rate
+        # поля генерации: texts_a/texts_b (не gen_a/gen_b)
+        gen_per_cycle  = sum(
+            r.get("texts_a", r.get("gen_a", 0)) + r.get("texts_b", r.get("gen_b", 0))
+            for r in log
+        ) / n
 
     elif variant_type == "turbine":
         avg_lci_r      = sum(r.get("avg_lci_r", r.get("lci_r0", _PI)) for r in log) / n
