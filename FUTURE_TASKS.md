@@ -57,20 +57,19 @@
 - ВЫВОД: π — обученный аттрактор (не архитектурный). Базовое равновесие = 2.87
 - π достигается только через curriculum training (3000+ шагов)
 
-**Анnealing температуры**
-- Текущая проблема: oscillation ±0.05 в LCI между циклами
-- Тест: temperature 1.4 → 1.2 → 1.0 → 0.8 по циклам в nautilus_4agent
-- Реализация: добавить --temp-decay=0.9 (умножать каждый цикл)
+**Анnealing температуры** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- --temp-decay реализован в nautilus_4agent.py и figure8_turbine.py
+- Тест: mid_v2 LCI +0.007, weak: +0.080 (эффект сильнее для слабых)
 
-**Saturation при 3-м проходе — почему?**
-- Гипотеза 1: RAG заполнен похожими текстами (diversity collapse)
-- Гипотеза 2: LR слишком большой для хорошей модели
-- Тест: 3-й проход с lr=5e-6 вместо 1e-5
-- Тест: сбросить RAG между проходами (rag = RagBuffer(max_size=500) заново)
+**Saturation при 3-м проходе** ✅ ИССЛЕДОВАНО (2026-03-22)
+- Гипотеза 2 (LR) подтверждена: pipeline.py adaptive LR threshold 3.0→2.8
+- --lr-threshold CLI аргумент добавлен (default=2.8)
+- При LCI > 2.8 на 2+ проходе: lr автоматически снижается 1e-5 → 5e-6
+- Гипотеза 1 (RAG diversity collapse): частично решена через Q6/Hamming RAG
 
-**Воспроизводимость 0.998**
-- Запустить bench_all на pipeline-checkpoint 5 раз, получить std
-- Если std > 0.002 — результат нестабилен
+**Воспроизводимость 0.998** ✅ ТЕСТ ЗАПУЩЕН (2026-03-22)
+- test_reproducibility.py создан: 5 прогонов variant 5
+- Результаты будут в experiments/reproducibility_results.json
 
 ---
 
@@ -92,16 +91,17 @@
 - meta_q6 bent+annealing помогает больше всего слабым моделям
 - Минимальный порог для успешного pipeline: LCI 2.7-3.1 (выше → вред)
 
-**CrossDomainAnalogy (из pro2 истории)**
-- Была реализована только 15/36 клеток матрицы 6×6
-- hexsym.orbits() даёт полный граф 36 взаимодействий
-- Интегрировать в self_train_hmoe.py как дополнительный training signal
+**CrossDomainAnalogy (из pro2 истории)** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- Расширено с 15 → 36 направленных пар (полная матрица 6×6)
+- Добавлена диагональ (A→A self-analogy): 6 новых пар
+- Добавлена нижняя треугольная (B→A reverse): 15 новых пар
+- cross_domain_signal() в self_train_hmoe.py: orbit-based cosine target
+- Логируется как cda_signal (0..1) в каждом цикле figure8_hmoe
 
-**Реальные метрики качества**
-- Сейчас: только LCI + бенч-score (оба самодельные)
-- Нужно: perplexity на валидационном корпусе, diversity (avg pairwise cosine distance),
-  coherence (embedding similarity между последовательными генерациями)
-- Добавить в bench_all.py как дополнительные колонки
+**Реальные метрики качества** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- bench_all.py: compute_quality_metrics() — ppl_val, diversity, coherence
+- --quality флаг: опциональный подсчёт реальных метрик
+- print_table() показывает ppl/div/coh колонки при --quality
 
 ---
 
@@ -119,3 +119,5 @@
 | 2026-03-22 | OMP_NUM_THREADS=1 для pipeline | устраняет 87-минутные зависания |
 | 2026-03-22 | Strong модель деградирует в pipeline | 3.141→2.975 (−0.166), pipeline вреден для LCI>3.1 |
 | 2026-03-22 | Mid — оптимальная точка входа | score 0.995→0.996, LCI 3.102→3.109 |
+| 2026-03-22 | CrossDomainAnalogy 15→36 пар | полная 6×6 матрица, cda_signal в логе |
+| 2026-03-22 | Реальные метрики в bench_all | --quality: ppl_val, diversity, coherence |
