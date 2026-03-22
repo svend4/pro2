@@ -102,6 +102,8 @@ def run_pipeline(
     turbine_lci_loss: float,
     fast: bool,
     output_dir: str,
+    adaptive_lr: bool = True,
+    reset_rag_pass: int = 3,
 ) -> Dict:
     """
     Запустить полный curriculum-пайплайн и вернуть итоговые метрики.
@@ -118,6 +120,8 @@ def run_pipeline(
     print(f"  Nautilus проходов : {n_nautilus_passes}  (по {nautilus_cycles} цикл × {nautilus_step_scale:.2f}×)")
     print(f"  Turbine финал     : {turbine_cycles} цикл, {turbine_spe} шагов, LCI-loss={turbine_lci_loss}")
     print(f"  Fast-mode         : {fast}")
+    print(f"  Адаптивный LR     : {adaptive_lr}  (снижает lr при LCI>3.0)")
+    print(f"  RAG reset pass    : {reset_rag_pass}  (bent seeds с прохода {reset_rag_pass})")
     print(f"  Сохранение в      : {output_dir}/")
 
     # ── Фаза 1: N проходов nautilus-4agent ────────────────────────────────────
@@ -135,6 +139,21 @@ def run_pipeline(
         else:
             cmd += ["--cycles", str(nautilus_cycles),
                     "--step-scale", str(nautilus_step_scale)]
+
+        # RAG reset: с прохода reset_rag_pass используем bent seeds (математически
+        # оптимальные архетипы, cosine diversity 33% лучше обычных seed).
+        # Устраняет saturation из-за diversity collapse в поздних проходах.
+        if pass_i >= reset_rag_pass:
+            cmd += ["--bent-seeds"]
+            print(f"  [RAG reset] Проход {pass_i}: используем bent seeds (meta_q6)")
+
+        # Адаптивный LR: если предыдущий проход дал LCI > 3.0, снижаем lr.
+        # Устраняет деградацию сильных моделей (LCI 3.141 → 2.975).
+        if adaptive_lr and pass_i > 1 and history:
+            prev_lci = history[-1].get("avg_lci", 0.0)
+            if prev_lci > 3.0 and not fast:
+                cmd += ["--lr", "5e-6"]
+                print(f"  [adaptive LR] LCI={prev_lci:.3f} > 3.0 → lr=5e-6")
 
         run_phase(cmd, f"Nautilus-4agent проход {pass_i}/{n_nautilus_passes}")
 
@@ -223,18 +242,26 @@ def main():
                         help="Быстрый тест (2 цикла, 0.3× шаг)")
     parser.add_argument("--output-dir",    type=str, default="pipeline_runs",
                         dest="output_dir")
+    parser.add_argument("--no-adaptive-lr", action="store_true",
+                        dest="no_adaptive_lr",
+                        help="Отключить адаптивный LR (по умолчанию включён)")
+    parser.add_argument("--reset-rag-pass", type=int, default=3,
+                        dest="reset_rag_pass",
+                        help="С какого прохода сбрасывать RAG через bent seeds (default=3)")
     args = parser.parse_args()
 
     run_pipeline(
-        start_checkpoint  = args.checkpoint,
-        n_nautilus_passes = args.passes,
-        nautilus_cycles   = args.nautilus_cycles,
+        start_checkpoint    = args.checkpoint,
+        n_nautilus_passes   = args.passes,
+        nautilus_cycles     = args.nautilus_cycles,
         nautilus_step_scale = args.step_scale,
-        turbine_cycles    = args.turbine_cycles,
-        turbine_spe       = args.turbine_spe,
-        turbine_lci_loss  = args.lci_loss,
-        fast              = args.fast,
-        output_dir        = args.output_dir,
+        turbine_cycles      = args.turbine_cycles,
+        turbine_spe         = args.turbine_spe,
+        turbine_lci_loss    = args.lci_loss,
+        fast                = args.fast,
+        output_dir          = args.output_dir,
+        adaptive_lr         = not args.no_adaptive_lr,
+        reset_rag_pass      = args.reset_rag_pass,
     )
 
 

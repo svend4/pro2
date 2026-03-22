@@ -352,6 +352,20 @@ class GlobalRouter(nn.Module):
         anch = F.normalize(anch, dim=-1)
         self.register_buffer('group_anchors', anch)
 
+        # Hamming prior (hexnet)
+        _sigma_h = 1.5
+        hprior = torch.zeros(64, n_groups)
+        for _h in range(64):
+            for _g_idx, _g in enumerate(group_names):
+                _min_d = min(
+                    bin(_h ^ DOMAIN_Q6_IDX[_d]).count('1')
+                    for _d in DOMAIN_GROUPS[_g]
+                )
+                hprior[_h, _g_idx] = math.exp(-_min_d / _sigma_h)
+        hprior = hprior / hprior.sum(dim=1, keepdim=True).clamp(min=1e-8)
+        self.register_buffer('hamming_prior_matrix', hprior)
+        self.log_hamming_mix = nn.Parameter(torch.tensor(-1.0))
+
     @property
     def temperature(self) -> torch.Tensor:
         return self.log_temp.exp().clamp(0.1, 5.0)
@@ -365,7 +379,11 @@ class GlobalRouter(nn.Module):
         # hexgeom: нормализуем якоря on-the-fly — работает и при загрузке чекпоинта
         anchors_norm  = F.normalize(self.group_anchors, dim=-1)
         group_scores  = soft_hex @ anchors_norm.T
-        group_weights = F.softmax(group_scores, dim=-1)
+        group_weights_learned = F.softmax(group_scores, dim=-1)
+        # Hamming prior blend (hexnet)
+        hamming_prior = hex_w.detach() @ self.hamming_prior_matrix
+        hamming_alpha = torch.sigmoid(self.log_hamming_mix)
+        group_weights = (1.0 - hamming_alpha) * group_weights_learned + hamming_alpha * hamming_prior
         mean_w  = group_weights.mean(dim=(0, 1))
         lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()
         return group_weights, lb_loss
@@ -501,6 +519,27 @@ class MultiScaleGlobalRouter(nn.Module):
         # Обучаемый скаляр смешения cosine↔WHT; init=-2 → sigmoid≈0.12 (WHT слаб
         # при старте, позволяет загрузить существующий чекпоинт без потери качества)
         self.log_wht_mix = nn.Parameter(torch.tensor(-2.0))
+
+        # ── Hamming geometric prior (hexnet integration) ──────────────────────
+        # Для каждой из 64 гексаграмм Q6: насколько близко она к каждой группе?
+        # hamming_prior_matrix[h, g] = exp(-min_hamming(h, anchors_g) / sigma)
+        # Решает коллапс gate≈0.49: геометрический prior не вырождается в константу.
+        # sigma=1.5: мягкий falloff (полный охват за ~3 шага Хэмминга)
+        _sigma_h = 1.5
+        hprior = torch.zeros(64, n_groups)
+        for _h in range(64):
+            for _g_idx, _g in enumerate(group_names):
+                _min_d = min(
+                    bin(_h ^ DOMAIN_Q6_IDX[_d]).count('1')
+                    for _d in DOMAIN_GROUPS[_g]
+                )
+                hprior[_h, _g_idx] = math.exp(-_min_d / _sigma_h)
+        hprior = hprior / hprior.sum(dim=1, keepdim=True).clamp(min=1e-8)
+        self.register_buffer('hamming_prior_matrix', hprior)  # (64, n_groups)
+        # Обучаемый blend: hamming_alpha = sigmoid(log_hamming_mix)
+        # init=-1.0 → alpha≈0.27: лёгкое геометрическое смещение.
+        # Не ломает существующие чекпоинты (strict=False загрузка).
+        self.log_hamming_mix = nn.Parameter(torch.tensor(-1.0))
 
     @staticmethod
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
@@ -723,7 +762,15 @@ class MultiScaleGlobalRouter(nn.Module):
             mixed_scores = (scale_mix[0] * score_q2 +
                             scale_mix[1] * score_q3 +
                             scale_mix[2] * score_q6)
-        group_weights = F.softmax(mixed_scores, dim=-1)                # (B, T, n_groups)
+        group_weights_learned = F.softmax(mixed_scores, dim=-1)        # (B, T, n_groups)
+
+        # ── Hamming geometric prior blend (hexnet) ───────────────────────────
+        # hex_weights → (B, T, 64) @ (64, n_groups) = (B, T, n_groups)
+        # detach(): prior не backprop через hex_weights повторно
+        hamming_prior = hex_weights.detach() @ self.hamming_prior_matrix
+        hamming_alpha = torch.sigmoid(self.log_hamming_mix)            # ∈ (0, 1)
+        group_weights = ((1.0 - hamming_alpha) * group_weights_learned
+                         + hamming_alpha * hamming_prior)              # (B, T, n_groups)
 
         # ── Load-balance loss ────────────────────────────────────────────────
         mean_gw  = group_weights.mean(dim=(0, 1))
