@@ -680,3 +680,144 @@ class MatrixGrammar(nn.Module):
         readout = torch.bmm(weights, slots_processed)  # (B, T, D)
 
         return self.norm_out(self.readout(readout)) * self.scale
+
+
+# ============================================================
+# Шаг 1 + Шаг 2: ArchetypalInterlingua + TernaryQuantizerFixed
+# ============================================================
+
+class TernaryQuantizerFixed(nn.Module):
+    """Gumbel-Softmax квантизатор с cosine annealing температуры.
+
+    Исправляет проблему v59: STE давал жёсткие триты слишком рано,
+    Gumbel-Softmax даёт дифференцируемый путь на всём протяжении.
+
+    Args:
+        n_archetypes: число архетипов (гексаграмм)
+        warmup_steps: полное расписание охлаждения (рекомендуется 3000)
+        min_temp: конечная «жёсткая» температура
+    """
+
+    def __init__(self, n_archetypes: int = 64,
+                 warmup_steps: int = 3000,
+                 min_temp: float = 0.05):
+        super().__init__()
+        self.n_archetypes = n_archetypes
+        self.warmup_steps = warmup_steps
+        self.min_temp = min_temp
+        self.register_buffer('step', torch.tensor(0, dtype=torch.long))
+
+    def get_temperature(self) -> float:
+        """Cosine annealing: 1.0 → min_temp за warmup_steps шагов."""
+        progress = min(self.step.item() / max(self.warmup_steps, 1), 1.0)
+        return 1.0 - (1.0 - self.min_temp) * (1 - math.cos(math.pi * progress)) / 2
+
+    def quantize(self, logits: Tensor) -> Tensor:
+        """Квантизует логиты в мягкие триты через Gumbel-Softmax.
+
+        Args:
+            logits: (B, n_archetypes) — сырые скоры
+
+        Returns:
+            trit: (B, n_archetypes) ∈ [-1, +1], мягкие при обучении,
+                  жёсткие {-1, 0, +1} при инференсе
+        """
+        T = self.get_temperature()
+        if self.training:
+            # Три категории: score для {-1, 0, +1}
+            logits_3 = torch.stack([
+                -logits,                    # score для -1
+                torch.zeros_like(logits),   # score для 0
+                logits,                     # score для +1
+            ], dim=-1)  # (B, n_archetypes, 3)
+            soft = F.gumbel_softmax(logits_3, tau=T, hard=False, dim=-1)
+            # Скалярное представление: p(+1) - p(-1)
+            trit = soft[..., 2] - soft[..., 0]  # (B, n_archetypes) ∈ (-1, +1)
+            self.step.add_(1)
+            return trit
+        else:
+            # Инференс — жёсткая квантизация
+            return torch.sign(logits)
+
+
+class ArchetypalInterlingua(nn.Module):
+    """Единое пространство архетипов через тернарные коды.
+
+    ИСПРАВЛЕНИЕ v59: per-source trit_proj вместо одного общего.
+    Каждый источник имеет свой проектор → разные триты → различимые архетипы.
+
+    Добавлен diversity_loss: штраф если источники дают одинаковые паттерны.
+
+    Args:
+        d_model: размерность модели
+        n_sources: число входных источников
+        n_archetypes: число архетипов (64 = гексаграммы Q6)
+        warmup_steps: шаги для temperature annealing
+    """
+
+    def __init__(self, d_model: int, n_sources: int = 6,
+                 n_archetypes: int = 64, warmup_steps: int = 3000):
+        super().__init__()
+        self.d_model = d_model
+        self.n_sources = n_sources
+        self.n_archetypes = n_archetypes
+
+        # Per-source проекторы — ключевое исправление
+        self.trit_projs = nn.ModuleList([
+            nn.Linear(d_model, n_archetypes, bias=False)
+            for _ in range(n_sources)
+        ])
+
+        # Квантизатор с Gumbel-Softmax
+        self.quantizer = TernaryQuantizerFixed(
+            n_archetypes=n_archetypes,
+            warmup_steps=warmup_steps,
+        )
+
+        # Выходной декодер: консенсус-трит → d_model
+        self.decoder = nn.Linear(n_archetypes, d_model, bias=False)
+        self.out_norm = nn.LayerNorm(d_model)
+        self.scale = nn.Parameter(torch.tensor(0.1))
+
+        # Последний посчитанный diversity_loss
+        self.diversity_loss: Tensor = torch.tensor(0.0)
+
+    def forward(self, source_outputs: list) -> Tensor:
+        """Вычисляет консенсус-архетип через per-source тернарные коды.
+
+        Args:
+            source_outputs: list of (B, T, d_model), длина = n_sources
+
+        Returns:
+            consensus_repr: (B, T, d_model) — архетипическое представление
+        """
+        trits = []
+        for i, h in enumerate(source_outputs):
+            # Pool по времени для глобального архетипа
+            h_pooled = h.mean(dim=1)  # (B, d_model)
+            logits = self.trit_projs[i](h_pooled)  # (B, n_archetypes)
+            t = self.quantizer.quantize(logits)
+            trits.append(t)
+
+        # Стек тритов: (n_sources, B, n_archetypes)
+        trit_stack = torch.stack(trits, dim=0)
+
+        # Diversity loss: штраф за одинаковые паттерны между источниками
+        norms = trit_stack.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        normed = trit_stack / norms
+        # cosine similarity между источниками усреднённая по батчу
+        cosine_matrix = torch.einsum('nbd,mbd->nm', normed, normed) / normed.shape[1]
+        n = cosine_matrix.shape[0]
+        off_diag_mask = 1 - torch.eye(n, device=cosine_matrix.device)
+        off_diag_sum = (cosine_matrix * off_diag_mask).sum()
+        self.diversity_loss = off_diag_sum / max(n * (n - 1), 1)
+
+        # Консенсус = среднее по источникам
+        consensus = trit_stack.mean(dim=0)  # (B, n_archetypes)
+
+        # Декодируем обратно в d_model
+        # Расширяем до seq_len через broadcast
+        T = source_outputs[0].shape[1]
+        decoded = self.decoder(consensus).unsqueeze(1).expand(-1, T, -1)  # (B, T, d_model)
+
+        return self.out_norm(decoded) * self.scale
