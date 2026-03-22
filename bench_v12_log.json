@@ -1,88 +1,88 @@
 [
   {
     "cycle": 1,
-    "lci_r0": 2.9853,
+    "lci_r0": 2.9722,
     "rings": {
       "META": {
         "steps": 3,
-        "lci_r_fwd": 2.9452,
-        "lci_r_rev": 2.9452,
-        "avg_lci": 2.9452,
+        "lci_r_fwd": 2.9584,
+        "lci_r_rev": 2.9584,
+        "avg_lci": 2.9584,
         "mode": "bidir_crossing"
       },
       "ABSTRACT": {
         "steps": 6,
-        "lci_r": 2.9094,
-        "lci_emb": 0.1387,
+        "lci_r": 2.9266,
+        "lci_emb": 0.0912,
         "early_exit": true,
         "gen": 2,
         "mode": "roundabout"
       },
       "DYNAMIC": {
         "steps": 9,
-        "lci_r": 2.9367,
-        "lci_emb": 0.2212,
+        "lci_r": 2.8979,
+        "lci_emb": 0.1519,
         "early_exit": true,
         "gen": 3,
         "mode": "roundabout"
       },
       "CONCRETE": {
         "steps": 12,
-        "lci_r": 2.9847,
-        "lci_emb": 0.4729,
+        "lci_r": 2.8421,
+        "lci_emb": 0.1894,
         "early_exit": true,
         "gen": 4,
         "mode": "roundabout"
       }
     },
-    "lci_r_final": 2.9721,
-    "lci_emb_final": 0.7048,
+    "lci_r_final": 2.8419,
+    "lci_emb_final": 0.3134,
     "n_resonant": 4,
     "kirchhoff": true,
     "n_generated": 13,
-    "elapsed_s": 13.83
+    "elapsed_s": 14.22
   },
   {
     "cycle": 2,
-    "lci_r0": 2.9721,
+    "lci_r0": 2.8419,
     "rings": {
       "META": {
         "steps": 3,
-        "lci_r_fwd": 3.0082,
-        "lci_r_rev": 2.9598,
-        "avg_lci": 2.984,
+        "lci_r_fwd": 2.9372,
+        "lci_r_rev": 2.8852,
+        "avg_lci": 2.9112,
         "mode": "bidir_crossing"
       },
       "ABSTRACT": {
         "steps": 6,
-        "lci_r": 3.0238,
-        "lci_emb": 0.4055,
+        "lci_r": 2.9018,
+        "lci_emb": 0.3525,
         "early_exit": true,
         "gen": 2,
         "mode": "roundabout"
       },
       "DYNAMIC": {
         "steps": 9,
-        "lci_r": 3.0173,
-        "lci_emb": 0.551,
+        "lci_r": 2.8773,
+        "lci_emb": 0.3216,
         "early_exit": true,
         "gen": 3,
         "mode": "roundabout"
       },
       "CONCRETE": {
         "steps": 12,
-        "lci_r": 3.0377,
-        "lci_emb": 0.5706,
+        "lci_r": 2.8151,
+        "lci_emb": 0.5284,
         "early_exit": true,
         "gen": 4,
         "mode": "roundabout"
       }
     },
-    "lci_r_final": 3.0215,
-    "lci_emb_final": 0.4619,
+    "lci_r_final": 2.8182,
+    "lci_emb_final": 0.113,
     "n_resonant": 4,
     "kirchhoff": true,
     "n_generated": 13,
-    "elapsed_s": 13.23
+    "elapsed_s": 13.81
   }
 ]
