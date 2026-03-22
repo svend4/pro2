@@ -104,6 +104,7 @@ def run_pipeline(
     output_dir: str,
     adaptive_lr: bool = True,
     reset_rag_pass: int = 3,
+    lr_threshold: float = 2.8,
 ) -> Dict:
     """
     Запустить полный curriculum-пайплайн и вернуть итоговые метрики.
@@ -147,13 +148,14 @@ def run_pipeline(
             cmd += ["--bent-seeds"]
             print(f"  [RAG reset] Проход {pass_i}: используем bent seeds (meta_q6)")
 
-        # Адаптивный LR: если предыдущий проход дал LCI > 3.0, снижаем lr.
-        # Устраняет деградацию сильных моделей (LCI 3.141 → 2.975).
+        # Адаптивный LR: снижаем lr при LCI > 2.8 начиная со 2-го прохода.
+        # Порог снижен 3.0 → 2.8: устраняет saturation на 3-м проходе
+        # (гипотеза: lr=1e-5 вызывает forgetting когда модель уже хорошая).
         if adaptive_lr and pass_i > 1 and history:
             prev_lci = history[-1].get("avg_lci", 0.0)
-            if prev_lci > 3.0 and not fast:
+            if prev_lci > lr_threshold and not fast:
                 cmd += ["--lr", "5e-6"]
-                print(f"  [adaptive LR] LCI={prev_lci:.3f} > 3.0 → lr=5e-6")
+                print(f"  [adaptive LR] LCI={prev_lci:.3f} > {lr_threshold} → lr=5e-6")
 
         run_phase(cmd, f"Nautilus-4agent проход {pass_i}/{n_nautilus_passes}")
 
@@ -248,6 +250,9 @@ def main():
     parser.add_argument("--reset-rag-pass", type=int, default=3,
                         dest="reset_rag_pass",
                         help="С какого прохода сбрасывать RAG через bent seeds (default=3)")
+    parser.add_argument("--lr-threshold",  type=float, default=2.8,
+                        dest="lr_threshold",
+                        help="LCI-порог для снижения lr до 5e-6 (default=2.8, было 3.0)")
     args = parser.parse_args()
 
     run_pipeline(
@@ -262,6 +267,7 @@ def main():
         output_dir          = args.output_dir,
         adaptive_lr         = not args.no_adaptive_lr,
         reset_rag_pass      = args.reset_rag_pass,
+        lr_threshold        = args.lr_threshold,
     )
 
 

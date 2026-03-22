@@ -131,28 +131,29 @@ class AnalogyPair(nn.Module):
 class CrossDomainAnalogy(nn.Module):
     """Модуль межэкспертных аналогий.
 
-    Для 6 экспертов создаёт C(6,2)=15 пар аналогий:
-    MATH↔CODE, MATH↔HUMAN, MATH↔SYSTEM, MATH↔RECON, MATH↔INFO,
-    CODE↔HUMAN, CODE↔SYSTEM, CODE↔RECON, CODE↔INFO,
-    HUMAN↔SYSTEM, HUMAN↔RECON, HUMAN↔INFO,
-    SYSTEM↔RECON, SYSTEM↔INFO,
-    RECON↔INFO
+    Для 6 экспертов создаёт полную матрицу 6×6=36 взаимодействий:
+      - 15 верхних пар (A→B undirected, исходная реализация)
+      - 15 нижних пар (B→A reverse direction, новое)
+      - 6 диагональных (A→A self-analogy: как домен аналогичен себе через время)
 
-    Каждая пара может обнаружить и использовать аналогии:
-    - MATH↔HUMAN: математические закономерности в поведении/психотипах
-    - CODE↔SYSTEM: паттерны проектирования ↔ системная архитектура
-    - HUMAN↔INFO: этические принципы ↔ организация знаний
+    Всего: 36 направленных взаимодействий = полный граф (Aut(Q6) orbits).
 
-    Аналогии используются только когда сила аналогии (similarity)
-    превышает порог — иначе домены остаются независимыми.
+    Ключевые направленные аналогии:
+      MATH→CODE: формальная структура → алгоритм
+      CODE→MATH: алгоритм → формальная верификация
+      HUMAN→SYSTEM: этические принципы → системные ограничения
+      SYSTEM→HUMAN: системная архитектура → социальные структуры
+      MATH→MATH: самоотсылка (Гёдель) — математика порождает математику
     """
 
     EXPERT_NAMES = ['MATH', 'CODE', 'HUMAN', 'SYSTEM', 'RECON', 'INFO']
 
-    def __init__(self, d_model, n_experts=6, d_analogy=None, threshold=0.3):
+    def __init__(self, d_model, n_experts=6, d_analogy=None, threshold=0.3,
+                 directed=True):
         super().__init__()
         self.n_experts = n_experts
         self.threshold = threshold
+        self.directed = directed
         names = self.EXPERT_NAMES[:n_experts]
 
         # ProverbCondenser для каждого эксперта
@@ -160,13 +161,15 @@ class CrossDomainAnalogy(nn.Module):
             name: ProverbCondenser(d_model) for name in names
         })
 
-        # AnalogyPair для каждой пары экспертов
+        # AnalogyPair для всех 36 клеток матрицы 6×6
+        # Ключ: "{from}_{to}" — направленная аналогия (A→B ≠ B→A)
         self.pairs = nn.ModuleDict()
-        self.pair_keys = []
-        for i, j in itertools.combinations(range(n_experts), 2):
-            key = f"{names[i]}_{names[j]}"
-            self.pairs[key] = AnalogyPair(d_model, d_analogy)
-            self.pair_keys.append((key, i, j))
+        self.pair_keys = []  # [(key, i, j)] где i=source, j=target
+        for i in range(n_experts):
+            for j in range(n_experts):
+                key = f"{names[i]}_{names[j]}"
+                self.pairs[key] = AnalogyPair(d_model, d_analogy)
+                self.pair_keys.append((key, i, j))
 
         # Финальная проекция: объединяет все инсайты
         self.output_proj = nn.Sequential(
@@ -248,8 +251,12 @@ def demo_cross_domain_analogy():
     module = CrossDomainAnalogy(d_model, n_experts)
     total_params = sum(p.numel() for p in module.parameters())
     print(f"CrossDomainAnalogy parameters: {total_params:,}")
-    print(f"Number of analogy pairs: {len(module.pair_keys)}")
-    print(f"Pairs: {[k for k, _, _ in module.pair_keys]}")
+    print(f"Number of analogy pairs: {len(module.pair_keys)} (6×6=36 directed)")
+    # Show diagonal (self-analogies) and off-diagonal separately
+    diag = [(k, i, j) for k, i, j in module.pair_keys if i == j]
+    off  = [(k, i, j) for k, i, j in module.pair_keys if i != j]
+    print(f"  Diagonal (self): {[k for k, _, _ in diag]}")
+    print(f"  Off-diagonal directed: {len(off)} pairs")
     print()
 
     # Симулируем
