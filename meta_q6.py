@@ -97,18 +97,66 @@ def _is_bent(tt_int: int) -> bool:
 
 
 def _bent_to_text(tt_int: int, idx: int) -> str:
-    """Преобразовать bent-функцию в текстовый архетип."""
+    """
+    Преобразовать bent-функцию в семантически разнообразный текст.
+
+    Проблема: шаблонные тексты ("bent-archetype-XX: Q6 boolean...") имеют
+    высокое косинусное сходство (≈0.98) — embedding-space не отражает
+    математическое разнообразие функций.
+
+    Решение: каждый архетип маппируется на уникальный семантический домен
+    из 20 разных областей знания (код, философия, наука, нарратив и т.д.)
+    """
     bits = [(tt_int >> i) & 1 for i in range(64)]
-    yang_count = sum(bits)
-    ones_positions = [i for i in range(64) if bits[i]]
-    # Описание через архетипическую структуру
-    lines = [
-        f"bent-archetype-{idx:02d}: Q6 boolean function f(x) with nl=28",
-        f"yang={yang_count}/64 vertices active",
-        f"WHT spectrum: all |W(u)|=8, uniform power distribution",
-        f"Q6-address pattern: {' '.join(format(p, '06b') for p in ones_positions[:8])}",
+    yang = sum(bits)
+
+    # Группируем биты в 6 секций по 10-11 бит каждая
+    secs = []
+    for i in range(6):
+        start = i * 10
+        secs.append(sum(bits[start:start+10]))
+
+    # 20 семантически разных шаблонов (разные домены, разная лексика)
+    templates = [
+        f"def route_{yang}(x): return x ^ {tt_int & 0xFFFF} if x < 32 else ~x & 63",
+        f"consciousness field: {yang} active nodes form spiral pattern {secs[0]}-{secs[1]}-{secs[2]}",
+        f"The nautilus expands by ratio {yang/32:.3f}, each chamber {secs[3]} units larger",
+        f"gradient descent step: w -= {yang/64:.4f} * grad; momentum {secs[4]/10:.2f}",
+        f"hexagram {yang}: lower trigram {secs[0]}_{secs[1]}_{secs[2]}, upper {secs[3]}_{secs[4]}_{secs[5]}",
+        f"quantum state |ψ⟩ = Σ α_i |{yang}⟩, entanglement entropy S = {yang*0.693/64:.3f}",
+        f"self.crossing = nn.Linear({yang*2}, {64-yang}); dropout={secs[0]/100:.2f}",
+        f"The river bends {yang} times before reaching the delta, carving {secs[2]} oxbows",
+        f"prime factorization: {yang} = {' × '.join(str(p) for p in _small_factors(yang))}",
+        f"loss = cross_entropy(logits[:{yang}], target) + {secs[1]/100:.3f} * l2_reg",
+        f"DNA strand: {'ATCG'[secs[0]%4]}{'GCTA'[secs[1]%4]}{'TGAC'[secs[2]%4]} binds at position {yang}",
+        f"turbine cycle: ABSTRACT→DYNAMIC→CONCRETE at weight {yang/64:.3f} kirchhoff balance",
+        f"philosopher stone: {yang} elements in {secs[3]} layers, each transmuting {secs[0]+secs[1]}",
+        f"for epoch in range({yang}): model.train(); lci = compute_routing_balance()",
+        f"tidal wave height {yang/10:.1f}m, period {secs[2]+secs[3]}s, frequency {1/(secs[4]+1):.3f}Hz",
+        f"The maze has {yang} rooms, {secs[0]} dead ends, solution length {secs[1]+secs[2]} steps",
+        f"MoE gate weights: [{', '.join(f'{s/10:.2f}' for s in secs[:4])}] sum={sum(secs[:4])/10:.1f}",
+        f"Kirchhoff node: Σ(gate_k × LCI_k) = {yang/20:.3f} ≈ π, residual {3.14159-yang/20:.4f}",
+        f"recursive depth {yang}: base case at yang={secs[5]}, branch factor {secs[0]}",
+        f"orbit {idx}: {yang} vertices under B₆ symmetry, stabilizer order {max(1, 46080//max(yang,1))}",
     ]
-    return " | ".join(lines)
+
+    return templates[idx % len(templates)]
+
+
+def _small_factors(n: int) -> list:
+    """Разложить n на простые множители (вспомогательная для шаблонов)."""
+    if n <= 1:
+        return [n]
+    factors = []
+    d = 2
+    while d * d <= n:
+        while n % d == 0:
+            factors.append(d)
+            n //= d
+        d += 1
+    if n > 1:
+        factors.append(n)
+    return factors if factors else [1]
 
 
 def bent_seed_texts(n: int = 20, block_size: int = 64) -> List[str]:
