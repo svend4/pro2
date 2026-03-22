@@ -45,6 +45,121 @@ _ROOT = os.path.dirname(os.path.abspath(__file__))
 _PI   = math.pi
 
 
+# ── Реальные метрики качества (--quality флаг) ────────────────────────────────
+
+def compute_quality_metrics(checkpoint_path: str, n_val: int = 20) -> Dict:
+    """Вычисляет реальные метрики качества на валидационной выборке.
+
+    Метрики:
+      ppl_val    — perplexity на n_val текстах из корпуса (ниже = лучше)
+      diversity  — среднее попарное косинусное расстояние эмбеддингов (выше = лучше)
+      coherence  — среднее косинусное сходство между последовательными эмбеддингами
+                   (ближе к 0.5 = разнообразно, но связно)
+
+    Возвращает пустой dict если что-то пошло не так.
+    """
+    try:
+        import torch
+        import torch.nn.functional as F
+        from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
+        from yijing_transformer.models.hierarchical_moe import HMoEConfig, HierarchicalMoEFFN
+        from self_train_hmoe import _get_emb, MODEL_CFG, HMOE_CFG
+
+        # Загружаем модель
+        cfg   = Variant3Config(**MODEL_CFG)
+        model = Variant3GPT(cfg)
+        for block in model.blocks:
+            if hasattr(block, 'hmoe'):
+                block.hmoe = HierarchicalMoEFFN(HMOE_CFG)
+        if not os.path.exists(checkpoint_path):
+            return {}
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        model.load_state_dict(ckpt.get("model_state", ckpt), strict=False)
+        model.eval()
+
+        block_size = MODEL_CFG["block_size"] - 1
+
+        # Собираем валидационные тексты из корпуса
+        val_texts = []
+        corpus_dirs = [
+            os.path.join(_ROOT, "data", "svend4_corpus"),
+        ]
+        for cdir in corpus_dirs:
+            if not os.path.isdir(cdir):
+                continue
+            for root, _, files in os.walk(cdir):
+                for fname in files:
+                    if fname.endswith(".txt") and len(val_texts) < n_val * 2:
+                        try:
+                            with open(os.path.join(root, fname), encoding="utf-8",
+                                      errors="ignore") as f:
+                                text = f.read(512).strip()
+                            if len(text) > 30:
+                                val_texts.append(text)
+                        except Exception:
+                            pass
+
+        if not val_texts:
+            return {}
+        val_texts = val_texts[:n_val]
+
+        # ── Perplexity ────────────────────────────────────────────────────────
+        ppls = []
+        embs = []
+        with torch.no_grad():
+            for text in val_texts:
+                # Кодируем текст как байты (vocab_size=256 = byte-level)
+                bs = text.encode("utf-8", errors="replace")[:block_size + 1]
+                if len(bs) < 2:
+                    continue
+                ids = torch.tensor(list(bs), dtype=torch.long).unsqueeze(0)
+                inp, tgt = ids[:, :-1], ids[:, 1:]
+                if inp.shape[1] < 1:
+                    continue
+                _, loss, _ = model(inp, targets=tgt)
+                if loss is not None and not torch.isnan(loss):
+                    ppls.append(math.exp(min(loss.item(), 10.0)))
+                # Эмбеддинг для diversity/coherence
+                h = model.tok_emb(ids)
+                for block in model.blocks:
+                    h = block(h)
+                emb = h.mean(dim=1).squeeze(0)
+                embs.append(F.normalize(emb, dim=-1).cpu())
+
+        ppl_val = sum(ppls) / len(ppls) if ppls else None
+
+        # ── Diversity: среднее попарное косинусное расстояние ─────────────────
+        diversity = None
+        if len(embs) >= 2:
+            dists = []
+            for i in range(min(len(embs), 10)):
+                for j in range(i + 1, min(len(embs), 10)):
+                    cos_sim = F.cosine_similarity(
+                        embs[i].unsqueeze(0), embs[j].unsqueeze(0)
+                    ).item()
+                    dists.append(1.0 - cos_sim)  # расстояние = 1 - сходство
+            diversity = sum(dists) / len(dists) if dists else None
+
+        # ── Coherence: сходство последовательных эмбеддингов ─────────────────
+        coherence = None
+        if len(embs) >= 2:
+            sims = [
+                F.cosine_similarity(embs[i].unsqueeze(0), embs[i+1].unsqueeze(0)).item()
+                for i in range(len(embs) - 1)
+            ]
+            coherence = sum(sims) / len(sims) if sims else None
+
+        return {
+            "ppl_val":   round(ppl_val,   3) if ppl_val   else None,
+            "diversity": round(diversity, 3) if diversity  else None,
+            "coherence": round(coherence, 3) if coherence  else None,
+            "n_val":     len(ppls),
+        }
+
+    except Exception as e:
+        return {"quality_error": str(e)[:80]}
+
+
 # ── Конфигурации вариантов ────────────────────────────────────────────────────
 
 VARIANTS = [
@@ -256,7 +371,8 @@ def extract_metrics(log: List[Dict], variant_type: str) -> Dict:
 
 # ── Запуск одного варианта ────────────────────────────────────────────────────
 
-def run_variant(variant: Dict, checkpoint: str, only_ids: Optional[List[int]]) -> Optional[Dict]:
+def run_variant(variant: Dict, checkpoint: str, only_ids: Optional[List[int]],
+                compute_quality: bool = False) -> Optional[Dict]:
     if only_ids and variant["id"] not in only_ids:
         return None
 
@@ -309,9 +425,17 @@ def run_variant(variant: Dict, checkpoint: str, only_ids: Optional[List[int]]) -
     metrics["elapsed_s"] = round(elapsed, 1)
     metrics["error"]     = False
 
+    # Реальные метрики качества (--quality флаг)
+    if compute_quality:
+        qm = compute_quality_metrics(save_path)
+        metrics.update(qm)
+        ppl_str = f"  ppl={qm.get('ppl_val','?')}  div={qm.get('diversity','?')}  coh={qm.get('coherence','?')}"
+    else:
+        ppl_str = ""
+
     print(f"  → score={metrics['score']:.3f}  avg_LCI_r={metrics['avg_lci_r']:.3f}  "
           f"resonance={metrics['resonance_rate']:.0%}  kirchhoff={metrics['kirchhoff_ok']:.0%}  "
-          f"gen/cycle={metrics['gen_per_cycle']:.0f}  t={elapsed:.1f}s")
+          f"gen/cycle={metrics['gen_per_cycle']:.0f}  t={elapsed:.1f}s{ppl_str}")
 
     return metrics
 
@@ -330,11 +454,17 @@ def print_table(results: List[Dict]):
     valid = [r for r in results if not r.get("error")]
     valid_sorted = sorted(valid, key=lambda r: r["score"], reverse=True)
 
+    has_quality = any(r.get("ppl_val") is not None for r in valid_sorted)
     for rank, r in enumerate(valid_sorted, 1):
-        marker = " ★" if rank == 1 else ("  " if rank > 3 else "  ")
-        print(f"  {r['id']:>2}  {r['name']:<28}  {r['score']:>6.3f}  {r['avg_lci_r']:>6.3f}  "
-              f"{r['resonance_rate']:>5.0%}  {r['kirchhoff_ok']:>6.0%}  "
-              f"{r['gen_per_cycle']:>5.0f}  {r['elapsed_s']:>6.1f}{marker}")
+        marker = " ★" if rank == 1 else "  "
+        line = (f"  {r['id']:>2}  {r['name']:<28}  {r['score']:>6.3f}  {r['avg_lci_r']:>6.3f}  "
+                f"{r['resonance_rate']:>5.0%}  {r['kirchhoff_ok']:>6.0%}  "
+                f"{r['gen_per_cycle']:>5.0f}  {r['elapsed_s']:>6.1f}{marker}")
+        if has_quality:
+            line += (f"  ppl={r.get('ppl_val','?'):>6}  "
+                     f"div={r.get('diversity','?'):>5}  "
+                     f"coh={r.get('coherence','?'):>5}")
+        print(line)
 
     errors = [r for r in results if r.get("error")]
     if errors:
@@ -358,6 +488,8 @@ def main():
                         help="Базовый чекпоинт для всех вариантов")
     parser.add_argument("--variants",   type=str, default="",
                         help="Через запятую: ID вариантов для запуска (пусто = все)")
+    parser.add_argument("--quality",    action="store_true",
+                        help="Вычислять реальные метрики (ppl_val, diversity, coherence)")
     args = parser.parse_args()
 
     only_ids = None
@@ -369,6 +501,8 @@ def main():
     print(f"{'═' * 90}")
     print(f"  Чекпоинт: {args.checkpoint}")
     print(f"  Режим:    --fast (минимальные прогоны для сравнения)")
+    if args.quality:
+        print(f"  Качество: ppl_val + diversity + coherence (--quality)")
     if only_ids:
         print(f"  Варианты: {only_ids}")
     else:
@@ -378,7 +512,8 @@ def main():
     total_t = time.perf_counter()
 
     for variant in VARIANTS:
-        r = run_variant(variant, args.checkpoint, only_ids)
+        r = run_variant(variant, args.checkpoint, only_ids,
+                        compute_quality=args.quality)
         if r is not None:
             results.append(r)
 
