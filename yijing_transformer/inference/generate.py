@@ -11,7 +11,7 @@ def generate(model, sp, prompt="Once upon a time", max_tokens=100,
     if device is None:
         device = next(model.parameters()).device
 
-    block_size = model.cfg.block_size
+    block_size = getattr(model, 'block_size', None) or model.cfg.block_size
     model.eval()
 
     prompt_ids = sp.encode(prompt)
