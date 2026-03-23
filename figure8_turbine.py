@@ -257,7 +257,8 @@ def _lci_loss_step(model: Variant3GPT, ids: torch.Tensor, lr: float) -> float:
                         gw = gw.mean(dim=0)
                     group_weights_list.append(gw)
             x = block(x)
-    except Exception:
+    except Exception as e:
+        print(f"  [warn] _lci_loss_step: {e}")
         return 0.0
 
     if not group_weights_list:

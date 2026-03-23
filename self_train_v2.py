@@ -609,7 +609,8 @@ def stage3_self_dialog(model, good_texts, bad_texts, n_rounds=3,
 
             try:
                 gen_text = bytes([b % 256 for b in gen[0].tolist()]).decode("utf-8", errors="replace")
-            except Exception:
+            except Exception as e:
+                print(f"  [warn] gen decode: {e}")
                 gen_text = ""
 
             accepted = score > 0.52
