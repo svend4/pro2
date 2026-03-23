@@ -31,6 +31,9 @@ import sys
 import time
 from typing import Dict, List
 
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _PI = math.pi

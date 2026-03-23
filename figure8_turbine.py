@@ -55,6 +55,9 @@ import sys
 import time
 from typing import Dict, List, Tuple
 
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import torch
 import torch.nn.functional as F
 
