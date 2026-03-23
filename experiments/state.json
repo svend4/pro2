@@ -62,11 +62,11 @@
     ],
     "hypothesis": "SOLAN-токены с Хэмминг-bias улучшают routing точность",
     "success_criterion": "ксерокс-тест > 80% И cross_domain_diversity > 0.16",
-    "fix": "",
-    "status": "pending",
-    "result_ppl": null,
-    "result_notes": "",
-    "verdict": ""
+    "fix": "Q6 byte embedding + KasatkinQ6Router + routing supervision λ=0.3",
+    "status": "done",
+    "result_ppl": 6.9256,
+    "result_notes": "PPL 6.9 >> baseline 1.51 (λ=0.3 мешает LM). Xerox 0/5: RECON (62%) доминирует из-за 70% RECON в корпусе. diversity=0.0675. glyph_scale уменьшился 0.1→0.059 (модель сама отвергает глифы). Нужен λ<0.05 или adversarial domain balance.",
+    "verdict": "disproven"
   },
   {
     "name": "palace_block_sparse",
