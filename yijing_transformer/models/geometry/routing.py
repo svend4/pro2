@@ -1051,7 +1051,9 @@ class ArchetypalInterlingua(nn.Module):
         self.readout_proj = nn.Linear(d_model, d_model, bias=False)
 
         # Global gate: возможность отключить интерлингву
-        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        # Инициализация с bias=+0.5 → sigmoid ≈ 0.62 — стимулирует использование
+        # interlingua pathway. Если бесполезна — gate быстро уйдёт к 0.
+        self.global_gate = nn.Parameter(torch.tensor(0.5))
         # Learnable scale
         self.scale = nn.Parameter(torch.tensor(0.1))
 
@@ -1068,6 +1070,7 @@ class ArchetypalInterlingua(nn.Module):
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
         self._last_direction_stats = {'spring': 0.0, 'autumn': 0.0}
         self._last_raw_scores = None  # для activation loss
+        self._last_all_trit_scores = None  # для diversity loss (Variant C)
         self._last_archetype_usage = None
 
         # Q6 якоря для корреляционного анализа
@@ -1261,17 +1264,29 @@ class ArchetypalInterlingua(nn.Module):
             if self.training:
                 self._ternary_step += 1
 
+            # Сохраняем все trit scores для diversity loss (Variant C)
+            self._last_all_trit_scores = torch.stack(trit_scores_list, dim=0)  # (N, B, archetypes)
+
             # Тернарное голосование: суммируем триты всех модулей
-            trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)  # (B, n_archetypes)
+            trit_sum = self._last_all_trit_scores.sum(dim=0)  # (B, n_archetypes)
             consensus = torch.tanh(trit_sum / max(self.n_sources, 1))  # (B, n_archetypes)
 
             # Epsilon leak: гарантирует gradient flow к encoders даже при consensus≈0
             weights = (consensus.abs() + 0.01).unsqueeze(-1)  # (B, n_archetypes, 1)
 
-            # Средний вклад, взвешенный консенсусом
+            # Взвешенное агрегирование: каждый источник взвешен по согласованности
+            # с консенсусом. Если source_i проголосовал +1 и consensus=+0.8,
+            # его вес = softmax(trit_i * consensus) — выше для согласных источников.
+            # Это решает проблему mean_contrib: при идентичных голосах работает
+            # как среднее, но при расхождении усиливает мнение большинства.
             stacked = torch.stack(contributions, dim=0)  # (N, B, archetypes, d_model)
-            mean_contrib = stacked.mean(dim=0)  # (B, archetypes, d_model)
-            aggregated = mean_contrib * weights  # (B, archetypes, d_model)
+            all_trits = self._last_all_trit_scores      # (N, B, archetypes)
+            # alignment: насколько каждый source согласен с консенсусом
+            alignment = all_trits * consensus.unsqueeze(0)  # (N, B, archetypes)
+            # softmax по sources: (N, B, archetypes) → мягкие веса
+            source_weights = F.softmax(alignment, dim=0).unsqueeze(-1)  # (N, B, arch, 1)
+            weighted_contrib = (stacked * source_weights).sum(dim=0)  # (B, arch, d_model)
+            aggregated = weighted_contrib * weights  # (B, archetypes, d_model)
 
             # Статистика тритов
             with torch.no_grad():
@@ -1337,6 +1352,30 @@ class ArchetypalInterlingua(nn.Module):
                 if encouragement_weight > 0:
                     activation_loss = -self._last_raw_scores.abs().clamp(max=2.0).mean()
                     loss = loss + 0.02 * encouragement_weight * activation_loss
+
+            # ── Variant C: Diversity loss ───────────────────────────────
+            # Штраф за идентичные тритовые паттерны между источниками.
+            # Без этого per-source trit_projs могут сколлапсировать к одной и той же
+            # проекции (информационный bottleneck v60-v61).
+            # Метрика: средняя попарная cos-similarity между trit-паттернами
+            # источников. При n=2: одна пара. При n>2: C(n,2) пар.
+            if (self._last_all_trit_scores is not None
+                    and self._last_all_trit_scores.shape[0] >= 2):
+                trits = self._last_all_trit_scores  # (N, B, archetypes)
+                N = trits.shape[0]
+                # Flatten batch: (N, B*archetypes)
+                flat = trits.reshape(N, -1)
+                # Normalize per source
+                flat_norm = F.normalize(flat, dim=-1, eps=1e-8)
+                # Pairwise cosine similarity matrix: (N, N)
+                cos_sim = flat_norm @ flat_norm.T
+                # Mean off-diagonal absolute cosine similarity
+                mask = ~torch.eye(N, device=cos_sim.device, dtype=torch.bool)
+                mean_cos = cos_sim[mask].abs().mean()
+                # Цель: cos_sim → 0 (ортогональные голоса).
+                # Вес 0.1 — достаточно сильный чтобы разделить проекции,
+                # но не доминирует над основным CE loss.
+                loss = loss + 0.1 * mean_cos
 
         return loss
 
@@ -1516,7 +1555,7 @@ class BridgedInterlingua(nn.Module):
         self.readout_proj = nn.Linear(d_model, d_model, bias=False)
 
         # Гейты и масштаб
-        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        self.global_gate = nn.Parameter(torch.tensor(0.5))  # bias=+0.5 → sigmoid≈0.62
         self.scale = nn.Parameter(torch.tensor(0.1))
 
         # --- Temperature annealing для тернарной квантизации ---
@@ -1529,6 +1568,7 @@ class BridgedInterlingua(nn.Module):
         self._last_global_gate = 0.5
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
         self._last_direction_stats = {'spring': 0.0, 'autumn': 0.0}
+        self._last_all_trit_scores = None  # для diversity loss
         self._last_archetype_usage = None
         self._last_bridge_compatibility = []
         self._last_raw_scores = None
@@ -1709,13 +1749,19 @@ class BridgedInterlingua(nn.Module):
             if self.training:
                 self._ternary_step += 1
 
-            trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)
+            # Сохраняем все trit scores для diversity loss
+            self._last_all_trit_scores = torch.stack(trit_scores_list, dim=0)  # (K, B, arch)
+
+            trit_sum = self._last_all_trit_scores.sum(dim=0)
             consensus = torch.tanh(trit_sum / max(self.n_bridge_outputs, 1))
             weights = (consensus.abs() + 0.01).unsqueeze(-1)
 
+            # Взвешенное агрегирование: source weight пропорционален согласию
             stacked = torch.stack(contributions, dim=0)
-            mean_contrib = stacked.mean(dim=0)
-            aggregated = mean_contrib * weights
+            alignment = self._last_all_trit_scores * consensus.unsqueeze(0)
+            source_weights = F.softmax(alignment, dim=0).unsqueeze(-1)
+            weighted_contrib = (stacked * source_weights).sum(dim=0)
+            aggregated = weighted_contrib * weights
 
             with torch.no_grad():
                 all_trits = torch.stack(trit_scores_list, dim=0)
@@ -1768,6 +1814,18 @@ class BridgedInterlingua(nn.Module):
                 if encouragement_weight > 0:
                     activation_loss = -self._last_raw_scores.abs().clamp(max=2.0).mean()
                     loss = loss + 0.02 * encouragement_weight * activation_loss
+
+            # Diversity loss (Variant C) — аналогично ArchetypalInterlingua
+            if (self._last_all_trit_scores is not None
+                    and self._last_all_trit_scores.shape[0] >= 2):
+                trits = self._last_all_trit_scores
+                N = trits.shape[0]
+                flat = trits.reshape(N, -1)
+                flat_norm = F.normalize(flat, dim=-1, eps=1e-8)
+                cos_sim = flat_norm @ flat_norm.T
+                mask = ~torch.eye(N, device=cos_sim.device, dtype=torch.bool)
+                mean_cos = cos_sim[mask].abs().mean()
+                loss = loss + 0.1 * mean_cos
 
         return loss
 
