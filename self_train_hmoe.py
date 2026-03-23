@@ -56,7 +56,7 @@ from yijing_transformer.models.hierarchical_moe import (
 # ── Константы ─────────────────────────────────────────────────────────────────
 
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 MODEL_CFG = dict(
     vocab_size         = 256,
@@ -674,7 +674,7 @@ def main():
             block.hmoe = HierarchicalMoEFFN(HMOE_CFG)
 
     if os.path.exists(args.checkpoint):
-        ckpt = torch.load(args.checkpoint, map_location="cpu")
+        ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
         try:
             model.load_state_dict(ckpt["model_state"], strict=False)
             raw = ckpt.get("next_phase")

@@ -57,7 +57,7 @@ from self_train_hmoe import (
     _get_emb, _get_moes, _freeze_all_except, MODEL_CFG, _LCI_EPSILON,
 )
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 
 # Специализации агентов (из data7: разные роли торговых представителей)
@@ -381,7 +381,7 @@ def _load_model(path: str) -> Variant3GPT:
     cfg = Variant3Config(**MODEL_CFG)
     m = Variant3GPT(cfg)
     if os.path.exists(path):
-        ck = torch.load(path, map_location=DEVICE, weights_only=False)
+        ck = torch.load(path, map_location=DEVICE, weights_only=True)
         m.load_state_dict(ck.get("model_state", ck), strict=False)
         print(f"  Загружен: {path}")
     else:

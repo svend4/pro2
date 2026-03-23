@@ -48,7 +48,7 @@ random.seed(0)
 
 _ROOT  = __file__ if os.path.isabs(__file__) else os.path.abspath(__file__)
 _ROOT  = os.path.dirname(_ROOT)
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 BASE_CFG = dict(
     vocab_size=256,

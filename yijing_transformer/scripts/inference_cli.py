@@ -142,7 +142,8 @@ def main():
 
     if args.checkpoint:
         print(f"Loading checkpoint: {args.checkpoint}")
-        ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
+        with torch.serialization.safe_globals([YiJingConfig]):
+            ckpt = torch.load(args.checkpoint, map_location=device, weights_only=True)
         cfg = ckpt['config']
         model = YiJingGPT(cfg).to(device)
         model.load_state_dict(ckpt['model_state_dict'])

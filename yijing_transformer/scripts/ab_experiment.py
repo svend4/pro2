@@ -34,7 +34,7 @@ from models.baseline import VanillaGPT
 # ==================== КОНФИГУРАЦИЯ ЭКСПЕРИМЕНТА ====================
 
 SEED = 42
-DEVICE = 'cpu'  # CPU для воспроизводимости
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TOTAL_STEPS = 1000
 WARMUP_STEPS = 100
 LOG_EVERY = 50

@@ -41,6 +41,9 @@ import sys
 import time
 from typing import Dict, List, Optional
 
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 _PI   = math.pi
 
@@ -73,7 +76,7 @@ def compute_quality_metrics(checkpoint_path: str, n_val: int = 20) -> Dict:
                 block.hmoe = HierarchicalMoEFFN(HMOE_CFG)
         if not os.path.exists(checkpoint_path):
             return {}
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         model.load_state_dict(ckpt.get("model_state", ckpt), strict=False)
         model.eval()
 
@@ -96,8 +99,8 @@ def compute_quality_metrics(checkpoint_path: str, n_val: int = 20) -> Dict:
                                 text = f.read(512).strip()
                             if len(text) > 30:
                                 val_texts.append(text)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"  [warn] skip {fname}: {e}")
 
         if not val_texts:
             return {}

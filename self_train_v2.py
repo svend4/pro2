@@ -26,50 +26,23 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 
 from yijing_transformer.models.variant3 import (
-    Variant3Config, Variant3GPT,
+    Variant3GPT,
     DOMAINS, DOMAIN_ANCHORS,
 )
-from yijing_transformer.models.variant3_extensions import (
-    HexagramEvaluator, TextQualityFilter,
-    get_hexagrams, get_biangua,
-)
+from yijing_transformer.constants import HEX_NAMES
+from self_train_common import CFG, hexagrams, biangua, evaluator, qfilter, text_to_ids
 
 # ─── config ──────────────────────────────────────────────────────────────────
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 random.seed(42)
-
-CFG = Variant3Config(
-    vocab_size=256, block_size=32, d_model=128,
-    n_heads=4, n_layers=4, ffn_mult=4,
-    hamming_lambda=0.15, uncertainty_budget=0.25,
-    dropout=0.05, use_domain_routing=True,
-)
 
 # Веса вспомогательных лоссов
 ALPHA_DOMAIN  = 0.30   # domain triplet
 BETA_QUALITY  = 0.20   # quality contrastive
 GAMMA_GATE    = 0.10   # gate entropy
 
-hexagrams  = get_hexagrams()
-biangua    = get_biangua()
-evaluator  = HexagramEvaluator(threshold=0.01)
-qfilter    = TextQualityFilter(CFG.d_model)
-
-HEX_NAMES = [
-    "Творчество","Исполнение","Начало","Юность","Ожидание","Конфликт",
-    "Войско","Единение","Малое накопление","Хождение","Мир","Застой",
-    "Братство","Великое","Скромность","Воодушевление","Следование","Исправление",
-    "Горное","Созерцание","Укус","Украшение","Распад","Возврат",
-    "Беспорочность","Великое накопление","Питание","Избыток","Бездна","Красота",
-    "Взаимодействие","Длительность","Отступание","Великая мощь","Прогресс","Затмение",
-    "Семья","Разрыв","Малые преграды","Освобождение","Уменьшение","Умножение",
-    "Прорыв","Соединение","Собирание","Подъём","Угнетение","Колодец",
-    "Революция","Котёл","Гром","Гора","Постепенность","Невеста",
-    "Изобилие","Путник","Ветер","Радость","Рассеивание","Ограничение",
-    "Правда","Малые препятствия","Уже завершено","Ещё не завершено",
-]
 def hname(i): return HEX_NAMES[i] if i < len(HEX_NAMES) else f"#{i}"
 
 
@@ -135,10 +108,6 @@ BAD_TEXTS = [
 
 # ─── утилиты ─────────────────────────────────────────────────────────────────
 
-def text_to_ids(text, block_size=32):
-    ids = [b for b in text.encode("utf-8")][:block_size]
-    ids = ids or [0]
-    return torch.tensor(ids, dtype=torch.long)
 
 def ids_pad(ids_list, block_size):
     """Pad list of id tensors to block_size."""
@@ -640,7 +609,8 @@ def stage3_self_dialog(model, good_texts, bad_texts, n_rounds=3,
 
             try:
                 gen_text = bytes([b % 256 for b in gen[0].tolist()]).decode("utf-8", errors="replace")
-            except Exception:
+            except Exception as e:
+                print(f"  [warn] gen decode: {e}")
                 gen_text = ""
 
             accepted = score > 0.52

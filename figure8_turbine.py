@@ -55,6 +55,9 @@ import sys
 import time
 from typing import Dict, List, Tuple
 
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import torch
 import torch.nn.functional as F
 
@@ -99,7 +102,7 @@ from self_train_hmoe import (
 
 # ── Константы турбины ──────────────────────────────────────────────────────────
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # 4 станции турбины (роли экспертов)
 _TURBINE_EXPERTS = ["ABSTRACT", "DYNAMIC", "CONCRETE", "META"]
@@ -254,7 +257,8 @@ def _lci_loss_step(model: Variant3GPT, ids: torch.Tensor, lr: float) -> float:
                         gw = gw.mean(dim=0)
                     group_weights_list.append(gw)
             x = block(x)
-    except Exception:
+    except Exception as e:
+        print(f"  [warn] _lci_loss_step: {e}")
         return 0.0
 
     if not group_weights_list:
@@ -570,7 +574,7 @@ def _load_model(checkpoint_path: str) -> Variant3GPT:
     cfg = Variant3Config(**MODEL_CFG)
     model = Variant3GPT(cfg)
     if os.path.exists(checkpoint_path):
-        ckpt = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
+        ckpt = torch.load(checkpoint_path, map_location=DEVICE, weights_only=True)
         state = ckpt.get("model_state", ckpt)
         model.load_state_dict(state, strict=False)
         print(f"  Загружен чекпоинт: {checkpoint_path}")

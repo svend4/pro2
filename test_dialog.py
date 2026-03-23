@@ -13,7 +13,8 @@ CHECKPOINT = "checkpoints/checkpoint_step_4000.pt"
 DEVICE = torch.device("cpu")
 
 print(f"Loading checkpoint: {CHECKPOINT}")
-ckpt = torch.load(CHECKPOINT, map_location=DEVICE, weights_only=False)
+with torch.serialization.safe_globals([YiJingConfig]):
+    ckpt = torch.load(CHECKPOINT, map_location=DEVICE, weights_only=True)
 cfg = ckpt['config']
 model = YiJingGPT(cfg).to(DEVICE)
 model.load_state_dict(ckpt['model_state_dict'])

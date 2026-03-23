@@ -28,7 +28,7 @@ from models.baseline import VanillaGPT
 # ==================== КОНФИГУРАЦИЯ ====================
 
 SEED = 42
-DEVICE = 'cpu'
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 STEPS = 500  # шагов на каждый размер (меньше чем ablation — больше конфигов)
 WARMUP_FRAC = 0.1
 LOG_EVERY = 50

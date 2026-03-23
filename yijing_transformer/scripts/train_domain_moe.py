@@ -113,7 +113,8 @@ def main():
     # Загрузка чекпоинта (если есть)
     if args.resume and not args.no_resume and os.path.exists(args.resume):
         print(f'Loading checkpoint: {args.resume}')
-        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        with torch.serialization.safe_globals([YiJingConfig]):
+            ckpt = torch.load(args.resume, map_location=device, weights_only=True)
         ckpt_cfg = ckpt['config']
         old_vocab = ckpt['model_state_dict']['tok_emb.weight'].shape[0]
         if old_vocab != vocab_size:

@@ -46,6 +46,9 @@ import sys
 import time
 from typing import Dict, List, Optional, Tuple
 
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -68,7 +71,7 @@ try:
 except ImportError:
     _META_Q6_AVAILABLE = False
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 
 # ── Aut(Q6) орбиты по весу Хэмминга (hexsym) ─────────────────────────────────
@@ -458,7 +461,7 @@ def _load_model(path: str) -> Variant3GPT:
     cfg = Variant3Config(**MODEL_CFG)
     m   = Variant3GPT(cfg)
     if os.path.exists(path):
-        ck = torch.load(path, map_location=DEVICE, weights_only=False)
+        ck = torch.load(path, map_location=DEVICE, weights_only=True)
         m.load_state_dict(ck.get("model_state", ck), strict=False)
         print(f"  Загружен: {path}")
     else:

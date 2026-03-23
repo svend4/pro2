@@ -55,7 +55,7 @@ torch.manual_seed(42)
 random.seed(42)
 
 _ROOT   = Path(__file__).parent
-DEVICE  = "cpu"
+DEVICE  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 E2_CFG = E2Config(
     vocab_size=256,

@@ -1,7 +1,6 @@
 torch>=2.0.0
-sentencepiece
-datasets
-pytest
-matplotlib
-wandb          # optional: experiment tracking
-tensorboard    # optional: local logging
+sentencepiece>=0.2.0
+datasets>=2.14.0
+matplotlib>=3.7.0
+wandb>=0.16.0         # optional: experiment tracking
+tensorboard>=2.13.0   # optional: local logging

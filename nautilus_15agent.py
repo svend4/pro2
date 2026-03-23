@@ -53,7 +53,7 @@ try:
 except ImportError:
     _META_Q6_AVAILABLE = False
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 _PI    = math.pi
 
@@ -76,19 +76,10 @@ def _build_agents() -> List[Dict]:
 
 
 def _fallback_tesseracts() -> List:
-    """15 Q4 тессерактов без meta-импорта (то же что meta_q6._fallback_tesseracts)."""
-    from itertools import combinations
-    result = []
-    for free_axes in combinations(range(6), 4):
-        verts = set()
-        for mask in range(16):
-            v = 0
-            for bit_idx, axis in enumerate(free_axes):
-                if (mask >> bit_idx) & 1:
-                    v |= (1 << axis)
-            verts.add(v)
-        result.append(frozenset(verts))
-    return result
+    """Все 60 Q4 тессерактов без meta-импорта, жадно упорядоченных по покрытию.
+    Делегирует в meta_q6._fallback_tesseracts(), чтобы не дублировать логику."""
+    from meta_q6 import _fallback_tesseracts as _mq6_fb
+    return _mq6_fb()
 
 
 # ── Один шаг агента ───────────────────────────────────────────────────────────
@@ -297,7 +288,7 @@ def _load_model(path: str) -> Variant3GPT:
     cfg = Variant3Config(**MODEL_CFG)
     m   = Variant3GPT(cfg)
     if os.path.exists(path):
-        ck = torch.load(path, map_location=DEVICE, weights_only=False)
+        ck = torch.load(path, map_location=DEVICE, weights_only=True)
         m.load_state_dict(ck.get("model_state", ck), strict=False)
         print(f"  Загружен: {path}")
     else:

@@ -31,6 +31,9 @@ import sys
 import time
 from typing import Dict, List
 
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _PI = math.pi
@@ -85,8 +88,8 @@ def read_avg_lci(log_path: str) -> float:
             return sum(r.get("lci_r_final", 0) for r in log) / len(log)
         elif "avg_lci" in r0:             # multi_salesman / bidir
             return sum(r.get("avg_lci", 0) for r in log) / len(log)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [warn] read_avg_lci({log_path}): {e}")
     return 0.0
 
 

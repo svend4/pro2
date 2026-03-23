@@ -41,7 +41,7 @@ from models.extensions import (
 from models.geometry import generate_hexagrams, generate_hypercube
 
 SEED = 42
-DEVICE = 'cpu'
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 STEPS = 300
 BATCH_SIZE = 8
 BLOCK_SIZE = 128

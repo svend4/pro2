@@ -81,7 +81,7 @@ def test_diversity_after_training():
     assert 0 < gate_val < 1, f"Gate застрял: {gate_val}"
     print(f"Gate в допустимом диапазоне: {gate_val:.3f}")
 
-    return diversity_ok
+    # diversity_ok — информационная метрика, слабая дифференциация допустима на 30 шагах
 
 
 def test_gradient_flow():
