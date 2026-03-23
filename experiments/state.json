@@ -29,10 +29,10 @@
     "hypothesis": "ArchetypalInterlingua с per-source trit_proj улучшает PPL",
     "success_criterion": "PPL < lean_baseline PPL",
     "fix": "per_source_trit_proj + gumbel_softmax (T=1.0→0.05) + diversity_loss (weight=0.01)",
-    "status": "pending",
-    "result_ppl": null,
-    "result_notes": "",
-    "verdict": ""
+    "status": "done",
+    "result_ppl": 1.1712,
+    "result_notes": "Best loss=0.0901, PPL 1.1712 < baseline 1.51, 418s CPU",
+    "verdict": "proven"
   },
   {
     "name": "kasatkin_as_router",
@@ -47,10 +47,10 @@
     "hypothesis": "Касаткин как Q6-router даёт routing_confidence > 15%",
     "success_criterion": "routing_confidence > 15% И PPL не хуже lean_baseline",
     "fix": "Касаткин как роутер (не CubicAttentionBias)",
-    "status": "pending",
-    "result_ppl": null,
-    "result_notes": "",
-    "verdict": ""
+    "status": "done",
+    "result_ppl": 1.0355,
+    "result_notes": "routing_conf=0.3450 >> 0.15 цели; PPL 1.0355 < baseline 1.51; 738s CPU",
+    "verdict": "proven"
   },
   {
     "name": "solan_nautilus",
