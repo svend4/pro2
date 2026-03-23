@@ -21,7 +21,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from yijing_transformer.models.lean_model import LeanYiJingGPT, LeanYiJingBlock
-from yijing_transformer.models.geometry.convergence import ArchetypalInterlingua
+from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInterlinguaFixed
 from corpus_loader import CorpusLoader
 
 
@@ -64,10 +64,11 @@ class LeanWithInterlingua(torch.nn.Module):
             block_size=cfg['block_size'],
             dropout=cfg['dropout'],
         )
-        self.interlingua = ArchetypalInterlingua(
+        self.interlingua = ArchetypalInterlinguaFixed(
             d_model=cfg['d_model'],
             n_sources=cfg['n_layers'],  # каждый блок = источник
             n_archetypes=cfg['n_archetypes'],
+            diversity_weight=cfg['diversity_weight'],
             warmup_steps=cfg['interlingua_warmup'],
         )
         self.diversity_weight = cfg['diversity_weight']
@@ -96,11 +97,12 @@ class LeanWithInterlingua(torch.nn.Module):
             x = block(x)
             block_outputs.append(x)
 
-        # ArchetypalInterlingua: per-source тернарные коды
-        interlingua_repr = self.interlingua(block_outputs)  # (B, T, d_model)
+        # ArchetypalInterlinguaFixed: per-source тернарные коды
+        # forward возвращает (output, aux_loss) где aux_loss уже включает diversity_weight
+        interlingua_repr, aux_loss = self.interlingua(block_outputs, core_hidden=x)
 
-        # Residual: основной поток + interlingua
-        x = base.norm(x + interlingua_repr)
+        # Residual: основной поток + interlingua (gate внутри interlingua)
+        x = base.norm(interlingua_repr)
         logits = base.head(x)
 
         loss = None
@@ -110,8 +112,8 @@ class LeanWithInterlingua(torch.nn.Module):
                 logits.view(-1, logits.size(-1)),
                 targets.view(-1),
             )
-            diversity_loss_val = self.interlingua.diversity_loss
-            loss = lm_loss + self.diversity_weight * diversity_loss_val
+            diversity_loss_val = aux_loss
+            loss = lm_loss + aux_loss
 
         return logits, loss, diversity_loss_val
 
@@ -209,7 +211,7 @@ def train(cfg: dict):
 
         loss_val = loss.item()
         ppl_val = math.exp(min(loss_val, 20))
-        T_current = model.interlingua.quantizer.get_temperature()
+        T_current = model.interlingua._get_temperature()
 
         if loss_val < best_loss:
             best_loss = loss_val
