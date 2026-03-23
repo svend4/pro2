@@ -1,0 +1,162 @@
+[
+  {
+    "cycle": 1,
+    "lci_r0": 3.1166,
+    "lci_a": [
+      3.1394,
+      3.1139,
+      3.109
+    ],
+    "lci_b": [
+      3.1178,
+      3.1349,
+      3.1339
+    ],
+    "lci_meet": 3.1298,
+    "meet_angle_deg": 6.49,
+    "avg_lci": 3.1255,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 26.9
+  },
+  {
+    "cycle": 2,
+    "lci_r0": 3.1298,
+    "lci_a": [
+      3.1033,
+      3.0983,
+      3.0967
+    ],
+    "lci_b": [
+      3.0588,
+      3.0889,
+      3.0761
+    ],
+    "lci_meet": 3.0295,
+    "meet_angle_deg": 10.4,
+    "avg_lci": 3.0788,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 25.01
+  },
+  {
+    "cycle": 3,
+    "lci_r0": 3.0295,
+    "lci_a": [
+      3.1048,
+      3.0774,
+      3.1397
+    ],
+    "lci_b": [
+      3.1055,
+      3.0289,
+      3.0639
+    ],
+    "lci_meet": 3.0677,
+    "meet_angle_deg": 18.42,
+    "avg_lci": 3.084,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 24.45
+  },
+  {
+    "cycle": 4,
+    "lci_r0": 3.0677,
+    "lci_a": [
+      3.0845,
+      2.9972,
+      3.0846
+    ],
+    "lci_b": [
+      3.1403,
+      3.1294,
+      3.0912
+    ],
+    "lci_meet": 3.1235,
+    "meet_angle_deg": 4.41,
+    "avg_lci": 3.0929,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 24.91
+  },
+  {
+    "cycle": 5,
+    "lci_r0": 3.1235,
+    "lci_a": [
+      3.0738,
+      2.9793,
+      2.9962
+    ],
+    "lci_b": [
+      2.981,
+      2.9603,
+      2.9682
+    ],
+    "lci_meet": 3.0738,
+    "meet_angle_deg": 10.33,
+    "avg_lci": 3.0047,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 24.94
+  },
+  {
+    "cycle": 6,
+    "lci_r0": 3.0738,
+    "lci_a": [
+      2.9753,
+      2.9533,
+      2.8737
+    ],
+    "lci_b": [
+      2.8664,
+      2.9342,
+      2.9306
+    ],
+    "lci_meet": 3.0841,
+    "meet_angle_deg": 7.34,
+    "avg_lci": 2.9454,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 25.53
+  },
+  {
+    "cycle": 7,
+    "lci_r0": 3.0841,
+    "lci_a": [
+      2.9476,
+      2.9984,
+      2.9807
+    ],
+    "lci_b": [
+      2.9144,
+      2.9615,
+      2.964
+    ],
+    "lci_meet": 3.0606,
+    "meet_angle_deg": 8.22,
+    "avg_lci": 2.9753,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 26.05
+  },
+  {
+    "cycle": 8,
+    "lci_r0": 3.0606,
+    "lci_a": [
+      2.9958,
+      3.0846,
+      3.1011
+    ],
+    "lci_b": [
+      3.1254,
+      3.1071,
+      3.0469
+    ],
+    "lci_meet": 3.1231,
+    "meet_angle_deg": 8.77,
+    "avg_lci": 3.0834,
+    "resonant": true,
+    "n_generated": 48,
+    "elapsed_s": 27.15
+  }
+]

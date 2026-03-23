@@ -1,0 +1,67 @@
+{
+  "global_avg_hamming": 0.0,
+  "hypothesis_confirmed": true,
+  "used_neural_model": true,
+  "archetypes": {
+    "MSEO": {
+      "name": "кристалл",
+      "avg_hamming": 0.0,
+      "clustered": true,
+      "hex_indices": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "MSCO": {
+      "name": "здание",
+      "avg_hamming": 0.0,
+      "clustered": true,
+      "hex_indices": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "ADEO": {
+      "name": "алгоритм",
+      "avg_hamming": 0.0,
+      "clustered": true,
+      "hex_indices": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "MDCF": {
+      "name": "город",
+      "avg_hamming": 0.0,
+      "clustered": true,
+      "hex_indices": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "ASCF": {
+      "name": "культура",
+      "avg_hamming": 0.0,
+      "clustered": true,
+      "hex_indices": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  }
+}

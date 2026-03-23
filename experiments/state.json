@@ -1,0 +1,107 @@
+[
+  {
+    "name": "lean_baseline",
+    "week": 1,
+    "model": "LeanYiJingGPT",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat"
+    ],
+    "hypothesis": "Два доказанных источника дают PPL < 1.07",
+    "success_criterion": "PPL < 1.07 на реальных данных",
+    "fix": "",
+    "status": "done",
+    "result_ppl": 1.51,
+    "result_notes": "Best loss=0.2861, xerox@3000=2.94, 321s CPU",
+    "verdict": "inconclusive"
+  },
+  {
+    "name": "interlingua_fixed",
+    "week": 2,
+    "model": "LeanYiJingGPT + ArchetypalInterlingua (per-source)",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "interlingua"
+    ],
+    "hypothesis": "ArchetypalInterlingua с per-source trit_proj улучшает PPL",
+    "success_criterion": "PPL < lean_baseline PPL",
+    "fix": "per_source_trit_proj + gumbel_softmax (T=1.0→0.05) + diversity_loss (weight=0.01)",
+    "status": "pending",
+    "result_ppl": null,
+    "result_notes": "",
+    "verdict": ""
+  },
+  {
+    "name": "kasatkin_as_router",
+    "week": 3,
+    "model": "LeanYiJingGPT + KasatkinQ6Router",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "kasatkin_3d"
+    ],
+    "hypothesis": "Касаткин как Q6-router даёт routing_confidence > 15%",
+    "success_criterion": "routing_confidence > 15% И PPL не хуже lean_baseline",
+    "fix": "Касаткин как роутер (не CubicAttentionBias)",
+    "status": "pending",
+    "result_ppl": null,
+    "result_notes": "",
+    "verdict": ""
+  },
+  {
+    "name": "solan_nautilus",
+    "week": 4,
+    "model": "NautilusMoME + GlyphAwareEmbedding",
+    "min_steps": 3000,
+    "sources": [
+      "solan_glyph"
+    ],
+    "hypothesis": "SOLAN-токены с Хэмминг-bias улучшают routing точность",
+    "success_criterion": "ксерокс-тест > 80% И cross_domain_diversity > 0.16",
+    "fix": "",
+    "status": "pending",
+    "result_ppl": null,
+    "result_notes": "",
+    "verdict": ""
+  },
+  {
+    "name": "palace_block_sparse",
+    "week": 5,
+    "model": "LeanYiJingGPT + PalaceAttention (block-sparse)",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "skliarova_palace"
+    ],
+    "hypothesis": "PalaceAttention как block-sparse 8×8 маска улучшает PPL",
+    "success_criterion": "PPL < lean_baseline PPL",
+    "fix": "block-sparse 8×8 маска вместо dense attention",
+    "status": "pending",
+    "result_ppl": null,
+    "result_notes": "",
+    "verdict": ""
+  },
+  {
+    "name": "meta_hexlearn_router",
+    "week": 6,
+    "model": "LeanYiJingGPT + HexLearnRouter (из meta)",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "kasatkin_3d"
+    ],
+    "hypothesis": "Геометрический k-NN router из meta улучшает специализацию",
+    "success_criterion": "routing_confidence > 20% по сравнению с KasatkinQ6Router",
+    "fix": "",
+    "status": "pending",
+    "result_ppl": null,
+    "result_notes": "",
+    "verdict": ""
+  }
+]

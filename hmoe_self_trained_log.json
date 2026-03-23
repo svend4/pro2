@@ -3,120 +3,120 @@
     "cycle": 1,
     "n_a": 1,
     "n_b": 3,
-    "temperature": 1.8,
-    "lci_a_emb": 1.0493,
-    "lci_b_emb": 0.6736,
-    "lci_a_r": 2.2984,
-    "lci_b_r": 2.5102,
-    "avg_lci_emb": 0.8614,
-    "avg_lci_r": 2.4043,
+    "temperature": 1.5,
+    "lci_a_emb": 4.7361,
+    "lci_b_emb": 3.0842,
+    "lci_a_r": 2.5327,
+    "lci_b_r": 2.8096,
+    "avg_lci_emb": 3.9101,
+    "avg_lci_r": 2.6712,
     "resonance": false,
     "gw_at_start": {
-      "ABSTRACT": 0.3418,
-      "DYNAMIC": 0.2849,
-      "CONCRETE": 0.3734
+      "ABSTRACT": 0.199,
+      "DYNAMIC": 0.3179,
+      "CONCRETE": 0.4831
     },
     "gw_after_a": {
-      "ABSTRACT": 0.4466,
-      "DYNAMIC": 0.2958,
-      "CONCRETE": 0.2576
+      "ABSTRACT": 0.2321,
+      "DYNAMIC": 0.3419,
+      "CONCRETE": 0.426
     },
     "gw_after_b": {
-      "ABSTRACT": 0.4061,
-      "DYNAMIC": 0.3238,
-      "CONCRETE": 0.2701
+      "ABSTRACT": 0.2689,
+      "DYNAMIC": 0.3566,
+      "CONCRETE": 0.3746
     },
-    "texts_a": 50,
-    "texts_b": 150
+    "texts_a": 30,
+    "texts_b": 90
   },
   {
     "cycle": 2,
     "n_a": 3,
     "n_b": 5,
-    "temperature": 2.0,
-    "lci_a_emb": 0.5898,
-    "lci_b_emb": 0.5435,
-    "lci_a_r": 2.1748,
-    "lci_b_r": 2.4356,
-    "avg_lci_emb": 0.5666,
-    "avg_lci_r": 2.3052,
-    "resonance": false,
+    "temperature": 1.4,
+    "lci_a_emb": 2.682,
+    "lci_b_emb": 4.0883,
+    "lci_a_r": 2.9709,
+    "lci_b_r": 3.1331,
+    "avg_lci_emb": 3.3851,
+    "avg_lci_r": 3.052,
+    "resonance": true,
     "gw_at_start": {
-      "ABSTRACT": 0.4064,
-      "DYNAMIC": 0.3343,
-      "CONCRETE": 0.2593
+      "ABSTRACT": 0.2377,
+      "DYNAMIC": 0.3433,
+      "CONCRETE": 0.419
     },
     "gw_after_a": {
-      "ABSTRACT": 0.4665,
-      "DYNAMIC": 0.2866,
-      "CONCRETE": 0.2469
+      "ABSTRACT": 0.2886,
+      "DYNAMIC": 0.3685,
+      "CONCRETE": 0.3429
     },
     "gw_after_b": {
-      "ABSTRACT": 0.431,
-      "DYNAMIC": 0.2962,
-      "CONCRETE": 0.2728
+      "ABSTRACT": 0.3122,
+      "DYNAMIC": 0.3729,
+      "CONCRETE": 0.3149
     },
-    "texts_a": 150,
-    "texts_b": 250
+    "texts_a": 90,
+    "texts_b": 150
   },
   {
     "cycle": 3,
     "n_a": 5,
     "n_b": 7,
-    "temperature": 2.2,
-    "lci_a_emb": 0.4749,
-    "lci_b_emb": 0.9449,
-    "lci_a_r": 2.021,
-    "lci_b_r": 2.5802,
-    "avg_lci_emb": 0.7099,
-    "avg_lci_r": 2.3006,
+    "temperature": 1.4,
+    "lci_a_emb": 3.6775,
+    "lci_b_emb": 1.4167,
+    "lci_a_r": 2.9517,
+    "lci_b_r": 2.9849,
+    "avg_lci_emb": 2.5471,
+    "avg_lci_r": 2.9683,
     "resonance": false,
     "gw_at_start": {
-      "ABSTRACT": 0.427,
-      "DYNAMIC": 0.301,
-      "CONCRETE": 0.272
+      "ABSTRACT": 0.2755,
+      "DYNAMIC": 0.3616,
+      "CONCRETE": 0.3628
     },
     "gw_after_a": {
-      "ABSTRACT": 0.4379,
-      "DYNAMIC": 0.3544,
-      "CONCRETE": 0.2077
+      "ABSTRACT": 0.3434,
+      "DYNAMIC": 0.3737,
+      "CONCRETE": 0.2829
     },
     "gw_after_b": {
-      "ABSTRACT": 0.374,
-      "DYNAMIC": 0.3654,
-      "CONCRETE": 0.2606
+      "ABSTRACT": 0.3283,
+      "DYNAMIC": 0.3932,
+      "CONCRETE": 0.2785
     },
-    "texts_a": 250,
-    "texts_b": 350
+    "texts_a": 150,
+    "texts_b": 210
   },
   {
     "cycle": 4,
     "n_a": 7,
     "n_b": 1,
-    "temperature": 2.4,
-    "lci_a_emb": 0.4744,
-    "lci_b_emb": 0.6217,
-    "lci_a_r": 2.7796,
-    "lci_b_r": 2.9175,
-    "avg_lci_emb": 0.548,
-    "avg_lci_r": 2.8486,
+    "temperature": 1.6,
+    "lci_a_emb": 1.4315,
+    "lci_b_emb": 1.5716,
+    "lci_a_r": 2.8783,
+    "lci_b_r": 2.8632,
+    "avg_lci_emb": 1.5015,
+    "avg_lci_r": 2.8708,
     "resonance": false,
     "gw_at_start": {
-      "ABSTRACT": 0.3694,
-      "DYNAMIC": 0.3643,
-      "CONCRETE": 0.2663
+      "ABSTRACT": 0.327,
+      "DYNAMIC": 0.3713,
+      "CONCRETE": 0.3017
     },
     "gw_after_a": {
-      "ABSTRACT": 0.3696,
-      "DYNAMIC": 0.3371,
-      "CONCRETE": 0.2932
+      "ABSTRACT": 0.3487,
+      "DYNAMIC": 0.3863,
+      "CONCRETE": 0.2649
     },
     "gw_after_b": {
-      "ABSTRACT": 0.3608,
-      "DYNAMIC": 0.3264,
-      "CONCRETE": 0.3128
+      "ABSTRACT": 0.3544,
+      "DYNAMIC": 0.3797,
+      "CONCRETE": 0.2658
     },
-    "texts_a": 350,
-    "texts_b": 50
+    "texts_a": 210,
+    "texts_b": 30
   }
 ]

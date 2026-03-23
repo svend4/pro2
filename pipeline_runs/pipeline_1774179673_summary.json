@@ -1,0 +1,23 @@
+{
+  "run_id": "pipeline_1774179673",
+  "start": "hmoe_self_trained_v5.pt",
+  "final": "pipeline_runs/pipeline_1774179673_turbine.pt",
+  "history": [
+    {
+      "phase": "nautilus_pass_1",
+      "checkpoint": "pipeline_runs/pipeline_1774179673_n4a_pass1.pt",
+      "avg_lci": 2.91255
+    },
+    {
+      "phase": "nautilus_pass_2",
+      "checkpoint": "pipeline_runs/pipeline_1774179673_n4a_pass2.pt",
+      "avg_lci": 2.90565
+    },
+    {
+      "phase": "turbine_lci",
+      "checkpoint": "pipeline_runs/pipeline_1774179673_turbine.pt",
+      "avg_lci": 0.0
+    }
+  ],
+  "n_passes": 2
+}
