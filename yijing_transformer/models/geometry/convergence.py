@@ -68,7 +68,8 @@ class GlyphComposer(nn.Module):
                 dropout=0.1, batch_first=True,
                 norm_first=True,
             )
-            self.composer = nn.TransformerEncoder(layer, num_layers=n_compose_layers)
+            self.composer = nn.TransformerEncoder(layer, num_layers=n_compose_layers,
+                                                   enable_nested_tensor=False)
         else:
             self.composer = None
 
