@@ -30,6 +30,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------
 
 def _iter_py_files(root: str):
+    _this_file = os.path.abspath(__file__)
     for dirpath, dirnames, filenames in os.walk(root):
         # пропускаем виртуальные окружения и кэш
         dirnames[:] = [
@@ -38,7 +39,9 @@ def _iter_py_files(root: str):
         ]
         for fname in filenames:
             if fname.endswith(".py"):
-                yield os.path.join(dirpath, fname)
+                full = os.path.join(dirpath, fname)
+                if full != _this_file:
+                    yield full
 
 
 def test_no_weights_only_false():

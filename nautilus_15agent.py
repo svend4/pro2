@@ -76,19 +76,10 @@ def _build_agents() -> List[Dict]:
 
 
 def _fallback_tesseracts() -> List:
-    """15 Q4 тессерактов без meta-импорта (то же что meta_q6._fallback_tesseracts)."""
-    from itertools import combinations
-    result = []
-    for free_axes in combinations(range(6), 4):
-        verts = set()
-        for mask in range(16):
-            v = 0
-            for bit_idx, axis in enumerate(free_axes):
-                if (mask >> bit_idx) & 1:
-                    v |= (1 << axis)
-            verts.add(v)
-        result.append(frozenset(verts))
-    return result
+    """Все 60 Q4 тессерактов без meta-импорта, жадно упорядоченных по покрытию.
+    Делегирует в meta_q6._fallback_tesseracts(), чтобы не дублировать логику."""
+    from meta_q6 import _fallback_tesseracts as _mq6_fb
+    return _mq6_fb()
 
 
 # ── Один шаг агента ───────────────────────────────────────────────────────────

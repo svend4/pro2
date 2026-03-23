@@ -293,22 +293,36 @@ def q4_tesseracts() -> List[frozenset]:
 
 def _fallback_tesseracts() -> List[frozenset]:
     """
-    Fallback: 15 уникальных Q4-подграфов Q6 без meta-импорта.
-    Каждая пара свободных осей (из C(6,4)=15 вариантов), base=0.
+    Fallback: все 60 Q4-подграфов Q6 (C(6,4)×2²), жадно упорядоченных
+    для максимального покрытия вершин первыми 15 тессерактами.
+
+    Предыдущая версия генерировала только 15 тессерактов с base=(0,0),
+    что структурно исключало вершины веса 5–6 из покрытия.
+    Теперь генерируются все 4 смещения базы для каждой комбинации осей,
+    а жадная упорядочка гарантирует, что первые 15 покрывают все 64 вершины.
     """
-    from itertools import combinations
-    result = []
-    axes_all = list(range(6))
-    for free_axes in combinations(axes_all, 4):
-        verts = set()
-        for mask in range(16):
-            v = 0
-            for bit_idx, axis in enumerate(free_axes):
-                if (mask >> bit_idx) & 1:
-                    v |= (1 << axis)
-            verts.add(v)
-        result.append(frozenset(verts))
-    return result
+    from itertools import combinations, product
+    all_tess: List[frozenset] = []
+    for free_axes in combinations(range(6), 4):
+        fixed_axes = [a for a in range(6) if a not in free_axes]
+        for base_bits in product((0, 1), repeat=2):
+            base = sum(b << fixed_axes[i] for i, b in enumerate(base_bits))
+            verts: frozenset = frozenset(
+                base | sum(((mask >> bit_idx) & 1) << axis
+                           for bit_idx, axis in enumerate(free_axes))
+                for mask in range(16)
+            )
+            all_tess.append(verts)
+    # Жадная упорядочка: каждый следующий тессеракт максимально расширяет покрытие.
+    ordered: List[frozenset] = []
+    covered: set = set()
+    remaining = list(all_tess)
+    while remaining:
+        best = max(remaining, key=lambda t: len(t - covered))
+        ordered.append(best)
+        covered |= best
+        remaining.remove(best)
+    return ordered
 
 
 # ── 5. Yang weight orbits (для agent specialization) ──────────────────────────
