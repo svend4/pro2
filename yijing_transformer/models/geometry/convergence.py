@@ -187,7 +187,7 @@ class GlyphComposer(nn.Module):
         edge_pooled = []
         for w in range(n_sigils):
             start = w * self.stride
-            end = min(start + self.window_size - 1, edge_emb.shape[1])
+            end = min(start + self.window_size, edge_emb.shape[1])
             if start < edge_emb.shape[1]:
                 edge_pooled.append(edge_emb[:, start:end].mean(dim=1))
             else:

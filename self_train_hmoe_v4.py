@@ -393,14 +393,7 @@ def figure8_hmoe_v4(
     k_deform:       float = 7.0,   # параметр деформации восьмёрки (SESSION_Deformed_Figure8)
     **kwargs,
 ) -> List[Dict]:
-    # k_deform: параметр несимметричности петель (scarab_algorithm.py → deformed_lissajous)
-    # k=1: симметричная ∞.  k=7: петля A в 7× крупнее петли B (текущий режим _SERIES_A=7).
-    # Теоретическая доля A: p_A = k/(k+1).  При k=7: p_A = 7/8 = 0.875.
-    # Целевой w_A при резонансе: p_A · 1/2 + 1/6 ≈ 0.604 → нет, это неправильно.
-    # Правильнее: k управляет LR_A/LR_B соотношением и числом серий.
-    # k_eff = _SERIES_A / _SERIES_B = 7/1 = 7.0 ← совпадает с k_deform по умолчанию.
-    """
-    v4: асимметричная серия A>>B для компенсации CONCRETE-доминирования.
+    """v4: асимметричная серия A>>B для компенсации CONCRETE-доминирования.
 
     Каждый цикл:
       1. Петля A: 7 × steps_per_loop шагов, LR = lr_a (высокий)
@@ -414,12 +407,18 @@ def figure8_hmoe_v4(
     Цель: avg_LCI_r > 3.13 (δ < 0.004 от π)
     """
     _C_etd = (4 / math.pi) * math.log2(1 + math.pi)   # ≈ 2.626 бит/шаг (ETD ёмкость)
+
+    # k_deform → series_a / series_b: серия A длиннее B в k раз
+    # k=1: симметричная ∞. k=7: A=7, B=1 (текущий дефолт).
+    series_b = max(1, _SERIES_B)
+    series_a = max(1, int(round(k_deform * series_b)))
+
     print(f"\n{'═' * 72}")
     print(f"  САМО-ОБУЧЕНИЕ v4: РЕЗОНАНСНЫЙ ПРОРЫВ  (асимметрия A>>B)")
     print(f"{'═' * 72}")
     print(f"  Циклов         : {n_cycles}")
     print(f"  Шагов/петля    : {steps_per_loop}")
-    print(f"  Серия          : A={_SERIES_A}×, B={_SERIES_B}×  "
+    print(f"  Серия          : A={series_a}×, B={series_b}×  "
           f"k_deform={k_deform:.1f}  p_A={k_deform/(k_deform+1):.3f}")
     print(f"  LR_A           : {lr_a:.2e}  LR_B: {lr_b:.2e}")
     print(f"  Температура    : {temperature:.2f} (T_c Ising Q6)")
@@ -497,7 +496,7 @@ def figure8_hmoe_v4(
         x_abstract = _encode(random.choice(abstract_texts), block_size)
         x_ids, lci_a, gw_a, n_a_texts = run_loop(
             model, x_abstract, block_size, temperature,
-            steps_per_loop, _SERIES_A, lr_a, do_train, "ABSTRACT", abstract_texts
+            steps_per_loop, series_a, lr_a, do_train, "ABSTRACT", abstract_texts
         )
         print(f"    Петля A  done: LCI_r={lci_a:.4f}  "
               f"A={gw_a.get('ABSTRACT',0):.4f}  B={gw_a.get('CONCRETE',0):.4f}  "
@@ -507,7 +506,7 @@ def figure8_hmoe_v4(
         x_concrete = _encode(random.choice(concrete_texts), block_size)
         x_ids, lci_b, gw_b, n_b_texts = run_loop(
             model, x_concrete, block_size, temperature,
-            steps_per_loop, _SERIES_B, lr_b, do_train, "CONCRETE", concrete_texts
+            steps_per_loop, series_b, lr_b, do_train, "CONCRETE", concrete_texts
         )
         print(f"    Петля B  done: LCI_r={lci_b:.4f}  "
               f"A={gw_b.get('ABSTRACT',0):.4f}  B={gw_b.get('CONCRETE',0):.4f}  "
@@ -565,8 +564,8 @@ def figure8_hmoe_v4(
         ent_end, _, eff_end = routing_channel_capacity(gw_b)
         log.append({
             "cycle":              cycle,
-            "n_a":                _SERIES_A,
-            "n_b":                _SERIES_B,
+            "n_a":                series_a,
+            "n_b":                series_b,
             "k_deform":           k_deform,
             "temperature":        round(temperature, 3),
             # LCI classic (2 сферы)
