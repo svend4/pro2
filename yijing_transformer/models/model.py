@@ -1258,7 +1258,15 @@ class YiJingGPT(nn.Module):
     @classmethod
     def from_pretrained(cls, path, device='cpu'):
         """Загружает модель из файла."""
-        ckpt = torch.load(path, map_location=device, weights_only=True)
+        import sys, os as _os
+        _pkg = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        if _pkg not in sys.path:
+            sys.path.insert(0, _pkg)
+        from config.config import YiJingConfig  # short path = what pickle stored
+        # YiJingConfig — доверенный внутренний класс проекта; регистрируем его,
+        # чтобы weights_only=True мог его десериализовать без arbitrary code execution.
+        with torch.serialization.safe_globals([YiJingConfig]):
+            ckpt = torch.load(path, map_location=device, weights_only=True)
         cfg = ckpt['config']
         model = cls(cfg).to(device)
         model.load_state_dict(ckpt['model_state_dict'])
