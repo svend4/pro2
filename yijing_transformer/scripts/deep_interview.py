@@ -585,7 +585,7 @@ def main():
 
     # Load model
     print(f"Loading checkpoint: {CHECKPOINT_PATH}")
-    ckpt = torch.load(CHECKPOINT_PATH, weights_only=False, map_location='cpu')
+    ckpt = torch.load(CHECKPOINT_PATH, weights_only=True, map_location='cpu')
 
     model_cfg = ckpt.get('args', {})
     if hasattr(model_cfg, '__dict__'):

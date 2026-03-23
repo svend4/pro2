@@ -358,6 +358,22 @@ class GlobalRouter(nn.Module):
         anch = F.normalize(anch, dim=-1)
         self.register_buffer('group_anchors', anch)
 
+        # Hamming prior (hexnet)
+        _sigma_h = 1.5
+        hprior = torch.zeros(64, n_groups)
+        for _h in range(64):
+            for _g_idx, _g in enumerate(group_names):
+                _min_d = min(
+                    bin(_h ^ DOMAIN_Q6_IDX[_d]).count('1')
+                    for _d in DOMAIN_GROUPS[_g]
+                )
+                hprior[_h, _g_idx] = math.exp(-_min_d / _sigma_h)
+        hprior = hprior / hprior.sum(dim=1, keepdim=True).clamp(min=1e-8)
+        self.register_buffer('hamming_prior_matrix', hprior)
+        # hexnet hard prior: init=2.0 → sigmoid(2)≈0.88 (88% Hamming).
+        # clamp(min=0.0) в forward → Hamming всегда ≥ 50%, не коллапсирует к gate≈0.5.
+        self.log_hamming_mix = nn.Parameter(torch.tensor(2.0))
+
     @property
     def temperature(self) -> torch.Tensor:
         return self.log_temp.exp().clamp(0.1, 5.0)
@@ -371,9 +387,13 @@ class GlobalRouter(nn.Module):
         # hexgeom: нормализуем якоря on-the-fly — работает и при загрузке чекпоинта
         anchors_norm  = F.normalize(self.group_anchors, dim=-1)
         group_scores  = soft_hex @ anchors_norm.T
-        group_weights = F.softmax(group_scores, dim=-1)
-        mean_w  = group_weights.mean(dim=(0, 1)).clamp(min=1e-8)
-        lb_loss = (mean_w * torch.log(mean_w)).sum()
+        group_weights_learned = F.softmax(group_scores, dim=-1)
+        # hexnet hard prior: Hamming основа (≥50%), learned — fine-tune коррекция.
+        hamming_prior = hex_w.detach() @ self.hamming_prior_matrix
+        hamming_alpha = torch.sigmoid(self.log_hamming_mix.clamp(min=0.0))
+        group_weights = (1.0 - hamming_alpha) * group_weights_learned + hamming_alpha * hamming_prior
+        mean_w  = group_weights.mean(dim=(0, 1))
+        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()
         return group_weights, lb_loss
 
 
@@ -382,15 +402,29 @@ class GlobalRouter(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 
 class MultiScaleGlobalRouter(nn.Module):
-    """Matryoshka роутер: Q2→Q3→Q6 три масштаба, обучаемое смешивание.
+    """Matryoshka роутер: Q2→[Q4]→Q3→Q6 три (или четыре) масштаба.
 
-    Иерархия:
-        Q2 (4 вершины, 2 бита)  → грубый выбор группы (3 группы из 4 Q2-вершин)
-        Q3 (8 вершин,  3 бита)  → средний масштаб, уточнение доменов
+    Иерархия (use_q4=False):
+        Q2 (4 вершины,  2 бита) → грубый выбор группы
+        Q3 (8 вершин,   3 бита) → средний масштаб, уточнение доменов
         Q6 (64 вершины, 6 бит)  → точный Q6-сигнал + hex_weights для HexMoE
 
+    С Q4 (use_q4=True):
+        Q2 (4)  →  Q4 (16)  →  Q3 (8)  →  Q6 (64)
+        Q4 = 4-куб {−1,+1}^4; 16 вершин = PseudoRAG информационные архетипы
+        4 оси (из archetypes.py):
+          ось 0: M/A — Материальное(-1) / Абстрактное(+1)
+          ось 1: S/D — Статичное(-1)    / Динамичное(+1)
+          ось 2: E/C — Элементарное(-1) / Комплексное(+1)
+          ось 3: O/F — Упорядоченное(-1)/ Текучее(+1)
+        Квадранты → группы:
+          MS (Material+Static)   → CONCRETE  (устойчивая физика: Кристалл..Лес)
+          MD (Material+Dynamic)  → DYNAMIC   (движущееся: Механизм..Город)
+          AS (Abstract+Static)   → ABSTRACT  (устойчивые концепты: Аксиома..Культура)
+          AD (Abstract+Dynamic)  → DYNAMIC↔ABSTRACT (алгоритмы, идеи, программы)
+
     Смешивание:
-        group_weights = softmax(w2·score_q2 + w3·score_q3 + w6·score_q6)
+        group_weights = softmax(w2·score_q2 + [w4·score_q4] + w3·score_q3 + w6·score_q6)
         hex_weights   = softmax(Q6-сходство / T)  — для Q6ExpertBank
 
     Q2→группа маппинг:
@@ -416,8 +450,10 @@ class MultiScaleGlobalRouter(nn.Module):
     # компенсирует его структурное недопредставление на Q6-уровне.
     _Q2_TO_GROUP: List[int] = [2, 1, 1, 0]  # (−−)→CON, (−+)→DYN, (+−)→DYN, (++)→ABS
 
-    def __init__(self, d_model: int, group_names: List[str]):
+    def __init__(self, d_model: int, group_names: List[str],
+                 use_q4: bool = False):
         super().__init__()
+        self.use_q4 = use_q4
         hexagrams = _make_hexagrams()
         self.register_buffer('hexagrams', hexagrams)          # (64, 6)
         self.register_buffer('q2_verts', _make_sub_hypercube(2))  # (4, 2)
@@ -433,7 +469,10 @@ class MultiScaleGlobalRouter(nn.Module):
         self.log_temp = nn.Parameter(torch.log(torch.tensor(0.5)))
 
         # Обучаемые веса смешивания масштабов (log-domain для устойчивости)
-        self.log_scale_mix = nn.Parameter(torch.zeros(3))   # [w_Q2, w_Q3, w_Q6]
+        # use_q4=False → 3 масштаба [w_Q2, w_Q3, w_Q6] (backward-compat)
+        # use_q4=True  → 4 масштаба [w_Q2, w_Q4, w_Q3, w_Q6]
+        n_scales = 4 if use_q4 else 3
+        self.log_scale_mix = nn.Parameter(torch.zeros(n_scales))
 
         # Q2 → group matrix (фиксированный маппинг, не обучаемый)
         q2_to_group = torch.zeros(4, n_groups)
@@ -441,6 +480,22 @@ class MultiScaleGlobalRouter(nn.Module):
             if g_idx < n_groups:
                 q2_to_group[v_idx, g_idx] = 1.0
         self.register_buffer('q2_to_group', q2_to_group)    # (4, n_groups)
+
+        # ── Q4 масштаб: PseudoRAG 16-архетипный куб (use_q4=True) ──────────────
+        # Q4 = {−1,+1}^4, 16 вершин = два Q3-куба (Material-face и Abstract-face)
+        # Вершина i кодирует 4-буквенный PseudoRAG архетип через биты:
+        #   бит 3 (pos 0): 0=M (Материальное), 1=A (Абстрактное)
+        #   бит 2 (pos 1): 0=S (Статичное),    1=D (Динамичное)
+        #   бит 1 (pos 2): 0=E (Элементарное), 1=C (Комплексное)
+        #   бит 0 (pos 3): 0=O (Упорядоченное),1=F (Текучее)
+        # Маппинг квадрантов → группы (см. _build_q4_anchors):
+        #   MS(i=0..3)→CONCRETE, MD(i=4..7)→DYNAMIC,
+        #   AS(i=8..11)→ABSTRACT, AD(i=12..15)→DYN↔ABS blend
+        if use_q4:
+            self.register_buffer('q4_verts', _make_sub_hypercube(4))  # (16, 4)
+            self.proj_q4 = nn.Linear(d_model, 4, bias=False)
+            q4_init = self._build_q4_anchors(n_groups)
+            self.q4_to_group = nn.Parameter(q4_init)         # (16, n_groups), обучаемый
 
         # Q3 якоря: обучаемый маппинг 8 Q3-вершин → n_groups
         # Инициализируем статическим приближением, затем дообучаем
@@ -472,6 +527,27 @@ class MultiScaleGlobalRouter(nn.Module):
         # Обучаемый скаляр смешения cosine↔WHT; init=-2 → sigmoid≈0.12 (WHT слаб
         # при старте, позволяет загрузить существующий чекпоинт без потери качества)
         self.log_wht_mix = nn.Parameter(torch.tensor(-2.0))
+
+        # ── Hamming geometric prior (hexnet integration) ──────────────────────
+        # Для каждой из 64 гексаграмм Q6: насколько близко она к каждой группе?
+        # hamming_prior_matrix[h, g] = exp(-min_hamming(h, anchors_g) / sigma)
+        # Решает коллапс gate≈0.49: геометрический prior не вырождается в константу.
+        # sigma=1.5: мягкий falloff (полный охват за ~3 шага Хэмминга)
+        _sigma_h = 1.5
+        hprior = torch.zeros(64, n_groups)
+        for _h in range(64):
+            for _g_idx, _g in enumerate(group_names):
+                _min_d = min(
+                    bin(_h ^ DOMAIN_Q6_IDX[_d]).count('1')
+                    for _d in DOMAIN_GROUPS[_g]
+                )
+                hprior[_h, _g_idx] = math.exp(-_min_d / _sigma_h)
+        hprior = hprior / hprior.sum(dim=1, keepdim=True).clamp(min=1e-8)
+        self.register_buffer('hamming_prior_matrix', hprior)  # (64, n_groups)
+        # hexnet hard prior: init=2.0 → sigmoid(2)≈0.88 (88% Hamming как основа).
+        # clamp(min=0.0) в forward → alpha ∈ [0.5, 1.0], Hamming всегда доминирует.
+        # Не ломает существующие чекпоинты (strict=False загрузка).
+        self.log_hamming_mix = nn.Parameter(torch.tensor(2.0))
 
     @staticmethod
     def _build_q3_anchors(n_groups: int) -> torch.Tensor:
@@ -521,6 +597,107 @@ class MultiScaleGlobalRouter(nn.Module):
         row_sum = q3_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
         return q3_map / row_sum
 
+    # Имена 16 PseudoRAG архетипов в порядке i=0..15 (из archetypes.py)
+    # Кодировка: бит3=M/A, бит2=S/D, бит1=E/C, бит0=O/F
+    _Q4_ARCHETYPE_NAMES = [
+        "MSEO/Кристалл",   # 0  = 0000: Material+Static+Elem+Ordered
+        "MSEF/Песок",      # 1  = 0001: Material+Static+Elem+Fluid
+        "MSCO/Здание",     # 2  = 0010: Material+Static+Complex+Ordered
+        "MSCF/Лес",        # 3  = 0011: Material+Static+Complex+Fluid
+        "MDEO/Механизм",   # 4  = 0100: Material+Dynamic+Elem+Ordered
+        "MDEF/Организм",   # 5  = 0101: Material+Dynamic+Elem+Fluid
+        "MDCO/Машина",     # 6  = 0110: Material+Dynamic+Complex+Ordered
+        "MDCF/Город",      # 7  = 0111: Material+Dynamic+Complex+Fluid
+        "ASEO/Аксиома",    # 8  = 1000: Abstract+Static+Elem+Ordered
+        "ASEF/Архетип",    # 9  = 1001: Abstract+Static+Elem+Fluid
+        "ASCO/Теория",     # 10 = 1010: Abstract+Static+Complex+Ordered
+        "ASCF/Культура",   # 11 = 1011: Abstract+Static+Complex+Fluid
+        "ADEO/Алгоритм",   # 12 = 1100: Abstract+Dynamic+Elem+Ordered
+        "ADEF/Интуиция",   # 13 = 1101: Abstract+Dynamic+Elem+Fluid
+        "ADCO/Программа",  # 14 = 1110: Abstract+Dynamic+Complex+Ordered
+        "ADCF/Общество",   # 15 = 1111: Abstract+Dynamic+Complex+Fluid
+    ]
+
+    @staticmethod
+    def _build_q4_anchors(n_groups: int) -> torch.Tensor:
+        """Q4 (16 вершин, 4 бита) → soft group matrix (16, n_groups).
+
+        Маппинг основан на реальной семантике PseudoRAG (archetypes.py):
+          Ось 0 (бит 3): M(-1) / A(+1)  — Materiality
+          Ось 1 (бит 2): S(-1) / D(+1)  — Dynamics
+          Ось 2 (бит 1): E(-1) / C(+1)  — Scale
+          Ось 3 (бит 0): O(-1) / F(+1)  — Structure
+
+        Квадрантная логика:
+          MS (i=0..3)  Material+Static   → CONCRETE:  кристалл, песок, здание, лес
+          MD (i=4..7)  Material+Dynamic  → DYNAMIC:   механизм, организм, машина, город
+          AS (i=8..11) Abstract+Static   → ABSTRACT:  аксиома, архетип, теория, культура
+          AD (i=12..15)Abstract+Dynamic  → смесь DYN↔ABS:
+              ADEO/Алгоритм    (E+O): procedure → DYNAMIC  (шаги = движение)
+              ADEF/Интуиция    (E+F): spontaneous → DYNAMIC  (поток мысли)
+              ADCO/Программа   (C+O): complex system → ABS 0.55 / DYN 0.45
+              ADCF/Общество    (C+F): social dynamics → DYN 0.6 / ABS 0.4
+
+        Связь с Q6/I Ching:
+          M(-1) ↔ Yin (земля, Kun-сторона) ↔ CONCRETE (low bitcount Q6)
+          A(+1) ↔ Yang (небо, Qian-сторона) ↔ ABSTRACT (high bitcount Q6)
+          S(-1) ↔ устойчивость (λ экстремум) ↔ полюса WHT (λ=±4)
+          D(+1) ↔ переход (λ≈0) ↔ экватор Q6 WHT (λ=0, bitcount=3)
+          E/C   ↔ масштаб иерархии Q2(Elementary) → Q6(Complex)
+          O/F   ↔ Ising T: Ordered=T<Tc (упорядоченная фаза), Fluid=T>Tc
+        """
+        # Индексы групп: ABS=0, DYN=1, CON=2  (порядок из group_names)
+        ABS, DYN, CON = 0 % n_groups, 1 % n_groups, 2 % n_groups
+        q4_map = torch.zeros(16, n_groups)
+
+        for i in range(16):
+            mat   = (i >> 3) & 1   # 0=Material, 1=Abstract
+            dyn   = (i >> 2) & 1   # 0=Static,   1=Dynamic
+            scale = (i >> 1) & 1   # 0=Elementary,1=Complex
+            fluid =  i       & 1   # 0=Ordered,  1=Fluid
+
+            if mat == 0 and dyn == 0:
+                # ── MS: Material+Static → CONCRETE ──────────────────────────
+                # MSCF/Лес (i=3): природная экосистема имеет слабую динамику
+                if scale == 1 and fluid == 1:      # MSCF = Лес (сложный + текучий)
+                    q4_map[i, CON] = 0.85
+                    q4_map[i, DYN] = 0.15
+                else:
+                    q4_map[i, CON] = 1.0
+
+            elif mat == 0 and dyn == 1:
+                # ── MD: Material+Dynamic → DYNAMIC ──────────────────────────
+                # MDCF/Город (i=7): сложная живая система с абстрактной надстройкой
+                if scale == 1 and fluid == 1:      # MDCF = Город (сложный + текучий)
+                    q4_map[i, DYN] = 0.80
+                    q4_map[i, ABS] = 0.20
+                else:
+                    q4_map[i, DYN] = 1.0
+
+            elif mat == 1 and dyn == 0:
+                # ── AS: Abstract+Static → ABSTRACT ──────────────────────────
+                # ASCF/Культура (i=11): традиции медленно меняются
+                if scale == 1 and fluid == 1:      # ASCF = Культура
+                    q4_map[i, ABS] = 0.85
+                    q4_map[i, DYN] = 0.15
+                else:
+                    q4_map[i, ABS] = 1.0
+
+            else:
+                # ── AD: Abstract+Dynamic → DYN↔ABS blend ────────────────────
+                if scale == 1 and fluid == 0:      # ADCO/Программа: C+O = структурированная
+                    q4_map[i, ABS] = 0.55
+                    q4_map[i, DYN] = 0.45
+                elif scale == 1 and fluid == 1:    # ADCF/Общество: C+F = текучая
+                    q4_map[i, DYN] = 0.60
+                    q4_map[i, ABS] = 0.40
+                else:                              # ADEO/Алгоритм, ADEF/Интуиция: E = действие
+                    q4_map[i, DYN] = 0.75
+                    q4_map[i, ABS] = 0.25
+
+        row_sum = q4_map.sum(dim=1, keepdim=True).clamp(min=1e-8)
+        return q4_map / row_sum
+
     @property
     def temperature(self) -> torch.Tensor:
         return self.log_temp.exp().clamp(0.1, 5.0)
@@ -541,6 +718,15 @@ class MultiScaleGlobalRouter(nn.Module):
         sim_q2   = soft_q2 @ self.q2_verts.T                          # (B, T, 4)
         w_q2     = F.softmax(sim_q2 / T_inv, dim=-1)                  # (B, T, 4)
         score_q2 = w_q2 @ self.q2_to_group                            # (B, T, n_groups)
+
+        # ── Q4 масштаб (PseudoRAG, use_q4=True) ────────────────────────────
+        if self.use_q4:
+            soft_q4  = torch.tanh(self.proj_q4(h))                    # (B, T, 4)
+            sim_q4   = soft_q4 @ self.q4_verts.T                      # (B, T, 16)
+            w_q4     = F.softmax(sim_q4 / T_inv, dim=-1)              # (B, T, 16)
+            # q4_to_group — обучаемый параметр; нормализуем строки на лету
+            q4_map   = F.softmax(self.q4_to_group, dim=-1)            # (16, n_groups)
+            score_q4 = w_q4 @ q4_map                                  # (B, T, n_groups)
 
         # ── Q3 масштаб ──────────────────────────────────────────────────────
         soft_q3  = torch.tanh(self.proj_q3(h))                        # (B, T, 3)
@@ -572,11 +758,28 @@ class MultiScaleGlobalRouter(nn.Module):
         score_q6  = (1.0 - wht_alpha) * score_q6_cos + wht_alpha * score_q6_wht
 
         # ── Смешивание масштабов ─────────────────────────────────────────────
-        scale_mix    = F.softmax(self.log_scale_mix, dim=0)            # (3,)
-        mixed_scores = (scale_mix[0] * score_q2 +
-                        scale_mix[1] * score_q3 +
-                        scale_mix[2] * score_q6)
-        group_weights = F.softmax(mixed_scores, dim=-1)                # (B, T, n_groups)
+        scale_mix = F.softmax(self.log_scale_mix, dim=0)
+        if self.use_q4:
+            # 4 масштаба: [w_Q2, w_Q4, w_Q3, w_Q6]
+            mixed_scores = (scale_mix[0] * score_q2 +
+                            scale_mix[1] * score_q4 +
+                            scale_mix[2] * score_q3 +
+                            scale_mix[3] * score_q6)
+        else:
+            # 3 масштаба: [w_Q2, w_Q3, w_Q6]
+            mixed_scores = (scale_mix[0] * score_q2 +
+                            scale_mix[1] * score_q3 +
+                            scale_mix[2] * score_q6)
+        group_weights_learned = F.softmax(mixed_scores, dim=-1)        # (B, T, n_groups)
+
+        # ── Hamming geometric prior blend (hexnet) ───────────────────────────
+        # hex_weights → (B, T, 64) @ (64, n_groups) = (B, T, n_groups)
+        # detach(): prior не backprop через hex_weights повторно
+        hamming_prior = hex_weights.detach() @ self.hamming_prior_matrix
+        # hexnet hard prior: clamp(min=0.0) → alpha ∈ [0.5, 1.0], Hamming всегда ≥ 50%.
+        hamming_alpha = torch.sigmoid(self.log_hamming_mix.clamp(min=0.0))  # ∈ [0.5, 1.0)
+        group_weights = ((1.0 - hamming_alpha) * group_weights_learned
+                         + hamming_alpha * hamming_prior)              # (B, T, n_groups)
 
         # ── Load-balance loss ────────────────────────────────────────────────
         mean_gw  = group_weights.mean(dim=(0, 1)).clamp(min=1e-8)
@@ -599,6 +802,9 @@ class HMoEConfig:
     lb_loss_weight:     float = 0.01   # вес load-balancing loss
     bridge_weight:      float = 0.5    # вес BridgeExpert выходов
     use_multiscale:     bool  = True   # MultiScaleGlobalRouter vs GlobalRouter
+    use_q4:             bool  = False  # Q4 масштаб (16 вершин) между Q2 и Q3
+    #                                  # Q4 = 4-куб {−1,+1}^4; 16 вершин = 2 Q3-куба
+    #                                  # балансировка: ABS=5, DYN=6, CON=5 vs Q6's 7/20/7
     use_hex_tier:       bool  = False  # 4-й уровень: Q6ExpertBank (64 эксперта)
     hex_tier_top_k:     int   = 4      # top-k для Q6ExpertBank
     hex_tier_weight:    float = 0.3    # вес 4-го уровня в финальном выходе
@@ -647,7 +853,8 @@ class HierarchicalMoEFFN(nn.Module):
 
         # Уровень 1: Global router (MultiScale или legacy)
         if cfg.use_multiscale:
-            self.global_router = MultiScaleGlobalRouter(d, group_names)
+            self.global_router = MultiScaleGlobalRouter(
+                d, group_names, use_q4=cfg.use_q4)
         else:
             self.global_router = GlobalRouter(d, group_names)
 
@@ -794,6 +1001,7 @@ class HierarchicalMoEFFN(nn.Module):
             hex_weights = None
         total_lb_loss = total_lb_loss + lb_global
         info['group_weights'] = group_weights.detach()
+        info['group_weights_grad'] = group_weights  # с градиентами для supervision loss
 
         # ── 1b. Топологический loss уровней 1-3 (добавляется ДО масштабирования
         #        lb_loss_weight, чтобы иметь прямой контроль через lambda_*)

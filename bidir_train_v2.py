@@ -51,7 +51,7 @@ from yijing_transformer.constants import HEX_NAMES
 torch.manual_seed(7)
 random.seed(7)
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CFG = Variant3Config(
     vocab_size=256, block_size=32, d_model=128,
     n_heads=4, n_layers=4, ffn_mult=4,
@@ -692,7 +692,7 @@ def main():
     ckpt_path = "checkpoint_bidir.pt"
 
     if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location=DEVICE)
+        ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=True)
         model.load_state_dict(ckpt["model_state"])
         qfilter.load_state_dict(ckpt["qfilter_state"])
         corpus_size_v1 = ckpt.get("corpus_size", "?")

@@ -283,7 +283,7 @@ def train(args):
 
     start_step = 0
     if args.resume:
-        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        ckpt = torch.load(args.resume, map_location=device, weights_only=True)
         ckpt_vocab = ckpt['model_state_dict']['tok_emb.weight'].shape[0]
         cur_vocab = cfg.vocab_size
         if ckpt_vocab != cur_vocab:

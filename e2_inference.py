@@ -43,8 +43,8 @@ sys.path.insert(0, str(_ROOT))
 from yijing_transformer.constants import HEX_NAMES
 _HEX_NAMES = HEX_NAMES
 
-# ── Имена гексаграмм (по Вильгельму) ─────────────────────────────────────────
-_DOMAINS = ["GEO", "HYDRO", "PYRO", "AERO", "COSMO", "NOOS"]
+# ── Имена гексаграмм и доменов ────────────────────────────────────────────────
+from yijing_transformer.constants import HEX_NAMES as _HEX_NAMES, DOMAINS as _DOMAINS
 
 
 def _hex_name(idx: int) -> str:
@@ -122,8 +122,8 @@ class E2Inference:
                                   "source": it["source"],
                                   "domain": it["domain"],
                                   "alpha": it["alpha"]})
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [warn] corpus_loader недоступен: {e}")
 
         # Внутренние кластеры
         try:
@@ -135,8 +135,8 @@ class E2Inference:
                                   "source": f"repo/{it['cluster']}",
                                   "domain": it["domain"],
                                   "alpha": it["alpha"]})
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [warn] repo_corpus_loader недоступен: {e}")
 
         # Вычисляем Q6 для каждого элемента
         self._corpus = []
@@ -151,8 +151,8 @@ class E2Inference:
                     "q6":      emb["q6"],
                     "hex_idx": emb["hex_idx"],
                 })
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [warn] embed failed для '{it['text'][:30]}': {e}")
 
     # ── Основные методы ──────────────────────────────────────────────────────
 
@@ -253,7 +253,8 @@ class E2Inference:
         try:
             return bytes(generated[:len(prefix.encode())+max_new_tokens]).decode(
                 "utf-8", errors="replace")
-        except Exception:
+        except Exception as e:
+            print(f"  [warn] decode failed в generate(): {e}")
             return prefix
 
     def cross_repo_align(self) -> dict:

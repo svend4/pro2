@@ -1417,7 +1417,7 @@ def phase1_train_all(model, sp, args):
     # Resume?
     start_step = 0
     if args.resume and os.path.exists(args.resume):
-        ckpt = torch.load(args.resume, weights_only=False)
+        ckpt = torch.load(args.resume, weights_only=True)
         model.load_state_dict(ckpt['model'], strict=False)
         if 'optimizer' in ckpt:
             try:
@@ -2511,7 +2511,7 @@ def main():
     )
 
     if args.resume and os.path.exists(args.resume):
-        ckpt = torch.load(args.resume, weights_only=False)
+        ckpt = torch.load(args.resume, weights_only=True)
         model.load_state_dict(ckpt['model'], strict=False)
         print(f"  Loaded checkpoint: {args.resume}")
 

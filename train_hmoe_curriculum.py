@@ -59,7 +59,7 @@ torch.manual_seed(42)
 random.seed(42)
 
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Модель (малый размер для демонстрации)
 MODEL_CFG = dict(
@@ -182,18 +182,19 @@ def encode(text: str, block_size: int = MODEL_CFG["block_size"] - 1) -> torch.Te
 def load_corpus(root: str, clusters: List[str]) -> List[str]:
     """Загружает тексты из указанных кластеров через RepoCorpusLoader."""
     try:
+        from pathlib import Path as _Path
         from repo_corpus_loader import RepoCorpusLoader
-        loader = RepoCorpusLoader(root)
+        loader = RepoCorpusLoader(_Path(root))
         texts: List[str] = []
         for cluster_name in clusters:
             try:
-                items = loader.load_cluster(cluster_name)
+                items = loader.get_cluster(cluster_name)
                 for item in items:
                     t = item if isinstance(item, str) else item.get("text", "")
                     if len(t) > 10:
                         texts.append(t)
-            except Exception:
-                pass
+            except ValueError:
+                pass  # неизвестный кластер (например, "Data" отсутствует в CLUSTER_DEFS)
         return texts
     except ImportError:
         return []
@@ -282,8 +283,16 @@ def run_phase(
     log_every:       int,
     phase_num:       int,
     total_phases:    int,
+    cluster_texts:   Optional[Dict[str, List[str]]] = None,
+    lambda_routing:  float = 0.5,
 ) -> Dict[str, float]:
     """Обучение одной фазы.
+
+    Args:
+        cluster_texts:  dict {cluster_name: [texts]} для supervised routing loss.
+                        Если задан и phase_cfg.group is None (фазы роутеров),
+                        добавляет cross-entropy loss по целевой группе эксперта.
+        lambda_routing: вес supervised routing loss (default 0.5).
 
     Returns: словарь метрик {'loss', 'ppl', 'ent'}.
     """
@@ -304,6 +313,19 @@ def run_phase(
     n_trainable = sum(p.numel() for p in trainable)
     optimizer = torch.optim.AdamW(trainable, lr=lr, weight_decay=0.01)
 
+    # 4) Supervised routing: таблица cluster → целевой индекс группы
+    _GROUP_NAMES = list(DOMAIN_GROUPS.keys())  # ['ABSTRACT', 'DYNAMIC', 'CONCRETE']
+    _cluster_to_group_idx: Dict[str, int] = {
+        c: _GROUP_NAMES.index(DOMAIN_TO_GROUP[d])
+        for c, d in CLUSTER_TO_DOMAIN.items()
+        if DOMAIN_TO_GROUP.get(d) in _GROUP_NAMES
+    }
+    use_routing_sup = (
+        cluster_texts is not None
+        and phase_cfg.group is None   # только в фазах роутеров (4, 5)
+        and lambda_routing > 0
+    )
+
     print(f"\n{'─' * 72}")
     print(f"  ФАЗА {phase_num}/{total_phases}: {phase_cfg.name}")
     print(f"  {phase_cfg.description}")
@@ -311,20 +333,35 @@ def run_phase(
     print(f"  Trainable params: {n_trainable:,}  |  LR: {lr:.2e}  |  Steps: {steps}")
     print(f"  Кластеры: {phase_cfg.clusters if phase_cfg.clusters else 'все'}")
     print(f"  Группа экспертов: {phase_cfg.group or 'все'}")
+    if use_routing_sup:
+        print(f"  Supervised routing loss: λ={lambda_routing}")
 
     if not texts_for_phase:
         print("  ⚠️  Нет текстов для этой фазы — пропускаем")
         return {"loss": float("nan"), "ppl": float("nan"), "ent": float("nan")}
 
     model.train()
-    running_loss = 0.0
-    running_aux  = 0.0
-    running_topo = 0.0
+    running_loss  = 0.0
+    running_aux   = 0.0
+    running_topo  = 0.0
+    running_rsup  = 0.0
     losses = []
     t0 = time.perf_counter()
 
+    # Для supervised routing: список кластеров с текстами
+    _sup_clusters: List[str] = []
+    if use_routing_sup and cluster_texts:
+        _sup_clusters = [c for c, ts in cluster_texts.items() if ts and c in _cluster_to_group_idx]
+
     for step in range(1, steps + 1):
-        inp, tgt = make_batch(texts_for_phase)
+        # Выбор батча: для supervised routing — из конкретного кластера
+        if use_routing_sup and _sup_clusters:
+            cur_cluster = _sup_clusters[step % len(_sup_clusters)]
+            inp, tgt = make_batch(cluster_texts[cur_cluster])  # type: ignore[index]
+            target_group = _cluster_to_group_idx[cur_cluster]
+        else:
+            inp, tgt = make_batch(texts_for_phase)
+            target_group = -1
 
         logits, loss, aux_loss = model(inp, targets=tgt)
 
@@ -334,6 +371,19 @@ def run_phase(
         total_loss = loss
         if aux_loss is not None and not torch.isnan(aux_loss):
             total_loss = total_loss + aux_loss
+
+        # Supervised routing loss: group_weights_grad → target_group
+        if target_group >= 0:
+            for block in model.blocks:
+                info = getattr(block, '_last_moe_info', None)
+                if info and 'group_weights_grad' in info:
+                    # group_weights_grad: (B, T, n_groups) с градиентами → mean
+                    gw = info['group_weights_grad'].mean(dim=(0, 1))  # (n_groups,)
+                    target_t = torch.tensor([target_group], dtype=torch.long)
+                    rsup = F.cross_entropy(gw.unsqueeze(0), target_t)
+                    total_loss = total_loss + lambda_routing * rsup
+                    running_rsup += rsup.item()
+                    break
 
         optimizer.zero_grad()
         total_loss.backward()
@@ -358,15 +408,18 @@ def run_phase(
             avg_loss = running_loss / log_every
             avg_aux  = running_aux  / log_every
             avg_topo = running_topo / log_every
+            avg_rsup = running_rsup / log_every
             elapsed  = time.perf_counter() - t0
             ppl_est  = math.exp(min(avg_loss, 10))
             topo_str = f"  topo={avg_topo:.4f}" if avg_topo > 0 else ""
+            rsup_str = f"  rsup={avg_rsup:.4f}" if avg_rsup > 0 else ""
             print(f"    step {step:>5d}/{steps}  loss={avg_loss:.4f}  "
-                  f"aux={avg_aux:.5f}  ppl≈{ppl_est:.1f}{topo_str}  "
+                  f"aux={avg_aux:.5f}  ppl≈{ppl_est:.1f}{topo_str}{rsup_str}  "
                   f"({elapsed:.1f}s elapsed)")
             running_loss = 0.0
             running_aux  = 0.0
             running_topo = 0.0
+            running_rsup = 0.0
 
     # Финальные метрики
     eval_texts = texts_all if texts_all else texts_for_phase
@@ -455,7 +508,7 @@ def main():
 
     start_phase = 1
     if args.resume and os.path.exists(args.resume):
-        ckpt = torch.load(args.resume, map_location="cpu")
+        ckpt = torch.load(args.resume, map_location="cpu", weights_only=True)
         model.load_state_dict(ckpt["model_state"], strict=False)
         start_phase = ckpt.get("next_phase", 1)
         print(f"  Чекпоинт загружен: {args.resume}  (продолжаем с фазы {start_phase})")
@@ -529,15 +582,17 @@ def main():
             texts_for_phase.extend(corpus_by_cluster.get(c, []))
 
         metrics = run_phase(
-            model          = model,
-            phase_cfg      = phase_cfg,
-            texts_for_phase= texts_for_phase,
-            texts_all      = texts_all,
-            steps          = steps,
-            base_lr        = args.lr,
-            log_every      = log_every,
-            phase_num      = phase_cfg.phase,
-            total_phases   = len(CURRICULUM),
+            model           = model,
+            phase_cfg       = phase_cfg,
+            texts_for_phase = texts_for_phase,
+            texts_all       = texts_all,
+            steps           = steps,
+            base_lr         = args.lr,
+            log_every       = log_every,
+            phase_num       = phase_cfg.phase,
+            total_phases    = len(CURRICULUM),
+            cluster_texts   = corpus_by_cluster,
+            lambda_routing  = 2.0,
         )
         results[phase_cfg.phase] = metrics
 

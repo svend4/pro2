@@ -56,7 +56,7 @@ torch.manual_seed(42)
 random.seed(42)
 
 _ROOT  = Path(__file__).parent
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 V3_CFG = Variant3Config(
     vocab_size=256,
@@ -339,7 +339,7 @@ def main():
 
     print("\n  Загружаю кластеры репозитория...")
     loader = RepoCorpusLoader(_ROOT)
-    clusters_raw = loader.load_all_clusters()
+    clusters_raw = loader.get_all_clusters()   # fix: load_all_clusters → get_all_clusters
 
     # Преобразуем в dict[cluster_name → list[str]]
     clusters: Dict[str, List[str]] = {}
@@ -359,7 +359,7 @@ def main():
     ckpt_path = HMOE_CHECKPOINT if (args.resume and HMOE_CHECKPOINT.exists()) \
                 else BASE_CHECKPOINT
     if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=DEVICE)
+        state = torch.load(ckpt_path, map_location=DEVICE, weights_only=True)
         # Загружаем только совместимые ключи
         model_state = model.state_dict()
         compatible = {k: v for k, v in state.items()

@@ -1,0 +1,141 @@
+{
+  "step": 3000,
+  "score": 0.9090909090909091,
+  "passed": 10,
+  "total": 11,
+  "results": [
+    {
+      "text": "def forward(self, x):\n    return self.linear(x)",
+      "description": "Стандартная forward-функция PyTorch",
+      "expected_domain": "CODE",
+      "actual_domain": "CODE",
+      "routing_ok": true,
+      "ppl": 2.53,
+      "max_ppl": 12.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.8
+    },
+    {
+      "text": "class Transformer(nn.Module):\n    def __init__(self):",
+      "description": "Определение класса нейросети",
+      "expected_domain": "CODE",
+      "actual_domain": "CODE",
+      "routing_ok": true,
+      "ppl": 2.3,
+      "max_ppl": 15.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.8
+    },
+    {
+      "text": "import torch\nimport torch.nn as nn",
+      "description": "Импорты PyTorch",
+      "expected_domain": "CODE",
+      "actual_domain": "CODE",
+      "routing_ok": true,
+      "ppl": 1.74,
+      "max_ppl": 8.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.5
+    },
+    {
+      "text": "Маршрутизация запроса к эксперту через роутер",
+      "description": "Русское описание routing",
+      "expected_domain": "RECON",
+      "actual_domain": "RECON",
+      "routing_ok": true,
+      "ppl": 1.22,
+      "max_ppl": 35.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.5
+    },
+    {
+      "text": "Тернарная квантизация работает через Gumbel-Softmax",
+      "description": "Русское описание архитектуры",
+      "expected_domain": "RECON",
+      "actual_domain": "RECON",
+      "routing_ok": true,
+      "ppl": 1.47,
+      "max_ppl": 40.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.5
+    },
+    {
+      "text": "loss = -sum(p * log(q)) / n",
+      "description": "Кросс-энтропийная функция потерь",
+      "expected_domain": "MATH",
+      "actual_domain": "MATH",
+      "routing_ok": true,
+      "ppl": 3.11,
+      "max_ppl": 18.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.75
+    },
+    {
+      "text": "hamming_distance = sum(a != b for a, b in zip(v1, v2))",
+      "description": "Расстояние Хэмминга в коде",
+      "expected_domain": "MATH",
+      "actual_domain": "MATH",
+      "routing_ok": true,
+      "ppl": 2.76,
+      "max_ppl": 15.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.6666666666666666
+    },
+    {
+      "text": "d_model: 128\nn_heads: 4\nn_layers: 4",
+      "description": "YAML-конфигурация модели",
+      "expected_domain": "SYSTEM",
+      "actual_domain": "SYSTEM",
+      "routing_ok": true,
+      "ppl": 2.14,
+      "max_ppl": 20.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.6
+    },
+    {
+      "text": "git commit -m 'fix: per-source trit_proj'",
+      "description": "Git-команда",
+      "expected_domain": "SYSTEM",
+      "actual_domain": "CODE",
+      "routing_ok": false,
+      "ppl": 2.8,
+      "max_ppl": 25.0,
+      "ppl_ok": true,
+      "passed": false,
+      "routing_confidence": 0.3333333333333333
+    },
+    {
+      "text": "YiJing-Transformer использует 64 гексаграммы как архетипы.",
+      "description": "Само-описание архитектуры на русском",
+      "expected_domain": "RECON",
+      "actual_domain": "RECON",
+      "routing_ok": true,
+      "ppl": 1.55,
+      "max_ppl": 50.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.6666666666666666
+    },
+    {
+      "text": "Q6 = {-1,+1}^6 вершины 6-мерного гиперкуба",
+      "description": "Математическое само-описание",
+      "expected_domain": "MATH",
+      "actual_domain": "MATH",
+      "routing_ok": true,
+      "ppl": 2.04,
+      "max_ppl": 30.0,
+      "ppl_ok": true,
+      "passed": true,
+      "routing_confidence": 0.6666666666666666
+    }
+  ],
+  "mock_mode": true
+}

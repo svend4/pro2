@@ -690,7 +690,7 @@ def main():
             block.hmoe = HierarchicalMoEFFN(hmoe_cfg)
 
     if os.path.exists(args.checkpoint):
-        ckpt = torch.load(args.checkpoint, map_location="cpu")
+        ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
         try:
             model.load_state_dict(ckpt["model_state"], strict=False)
             print(f"  Чекпоинт: {args.checkpoint}  ✓")

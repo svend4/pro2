@@ -1,0 +1,107 @@
+[
+  {
+    "name": "lean_baseline",
+    "week": 1,
+    "model": "LeanYiJingGPT",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat"
+    ],
+    "hypothesis": "Два доказанных источника дают PPL < 1.07",
+    "success_criterion": "PPL < 1.07 на реальных данных",
+    "fix": "",
+    "status": "done",
+    "result_ppl": 1.51,
+    "result_notes": "Best loss=0.2861, xerox@3000=2.94, 321s CPU",
+    "verdict": "inconclusive"
+  },
+  {
+    "name": "interlingua_fixed",
+    "week": 2,
+    "model": "LeanYiJingGPT + ArchetypalInterlingua (per-source)",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "interlingua"
+    ],
+    "hypothesis": "ArchetypalInterlingua с per-source trit_proj улучшает PPL",
+    "success_criterion": "PPL < lean_baseline PPL",
+    "fix": "per_source_trit_proj + gumbel_softmax (T=1.0→0.05) + diversity_loss (weight=0.01)",
+    "status": "done",
+    "result_ppl": 1.1712,
+    "result_notes": "Best loss=0.0901, PPL 1.1712 < baseline 1.51, 418s CPU",
+    "verdict": "proven"
+  },
+  {
+    "name": "kasatkin_as_router",
+    "week": 3,
+    "model": "LeanYiJingGPT + KasatkinQ6Router",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "kasatkin_3d"
+    ],
+    "hypothesis": "Касаткин как Q6-router даёт routing_confidence > 15%",
+    "success_criterion": "routing_confidence > 15% И PPL не хуже lean_baseline",
+    "fix": "Касаткин как роутер (не CubicAttentionBias)",
+    "status": "done",
+    "result_ppl": 1.0355,
+    "result_notes": "routing_conf=0.3450 >> 0.15 цели; PPL 1.0355 < baseline 1.51; 738s CPU",
+    "verdict": "proven"
+  },
+  {
+    "name": "solan_nautilus",
+    "week": 4,
+    "model": "NautilusMoME + GlyphAwareEmbedding",
+    "min_steps": 3000,
+    "sources": [
+      "solan_glyph"
+    ],
+    "hypothesis": "SOLAN-токены с Хэмминг-bias улучшают routing точность",
+    "success_criterion": "ксерокс-тест > 80% И cross_domain_diversity > 0.16",
+    "fix": "Q6 byte embedding + KasatkinQ6Router + routing supervision λ=0.3",
+    "status": "done",
+    "result_ppl": 6.9256,
+    "result_notes": "PPL 6.9 >> baseline 1.51 (λ=0.3 мешает LM). Xerox 0/5: RECON (62%) доминирует из-за 70% RECON в корпусе. diversity=0.0675. glyph_scale уменьшился 0.1→0.059 (модель сама отвергает глифы). Нужен λ<0.05 или adversarial domain balance.",
+    "verdict": "disproven"
+  },
+  {
+    "name": "palace_block_sparse",
+    "week": 5,
+    "model": "LeanYiJingGPT + PalaceAttention (block-sparse)",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "skliarova_palace"
+    ],
+    "hypothesis": "PalaceAttention как block-sparse 8×8 маска улучшает PPL",
+    "success_criterion": "PPL < lean_baseline PPL",
+    "fix": "block-sparse 8×8 маска вместо dense attention",
+    "status": "done",
+    "result_ppl": 6.9351,
+    "result_notes": "Final PPL 6.9351 >> baseline 1.51. Best loss=0.8603 (PPL≈2.36) на step~1400, затем нестабильность. Gate=0.547 (Palace незначительно выигрывает у GAT). Архитектурная проблема: PalaceAttention без каузальной маски + block-sparse паттерн не совместим с задачей LM. 924K параметров, 1047s CPU.",
+    "verdict": "disproven"
+  },
+  {
+    "name": "meta_hexlearn_router",
+    "week": 6,
+    "model": "LeanYiJingGPT + HexLearnRouter (из meta)",
+    "min_steps": 3000,
+    "sources": [
+      "heisenberg",
+      "flower_gat",
+      "kasatkin_3d"
+    ],
+    "hypothesis": "Геометрический k-NN router из meta улучшает специализацию",
+    "success_criterion": "routing_confidence > 20% по сравнению с KasatkinQ6Router",
+    "fix": "Q6 unit-basis (6 one-hot vectors) + soft Hamming distance",
+    "status": "done",
+    "result_ppl": 1.0231,
+    "result_notes": "ЛУЧШИЙ PPL=1.0231 (< Kasatkin 1.0355 < interlingua 1.1712 < baseline 1.51). НО routing_conf=0.0178 << 0.20. Архитектурный дефект: unit-вершины Q6 равноудалены от [0.5,...,0.5] → нет градиента → Q6 coords=0.49. Expert projectors добавляют ёмкость и улучшают LM, но не специализируются. Вывод: добавление router capacity помогает PPL даже без routing differentiation. 655s CPU.",
+    "verdict": "disproven"
+  }
+]

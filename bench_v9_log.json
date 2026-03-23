@@ -1,0 +1,80 @@
+[
+  {
+    "cycle": 1,
+    "lci_r_starts": [
+      3.0711,
+      3.0676
+    ],
+    "agent_results": [
+      {
+        "agent": "Агент-А (абстрактный)",
+        "route": [
+          "ABSTRACT",
+          "CONCRETE"
+        ],
+        "lci": [
+          3.1064,
+          3.0307
+        ],
+        "avg_lci": 3.0685
+      },
+      {
+        "agent": "Агент-X (динамический)",
+        "route": [
+          "ABSTRACT",
+          "CONCRETE"
+        ],
+        "lci": [
+          3.0608,
+          3.031
+        ],
+        "avg_lci": 3.0459
+      }
+    ],
+    "kirchhoff_val": 3.0375,
+    "load_balance": 0.9996,
+    "avg_lci_all": 3.0572,
+    "resonant": true,
+    "n_generated": 17,
+    "elapsed_s": 9.33
+  },
+  {
+    "cycle": 2,
+    "lci_r_starts": [
+      3.038,
+      3.0387
+    ],
+    "agent_results": [
+      {
+        "agent": "Агент-А (абстрактный)",
+        "route": [
+          "ABSTRACT",
+          "CONCRETE"
+        ],
+        "lci": [
+          3.0414,
+          3.0356
+        ],
+        "avg_lci": 3.0385
+      },
+      {
+        "agent": "Агент-X (динамический)",
+        "route": [
+          "ABSTRACT",
+          "CONCRETE"
+        ],
+        "lci": [
+          3.0086,
+          3.0003
+        ],
+        "avg_lci": 3.0045
+      }
+    ],
+    "kirchhoff_val": 3.0243,
+    "load_balance": 0.9888,
+    "avg_lci_all": 3.0215,
+    "resonant": true,
+    "n_generated": 35,
+    "elapsed_s": 8.29
+  }
+]
