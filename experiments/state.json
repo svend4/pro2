@@ -81,10 +81,10 @@
     "hypothesis": "PalaceAttention как block-sparse 8×8 маска улучшает PPL",
     "success_criterion": "PPL < lean_baseline PPL",
     "fix": "block-sparse 8×8 маска вместо dense attention",
-    "status": "pending",
-    "result_ppl": null,
-    "result_notes": "",
-    "verdict": ""
+    "status": "done",
+    "result_ppl": 6.9351,
+    "result_notes": "Final PPL 6.9351 >> baseline 1.51. Best loss=0.8603 (PPL≈2.36) на step~1400, затем нестабильность. Gate=0.547 (Palace незначительно выигрывает у GAT). Архитектурная проблема: PalaceAttention без каузальной маски + block-sparse паттерн не совместим с задачей LM. 924K параметров, 1047s CPU.",
+    "verdict": "disproven"
   },
   {
     "name": "meta_hexlearn_router",
