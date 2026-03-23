@@ -3,6 +3,7 @@ Routing, gating, curriculum, logging.
 """
 
 import math
+import threading
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,22 +16,23 @@ class GatedPathSelector(nn.Module):
         self.gate_proj = nn.Linear(d_model, 1, bias=True)
         nn.init.zeros_(self.gate_proj.weight)
         nn.init.constant_(self.gate_proj.bias, init_bias)
-        self._last_gate_mean = 0.5
-        self._last_gate_std = 0.0
+        self._local = threading.local()
 
     def forward(self, x_standard, x_geometric):
         combined = (x_standard + x_geometric) * 0.5
         gate = torch.sigmoid(self.gate_proj(combined))
         with torch.no_grad():
-            self._last_gate_mean = gate.mean().item()
-            self._last_gate_std = gate.std().item()
+            self._local.gate_mean = gate.mean().item()
+            self._local.gate_std = gate.std().item()
         return gate * x_geometric + (1 - gate) * x_standard
 
     def get_gate_stats(self):
+        mean = getattr(self._local, 'gate_mean', 0.5)
+        std  = getattr(self._local, 'gate_std',  0.0)
         return {
-            'gate_mean': self._last_gate_mean,
-            'gate_std': self._last_gate_std,
-            'prefers_geometry': self._last_gate_mean > 0.5,
+            'gate_mean': mean,
+            'gate_std': std,
+            'prefers_geometry': mean > 0.5,
         }
 
 
@@ -43,9 +45,7 @@ class AdaptiveGatedPathSelector(nn.Module):
         nn.init.zeros_(self.gate_proj.weight)
         nn.init.constant_(self.gate_proj.bias, init_bias)
         self.log_temperature = nn.Parameter(torch.tensor(0.0))
-        self._last_gate_mean = 0.5
-        self._last_gate_std = 0.0
-        self._last_gate_entropy = 0.0
+        self._local = threading.local()
 
     def forward(self, x_standard, x_geometric):
         combined = (x_standard + x_geometric) * 0.5
@@ -55,19 +55,22 @@ class AdaptiveGatedPathSelector(nn.Module):
         if self.n_heads > 1:
             gate = gate.mean(dim=-1, keepdim=True)
         with torch.no_grad():
-            self._last_gate_mean = gate.mean().item()
-            self._last_gate_std = gate.std().item()
+            self._local.gate_mean = gate.mean().item()
+            self._local.gate_std = gate.std().item()
             g = gate.mean().clamp(1e-6, 1 - 1e-6)
-            self._last_gate_entropy = -(g * g.log() + (1-g) * (1-g).log()).item()
+            self._local.gate_entropy = -(g * g.log() + (1-g) * (1-g).log()).item()
         return gate * x_geometric + (1 - gate) * x_standard
 
     def get_gate_stats(self):
+        mean    = getattr(self._local, 'gate_mean',    0.5)
+        std     = getattr(self._local, 'gate_std',     0.0)
+        entropy = getattr(self._local, 'gate_entropy', 0.0)
         return {
-            'gate_mean': self._last_gate_mean,
-            'gate_std': self._last_gate_std,
-            'gate_entropy': self._last_gate_entropy,
+            'gate_mean': mean,
+            'gate_std': std,
+            'gate_entropy': entropy,
             'temperature': self.log_temperature.exp().item(),
-            'prefers_geometry': self._last_gate_mean > 0.5,
+            'prefers_geometry': mean > 0.5,
         }
 
 
@@ -78,7 +81,7 @@ class TaskAwareRouter(nn.Module):
         self.n_strategies = n_strategies
         self.strategy_proj = nn.Linear(d_model, n_strategies, bias=True)
         self.strategy_biases = nn.Parameter(torch.linspace(-1.0, 1.0, n_strategies))
-        self._last_strategy_probs = None
+        self._local = threading.local()
 
     def forward(self, x):
         x_mean = x.mean(dim=1)
@@ -86,12 +89,13 @@ class TaskAwareRouter(nn.Module):
         probs = F.softmax(logits, dim=-1)
         gate_bias = (probs * self.strategy_biases.unsqueeze(0)).sum(dim=-1)
         with torch.no_grad():
-            self._last_strategy_probs = probs.mean(dim=0).tolist()
+            self._local.strategy_probs = probs.mean(dim=0).tolist()
         return gate_bias.unsqueeze(1).unsqueeze(2)
 
     def get_strategy_stats(self):
-        if self._last_strategy_probs is not None:
-            return {f'strategy_{i}': p for i, p in enumerate(self._last_strategy_probs)}
+        probs = getattr(self._local, 'strategy_probs', None)
+        if probs is not None:
+            return {f'strategy_{i}': p for i, p in enumerate(probs)}
         return {}
 
 

@@ -38,7 +38,7 @@ from yijing_transformer.models.variant3_extensions import (
 torch.manual_seed(42)
 random.seed(42)
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CFG = Variant3Config(
     vocab_size=256, block_size=32, d_model=128,
     n_heads=4, n_layers=4, ffn_mult=4,

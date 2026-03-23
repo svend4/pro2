@@ -68,7 +68,7 @@ try:
 except ImportError:
     _META_Q6_AVAILABLE = False
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 
 # ── Aut(Q6) орбиты по весу Хэмминга (hexsym) ─────────────────────────────────

@@ -47,7 +47,7 @@ from self_train_hmoe import (
     _get_emb, _get_moes, _freeze_all_except, MODEL_CFG, _LCI_EPSILON,
 )
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 _ROUNDABOUT_RING = ["ABSTRACT", "DYNAMIC", "CONCRETE", "META"]
 _META_FREEZE = ["ABSTRACT", "DYNAMIC", "CONCRETE"]

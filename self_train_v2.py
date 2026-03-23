@@ -26,38 +26,23 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 
 from yijing_transformer.models.variant3 import (
-    Variant3Config, Variant3GPT,
+    Variant3GPT,
     DOMAINS, DOMAIN_ANCHORS,
 )
-from yijing_transformer.models.variant3_extensions import (
-    HexagramEvaluator, TextQualityFilter,
-    get_hexagrams, get_biangua,
-)
+from yijing_transformer.constants import HEX_NAMES
+from self_train_common import CFG, hexagrams, biangua, evaluator, qfilter, text_to_ids
 
 # ─── config ──────────────────────────────────────────────────────────────────
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(42)
 random.seed(42)
-
-CFG = Variant3Config(
-    vocab_size=256, block_size=32, d_model=128,
-    n_heads=4, n_layers=4, ffn_mult=4,
-    hamming_lambda=0.15, uncertainty_budget=0.25,
-    dropout=0.05, use_domain_routing=True,
-)
 
 # Веса вспомогательных лоссов
 ALPHA_DOMAIN  = 0.30   # domain triplet
 BETA_QUALITY  = 0.20   # quality contrastive
 GAMMA_GATE    = 0.10   # gate entropy
 
-hexagrams  = get_hexagrams()
-biangua    = get_biangua()
-evaluator  = HexagramEvaluator(threshold=0.01)
-qfilter    = TextQualityFilter(CFG.d_model)
-
-from yijing_transformer.constants import HEX_NAMES
 def hname(i): return HEX_NAMES[i] if i < len(HEX_NAMES) else f"#{i}"
 
 
@@ -123,10 +108,6 @@ BAD_TEXTS = [
 
 # ─── утилиты ─────────────────────────────────────────────────────────────────
 
-def text_to_ids(text, block_size=32):
-    ids = [b for b in text.encode("utf-8")][:block_size]
-    ids = ids or [0]
-    return torch.tensor(ids, dtype=torch.long)
 
 def ids_pad(ids_list, block_size):
     """Pad list of id tensors to block_size."""

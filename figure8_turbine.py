@@ -99,7 +99,7 @@ from self_train_hmoe import (
 
 # ── Константы турбины ──────────────────────────────────────────────────────────
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # 4 станции турбины (роли экспертов)
 _TURBINE_EXPERTS = ["ABSTRACT", "DYNAMIC", "CONCRETE", "META"]

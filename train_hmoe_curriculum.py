@@ -59,7 +59,7 @@ torch.manual_seed(42)
 random.seed(42)
 
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Модель (малый размер для демонстрации)
 MODEL_CFG = dict(

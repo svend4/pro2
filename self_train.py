@@ -35,31 +35,15 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 
 from yijing_transformer.models.variant3 import (
-    Variant3Config, Variant3GPT,
+    Variant3GPT,
     DOMAINS, DOMAIN_ANCHORS,
 )
-from yijing_transformer.models.variant3_extensions import (
-    HexagramEvaluator, TextQualityFilter,
-    get_hexagrams, get_biangua,
-)
+from self_train_common import CFG, hexagrams, biangua, evaluator, qfilter, text_to_ids
 
 # ─── конфиг ──────────────────────────────────────────────────────────────────
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 SEED   = 42
-
-CFG = Variant3Config(
-    vocab_size=256,
-    block_size=32,
-    d_model=128,
-    n_heads=4,
-    n_layers=4,
-    ffn_mult=4,
-    hamming_lambda=0.15,
-    uncertainty_budget=0.25,
-    dropout=0.05,
-    use_domain_routing=True,
-)
 
 # ─── стадии ──────────────────────────────────────────────────────────────────
 
@@ -96,11 +80,6 @@ STAGE_PARAMS = {
 
 torch.manual_seed(SEED)
 random.seed(SEED)
-
-hexagrams  = get_hexagrams()   # (64, 6)
-biangua    = get_biangua()     # (64, 64)
-evaluator  = HexagramEvaluator(threshold=0.01)
-qfilter    = TextQualityFilter(CFG.d_model)
 
 from yijing_transformer.constants import HEX_NAMES
 
@@ -293,11 +272,6 @@ QUALITY_CORPUS_RAW = [
     "Retrieval augmentation supplements generation with external knowledge.",
 ]
 
-def text_to_ids(text, block_size):
-    ids = [b for b in text.encode("utf-8")][:block_size]
-    if not ids:
-        ids = [0]
-    return torch.tensor(ids, dtype=torch.long)
 
 
 class RAGBuffer:
