@@ -248,6 +248,8 @@ set_moe_stage(moe_module, stage=3)
 
 ## 5. Маршрутизация и гейты
 
+> Полный справочник модуля `geometry/` — см. [`GEOMETRY.md`](GEOMETRY.md)
+
 **Файл:** `yijing_transformer/models/geometry/routing.py`
 
 | Класс | Описание | Использование |

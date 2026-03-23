@@ -223,6 +223,8 @@ pro2/
 |------|-----------|
 | `docs/ARCHITECTURE.md` | Архитектурный справочник: Q6, HMoE, компоненты, конфигурации |
 | `docs/TRAINING.md` | Руководство по обучению: скрипты, pipeline, диагностика |
+| `docs/GEOMETRY.md` | Справочник модуля geometry/: квантизаторы, attention, routing, FFN |
+| `docs/TRAINING_UTILS.md` | Тренировочные утилиты: TrainingBridge, оптимизаторы, мониторинг |
 
 ### Концептуальная
 
