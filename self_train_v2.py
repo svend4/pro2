@@ -17,7 +17,7 @@ self_train_v2.py — Исправленное и расширенное само
   L_gate    (entropy):  - mean( p·log(p) ) по {ян,инь,変爻} → награда за выход из 0
 """
 
-import os, sys, math, random, collections, json
+import os, sys, random, collections, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
@@ -30,7 +30,7 @@ from yijing_transformer.models.variant3 import (
     DOMAINS, DOMAIN_ANCHORS,
 )
 from yijing_transformer.constants import HEX_NAMES
-from self_train_common import CFG, hexagrams, biangua, evaluator, qfilter, text_to_ids
+from self_train_common import CFG, biangua, evaluator, qfilter, text_to_ids
 
 # ─── config ──────────────────────────────────────────────────────────────────
 

@@ -59,7 +59,6 @@ from typing import Dict, List, Tuple
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import torch
-import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
