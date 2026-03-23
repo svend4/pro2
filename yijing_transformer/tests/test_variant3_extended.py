@@ -784,7 +784,7 @@ class TestReproducibility:
 
         # Загружаем в новую модель
         model2 = Variant3GPT(cfg)
-        model2.load_state_dict(torch.load(buf))
+        model2.load_state_dict(torch.load(buf, weights_only=True))
         model2.eval()
 
         with torch.no_grad():

@@ -569,7 +569,7 @@ def main():
 
     ckpt_path = args.checkpoint
     if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location="cpu")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         key = "model_state" if "model_state" in ckpt else None
         if not key:
             print(f"  ⚠️  Чекпоинт не содержит 'model_state' — используем случайные веса")

@@ -218,7 +218,7 @@ def try_neural_projection():
         # Попробовать LeanYiJingGPT
         try:
             from yijing_transformer.models.lean_model import LeanYiJingGPT
-            saved = torch.load(ckpt, map_location='cpu', weights_only=False)
+            saved = torch.load(ckpt, map_location='cpu', weights_only=True)
             if 'model_state' in saved:
                 cfg = saved.get('config', {})
                 model = LeanYiJingGPT(

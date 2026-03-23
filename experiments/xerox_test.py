@@ -237,7 +237,7 @@ def load_model_from_checkpoint(ckpt_path: Path):
     import torch
     from yijing_transformer.models.lean_model import LeanYiJingGPT
 
-    saved = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    saved = torch.load(ckpt_path, map_location='cpu', weights_only=True)
 
     if 'model_state' in saved:
         cfg = saved.get('config', {})

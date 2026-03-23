@@ -570,7 +570,7 @@ def _load_model(checkpoint_path: str) -> Variant3GPT:
     cfg = Variant3Config(**MODEL_CFG)
     model = Variant3GPT(cfg)
     if os.path.exists(checkpoint_path):
-        ckpt = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
+        ckpt = torch.load(checkpoint_path, map_location=DEVICE, weights_only=True)
         state = ckpt.get("model_state", ckpt)
         model.load_state_dict(state, strict=False)
         print(f"  Загружен чекпоинт: {checkpoint_path}")

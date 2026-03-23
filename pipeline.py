@@ -85,8 +85,8 @@ def read_avg_lci(log_path: str) -> float:
             return sum(r.get("lci_r_final", 0) for r in log) / len(log)
         elif "avg_lci" in r0:             # multi_salesman / bidir
             return sum(r.get("avg_lci", 0) for r in log) / len(log)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [warn] read_avg_lci({log_path}): {e}")
     return 0.0
 
 

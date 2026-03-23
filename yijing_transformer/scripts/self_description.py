@@ -354,7 +354,7 @@ def main():
         print("Run train_nautilus_mome.py first to train the model.")
         sys.exit(1)
 
-    ckpt = torch.load(args.checkpoint, weights_only=False, map_location='cpu')
+    ckpt = torch.load(args.checkpoint, weights_only=True, map_location='cpu')
 
     # Reconstruct model config from checkpoint
     # Try 'config' key first, then 'args' (training script stores args)

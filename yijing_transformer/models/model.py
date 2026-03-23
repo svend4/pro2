@@ -1258,7 +1258,7 @@ class YiJingGPT(nn.Module):
     @classmethod
     def from_pretrained(cls, path, device='cpu'):
         """Загружает модель из файла."""
-        ckpt = torch.load(path, map_location=device, weights_only=False)
+        ckpt = torch.load(path, map_location=device, weights_only=True)
         cfg = ckpt['config']
         model = cls(cfg).to(device)
         model.load_state_dict(ckpt['model_state_dict'])

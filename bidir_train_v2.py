@@ -704,7 +704,7 @@ def main():
     ckpt_path = "checkpoint_bidir.pt"
 
     if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location=DEVICE)
+        ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=True)
         model.load_state_dict(ckpt["model_state"])
         qfilter.load_state_dict(ckpt["qfilter_state"])
         corpus_size_v1 = ckpt.get("corpus_size", "?")

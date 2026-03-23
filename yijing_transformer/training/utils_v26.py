@@ -438,7 +438,7 @@ class CheckpointManager:
         best = self.get_best()
         if best is None or not os.path.exists(best['path']):
             return None
-        ckpt = torch.load(best['path'], weights_only=False)
+        ckpt = torch.load(best['path'], weights_only=True)
         model.load_state_dict(ckpt['model_state_dict'])
         if optimizer and 'optimizer_state_dict' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer_state_dict'])

@@ -181,7 +181,7 @@ def main():
     device = torch.device(args.device)
 
     if args.checkpoint:
-        ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
+        ckpt = torch.load(args.checkpoint, map_location=device, weights_only=True)
         cfg = ckpt['config']
         model = YiJingGPT(cfg).to(device)
         model.load_state_dict(ckpt['model_state_dict'])

@@ -359,7 +359,7 @@ def main():
     ckpt_path = HMOE_CHECKPOINT if (args.resume and HMOE_CHECKPOINT.exists()) \
                 else BASE_CHECKPOINT
     if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=DEVICE)
+        state = torch.load(ckpt_path, map_location=DEVICE, weights_only=True)
         # Загружаем только совместимые ключи
         model_state = model.state_dict()
         compatible = {k: v for k, v in state.items()
