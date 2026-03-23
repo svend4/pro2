@@ -125,13 +125,16 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
     lci_classic = (1.0 - abs(w_a - w_b)) * math.pi
 
     # ── LCI quaternion (4 сферы, ScarabQuaternion) ────────────────────────
-    # Нормировка: при равных w_a=w_x=w_b=1/3, w_cr=1 → нормировать на √(4/3)
-    # Общая формула: LCI_q = π · √(w_a²+w_x²+w_b²) / √(1/3)  (3-компонентная часть)
-    # + бонус за balanced crossing: max π когда all equal AND w_cr near 1
+    # ScarabQuaternion: |A| = π при мастерстве = идеальном балансе 4 компонент.
+    # 4 компоненты: BVS=ABSTRACT, SVS=DYNAMIC, MVS=CONCRETE, ChVS=crossing_balance.
+    # Нормировка: при идеальном балансе (1/3, 1/3, 1/3, crossing=0.5) → LCI = π.
     sum_sq = w_a**2 + w_x**2 + w_b**2              # min 1/3 (равные), max 1 (один доминирует)
-    # Нормируем: inversely — меньше sum_sq = лучше баланс = выше LCI
-    balance_3 = 1.0 - (sum_sq - 1/3) / (2/3)       # 1.0 при равных, 0.0 при полном доминировании
-    lci_quater = math.pi * (0.8 * balance_3 + 0.2 * w_cr)
+    # balance_3 ∈ [0,1]: 1.0 при равных, 0.0 при полном доминировании
+    balance_3 = 1.0 - (sum_sq - 1/3) / (2/3)
+    # balance_cross ∈ [0,1]: 1.0 при alpha=0.5, 0.0 при alpha=0 или 1
+    balance_cross = w_cr
+    # Геометрическое среднее 4 сфер: при идеале = 1.0 → LCI = π
+    lci_quater = math.pi * math.sqrt(balance_3 * balance_cross)
 
     # Возвращаем среднее — оба сигнала важны
     lci = (lci_classic + lci_quater) / 2.0
@@ -166,14 +169,42 @@ def routing_channel_capacity(gw_dict: Dict[str, float]) -> Tuple[float, float, f
     return entropy, C_etd, efficiency
 
 
-def _freeze_all_except(moe: HierarchicalMoEFFN, keep_groups: List[str]) -> None:
-    """Заморозить все группы кроме keep_groups."""
+def _freeze_all_except(moe: HierarchicalMoEFFN, keep_groups: List[str],
+                       also_unfreeze: List[str] = None) -> None:
+    """Заморозить все группы кроме keep_groups.
+
+    also_unfreeze: дополнительные подстроки имён параметров, которые всегда
+        размораживаются (напр. "global_router", "crossing", "out_proj").
+    """
+    also_unfreeze = also_unfreeze or []
+    # Ключи модулей групп: "group_routers.ABSTRACT.", "micro_experts.Theory." и т.д.
+    # Используем точные имена GroupRouter/MicroExpert, а не подстроки.
+    group_clusters = {}
+    for g in keep_groups:
+        group_clusters[g] = set(moe.group_to_clusters.get(g, []))
+
     for name, p in moe.named_parameters():
         frozen = True
+        # 1. Проверяем GroupRouter: "group_routers.ABSTRACT.proj.weight"
         for g in keep_groups:
-            if g.lower() in name.lower():
+            if f"group_routers.{g}." in name:
                 frozen = False
                 break
+        # 2. Проверяем MicroExpert: "micro_experts.Theory.gate.weight"
+        if frozen:
+            for g in keep_groups:
+                for cluster in group_clusters.get(g, []):
+                    if f"micro_experts.{cluster}." in name:
+                        frozen = False
+                        break
+                if not frozen:
+                    break
+        # 3. Дополнительные модули (global_router, crossing и т.д.)
+        if frozen:
+            for prefix in also_unfreeze:
+                if prefix in name:
+                    frozen = False
+                    break
         p.requires_grad_(not frozen)
 
 
@@ -229,13 +260,32 @@ def quality_filter(text: str, min_len: int = 10) -> bool:
     return unique >= min_len // 3
 
 
+_CACHED_OPT: dict = {}  # {lr: (optimizer, param_ids)} — кешируем optimizer по LR
+
+
+def _get_or_create_optimizer(model: Variant3GPT, lr: float) -> torch.optim.AdamW:
+    """Возвращает кешированный optimizer. Пересоздаёт если trainable params изменились."""
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    if not trainable:
+        return None
+    param_ids = tuple(id(p) for p in trainable)
+    cached = _CACHED_OPT.get(lr)
+    if cached is not None:
+        opt, old_ids = cached
+        if old_ids == param_ids:
+            return opt
+    # Новый optimizer (или params изменились после freeze/unfreeze)
+    opt = torch.optim.AdamW(trainable, lr=lr, weight_decay=0.01)
+    _CACHED_OPT[lr] = (opt, param_ids)
+    return opt
+
+
 def micro_train(model: Variant3GPT, ids: torch.Tensor,
                 lr: float = 1e-5, n_steps: int = 2) -> float:
     model.train()
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    if not trainable:
+    opt = _get_or_create_optimizer(model, lr)
+    if opt is None:
         return 0.0
-    opt = torch.optim.AdamW(trainable, lr=lr, weight_decay=0.01)
     total_loss = 0.0
     for _ in range(n_steps):
         opt.zero_grad()
@@ -251,23 +301,32 @@ def micro_train(model: Variant3GPT, ids: torch.Tensor,
             ignore_index=-1,
         )
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(trainable, 1.0)
+        torch.nn.utils.clip_grad_norm_(
+            [p for p in model.parameters() if p.requires_grad], 1.0)
         opt.step()
         total_loss += loss.item()
     return total_loss / max(n_steps, 1)
 
 
+_SHARED_PARAMS = ["global_router", "crossing", "out_proj", "out_norm"]
+
+
 def run_loop(model, x_ids, block_size, temperature, steps_per_loop,
-             n_steps_series, lr, do_train, group, seed_texts):
+             n_steps_series, lr, do_train, group, seed_texts,
+             unfreeze_shared: bool = True):
     """
     Запустить петлю указанной группы (n_steps_series × steps_per_loop шагов).
 
     Стратегия генерации текста:
       - Если сгенерированный текст проходит quality_filter — micro_train + обновить x_ids
       - Если нет — взять следующий seed_text как промпт (не зависать на плохих генерациях)
+
+    unfreeze_shared: если True, размораживает global_router, crossing, out_proj
+      наряду с экспертами группы (по умолчанию True — исправляет баг #15).
     """
+    also = _SHARED_PARAMS if unfreeze_shared else []
     for moe in _get_moes(model):
-        _freeze_all_except(moe, [group])
+        _freeze_all_except(moe, [group], also_unfreeze=also)
     texts = []
     seed_idx = 0
     total_steps = n_steps_series * steps_per_loop
@@ -454,6 +513,18 @@ def figure8_hmoe_v4(
               f"A={gw_b.get('ABSTRACT',0):.4f}  B={gw_b.get('CONCRETE',0):.4f}  "
               f"gen={n_b_texts}")
 
+        # ── Петля D: DYNAMIC (1 серия, crossing node) ─────────────────
+        # Без этой петли BidirBridgeExpert (crossing) и DYNAMIC эксперты
+        # никогда не получают целенаправленного обучения (баг #10).
+        # Используем dynamic_texts (смесь abstract+concrete для crossing).
+        x_dynamic = _encode(random.choice(dynamic_texts), block_size)
+        x_ids, lci_d, gw_d, n_d_texts = run_loop(
+            model, x_dynamic, block_size, temperature,
+            steps_per_loop, 1, (lr_a + lr_b) / 2, do_train, "DYNAMIC", dynamic_texts
+        )
+        print(f"    Петля D  done: LCI_r={lci_d:.4f}  "
+              f"X={gw_d.get('DYNAMIC',0):.4f}  gen={n_d_texts}")
+
         # ── Адаптивный балансёр (после B, если CONCRETE > ABSTRACT) ──────
         # Промер после обоих петель: нейтральный промпт
         x_probe = _encode(random.choice(abstract_texts), block_size)
@@ -567,6 +638,15 @@ def main():
     parser.add_argument("--k-deform",       type=float, default=7.0,
                         help="Параметр деформации восьмёрки k (scarab_algorithm.py). "
                              "k=1: симметричная ∞. k=7: петля A в 7× крупнее (текущий дефолт).")
+    # Topology loss (Kryukov 4-level scheme)
+    parser.add_argument("--lambda-lci",     type=float, default=None,
+                        help="Вес LCI-loss (уровень 1, |w_A-w_B|²→0). None=дефолт HMoEConfig.")
+    parser.add_argument("--lambda-balance", type=float, default=None,
+                        help="Вес balance-loss (уровень 2). None=дефолт HMoEConfig.")
+    parser.add_argument("--lambda-dynamic", type=float, default=None,
+                        help="Вес DYNAMIC-loss (уровень 3, w_X≥0.20). None=дефолт HMoEConfig.")
+    parser.add_argument("--lambda-temp-reg", type=float, default=None,
+                        help="Вес Ising T_c регуляризации. None=дефолт HMoEConfig.")
     args = parser.parse_args()
 
     n_cycles       = 2  if args.fast else args.cycles
@@ -583,13 +663,23 @@ def main():
         print(f"  ETD: n_layers={n_layers_actual} (нечётное ✓, закон нечётных)")
 
     use_hex_tier = args.hex_tier
-    hmoe_cfg = HMoEConfig(
-        d_model       = MODEL_CFG["d_model"],
+    hmoe_kwargs = dict(
+        d_model        = MODEL_CFG["d_model"],
         use_multiscale = True,
-        use_hex_tier  = use_hex_tier,
+        use_hex_tier   = use_hex_tier,
         hex_tier_top_k = 4,
         hex_tier_weight = 0.3,
     )
+    # Topology loss overrides (None = use HMoEConfig defaults)
+    if args.lambda_lci is not None:
+        hmoe_kwargs['lambda_lci'] = args.lambda_lci
+    if args.lambda_balance is not None:
+        hmoe_kwargs['lambda_balance'] = args.lambda_balance
+    if args.lambda_dynamic is not None:
+        hmoe_kwargs['lambda_dynamic'] = args.lambda_dynamic
+    if args.lambda_temp_reg is not None:
+        hmoe_kwargs['lambda_temp_reg'] = args.lambda_temp_reg
+    hmoe_cfg = HMoEConfig(**hmoe_kwargs)
 
     model_cfg_actual = {**MODEL_CFG, "n_layers": n_layers_actual}
 
