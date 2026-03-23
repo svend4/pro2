@@ -167,8 +167,8 @@ class Q6ExpertBank(nn.Module):
 
     def load_balance_loss(self, hex_weights: torch.Tensor) -> torch.Tensor:
         """Вспомогательный loss для равномерной нагрузки экспертов."""
-        mean_w = hex_weights.mean(dim=[0, 1])             # (64,)
-        return (mean_w * torch.log(mean_w + 1e-8)).sum()
+        mean_w = hex_weights.mean(dim=[0, 1]).clamp(min=1e-8)  # (64,)
+        return (mean_w * torch.log(mean_w)).sum()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -299,8 +299,8 @@ class GroupRouter(nn.Module):
         sparse_w = sparse_w / (sparse_w.sum(dim=-1, keepdim=True) + 1e-8)
 
         # ── Load-balance: МИНИМИЗИРУЕМ отрицательную энтропию = МАКСИМИЗИРУЕМ баланс
-        mean_w  = weights.mean(dim=(0, 1))                     # (n,)
-        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()    # Σ p·log(p) < 0
+        mean_w  = weights.mean(dim=(0, 1)).clamp(min=1e-8)     # (n,)
+        lb_loss = (mean_w * torch.log(mean_w)).sum()            # Σ p·log(p) < 0
 
         # ── Anti-circle: штраф за доминирование одного эксперта ─────────────
         # Обновляем EMA нагрузки
@@ -372,8 +372,8 @@ class GlobalRouter(nn.Module):
         anchors_norm  = F.normalize(self.group_anchors, dim=-1)
         group_scores  = soft_hex @ anchors_norm.T
         group_weights = F.softmax(group_scores, dim=-1)
-        mean_w  = group_weights.mean(dim=(0, 1))
-        lb_loss = (mean_w * torch.log(mean_w + 1e-8)).sum()
+        mean_w  = group_weights.mean(dim=(0, 1)).clamp(min=1e-8)
+        lb_loss = (mean_w * torch.log(mean_w)).sum()
         return group_weights, lb_loss
 
 
@@ -579,10 +579,10 @@ class MultiScaleGlobalRouter(nn.Module):
         group_weights = F.softmax(mixed_scores, dim=-1)                # (B, T, n_groups)
 
         # ── Load-balance loss ────────────────────────────────────────────────
-        mean_gw  = group_weights.mean(dim=(0, 1))
-        mean_hex = hex_weights.mean(dim=(0, 1))
-        lb_loss  = ((mean_gw  * torch.log(mean_gw  + 1e-8)).sum() +
-                    (mean_hex * torch.log(mean_hex + 1e-8)).sum() * 0.1)
+        mean_gw  = group_weights.mean(dim=(0, 1)).clamp(min=1e-8)
+        mean_hex = hex_weights.mean(dim=(0, 1)).clamp(min=1e-8)
+        lb_loss  = ((mean_gw  * torch.log(mean_gw)).sum() +
+                    (mean_hex * torch.log(mean_hex)).sum() * 0.1)
 
         return group_weights, hex_weights, lb_loss
 
@@ -682,6 +682,10 @@ class HierarchicalMoEFFN(nn.Module):
         self.out_norm = nn.LayerNorm(d)
         self.out_proj = nn.Linear(d, d, bias=False)
 
+        # Multi-GPU safe: константы как буферы (автоматически переносятся .to(device))
+        self.register_buffer('_ln2', torch.tensor(0.6931471805599453), persistent=False)
+        self.register_buffer('_log2_6', torch.tensor(2.584962500721156), persistent=False)  # log2(6)
+
     def _topology_loss(self, group_weights: torch.Tensor) -> torch.Tensor:
         """Совместный 4-уровневый топологический loss (схема Крюкова).
 
@@ -704,7 +708,7 @@ class HierarchicalMoEFFN(nn.Module):
                     self.cfg.lambda_dynamic == 0.0 and
                     self.cfg.lambda_temp_reg == 0.0)
         if all_zero:
-            return torch.tensor(0.0, device=group_weights.device)
+            return group_weights.new_tensor(0.0)
 
         gw = group_weights.mean(dim=(0, 1))     # (3,) — средние веса групп
         w_a, w_x, w_b = gw[0], gw[1], gw[2]    # ABSTRACT, DYNAMIC, CONCRETE
@@ -724,12 +728,12 @@ class HierarchicalMoEFFN(nn.Module):
         # hexphys (Ising T_c): роутер не должен уходить в упорядоченную фазу.
         # T_c = 3.0 (mean-field Q6: z·J/2 = 6·1/2).
         # Штраф только когда T < T_c (упорядоченная фаза → доминирование группы).
-        temp_reg_loss = torch.tensor(0.0, device=group_weights.device)
+        temp_reg_loss = group_weights.new_tensor(0.0)
         if self.cfg.lambda_temp_reg > 0.0:
             router = self.global_router
             if hasattr(router, 'log_temp'):
                 T_now = router.log_temp.exp()
-                T_c   = torch.tensor(self.cfg.ising_T_c, device=group_weights.device)
+                T_c   = group_weights.new_tensor(self.cfg.ising_T_c)
                 # Только если T < T_c (в упорядоченной фазе)
                 temp_reg_loss = F.relu(T_c - T_now).pow(2)
 
@@ -779,7 +783,7 @@ class HierarchicalMoEFFN(nn.Module):
         """
         B, T, d = x.shape
         info: Dict[str, torch.Tensor] = {}
-        total_lb_loss = torch.tensor(0.0, device=x.device)
+        total_lb_loss = x.new_tensor(0.0)
 
         # ── 1. GlobalRouter ───────────────────────────────────────────────────
         if self.cfg.use_multiscale:
@@ -832,13 +836,12 @@ class HierarchicalMoEFFN(nn.Module):
             gw_mean[1] * ew_dyn,   # DYNAMIC:  AERO, PYRO
             gw_mean[2] * ew_con,   # CONCRETE: GEO,  HYDRO
         ])                                                      # (6,)
-        domain_w = domain_w / (domain_w.sum() + 1e-8)          # нормировка
+        domain_w = domain_w.clamp(min=1e-8)
+        domain_w = domain_w / domain_w.sum()                      # нормировка
         # Entropy в БИТАХ (log2) для совместимости с C_etd ≈ 2.61 бит/шаг
-        _ln2 = torch.tensor(0.6931471805599453, device=x.device)  # ln(2)
-        routing_entropy = -(domain_w * torch.log(domain_w + 1e-8)).sum() / _ln2
+        routing_entropy = -(domain_w * torch.log(domain_w)).sum() / self._ln2
         # eff = H / log2(6) ∈ [0,1]; eff=1 → равномерный роутинг
-        routing_eff = routing_entropy / (torch.log(
-            torch.tensor(6.0, device=x.device)) / _ln2 + 1e-8)
+        routing_eff = routing_entropy / (self._log2_6 + 1e-8)
         info['domain_weights']   = domain_w.detach()           # (6,)
         info['routing_entropy']  = routing_entropy.detach()    # скаляр (бит)
         info['routing_eff']      = routing_eff.detach()        # ∈[0,1]
@@ -852,7 +855,7 @@ class HierarchicalMoEFFN(nn.Module):
             lb_hex  = self.hex_tier.load_balance_loss(hex_weights)
             total_lb_loss = total_lb_loss + lb_hex * 0.1
             combined = combined + self.cfg.hex_tier_weight * hex_out
-            info['hex_tier_active'] = torch.tensor(1.0, device=x.device)
+            info['hex_tier_active'] = x.new_tensor(1.0)
 
         out = self.out_proj(self.out_norm(combined))
         # lb_loss: load-balance (масштабированный) + topology (прямой)

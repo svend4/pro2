@@ -185,9 +185,9 @@ class BianGuaAttention(nn.Module):
 
         scores = scores + ham_bias
 
-        # Causal mask
-        causal = torch.tril(torch.ones(T, T, device=x.device))
-        scores = scores.masked_fill(causal.unsqueeze(0).unsqueeze(0) == 0,
+        # Causal mask (bool dtype — меньше памяти, multi-GPU safe)
+        causal = torch.ones(T, T, device=x.device, dtype=torch.bool).tril()
+        scores = scores.masked_fill(~causal.unsqueeze(0).unsqueeze(0),
                                     float('-inf'))
 
         attn = F.softmax(scores, dim=-1)

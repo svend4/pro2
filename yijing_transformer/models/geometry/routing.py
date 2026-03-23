@@ -1330,7 +1330,7 @@ class ArchetypalInterlingua(nn.Module):
         3. Activation encouragement: толкает trit_projs scores от нуля
            (обеспечивает gradient flow через все per-source trit_projs)
         """
-        loss = torch.tensor(0.0, device=self.archetype_queries.device)
+        loss = self.archetype_queries.new_tensor(0.0)
 
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
@@ -1406,7 +1406,7 @@ class ArchetypalInterlingua(nn.Module):
         Аналог TokenAbstractor.cluster_hexagram_correlation().
         """
         if self.d_model < 6:
-            return torch.tensor(0.0, device=self.archetype_queries.device)
+            return self.archetype_queries.new_tensor(0.0)
 
         # Берём первые 6 компонент archetype_queries
         q6_proj = self.archetype_queries[:, :6]  # (64, 6)
@@ -1793,7 +1793,7 @@ class BridgedInterlingua(nn.Module):
 
     def get_interlingua_loss(self) -> torch.Tensor:
         """Вспомогательный loss (совместим с ArchetypalInterlingua API)."""
-        loss = torch.tensor(0.0, device=self.archetype_queries.device)
+        loss = self.archetype_queries.new_tensor(0.0)
 
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
@@ -1864,7 +1864,7 @@ class BridgedInterlingua(nn.Module):
     def archetype_q6_correlation(self) -> torch.Tensor:
         """Корреляция архетипов с гексаграммами Q6."""
         if self.d_model < 6:
-            return torch.tensor(0.0, device=self.archetype_queries.device)
+            return self.archetype_queries.new_tensor(0.0)
         q6_proj = self.archetype_queries[:, :6]
         q6_binary = q6_proj.sign()
         dots = torch.matmul(q6_binary, self.q6_anchors[:64].T)
