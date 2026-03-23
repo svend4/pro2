@@ -140,7 +140,7 @@ def lci_from_routing(model: Variant3GPT, ids: torch.Tensor) -> Tuple[float, Dict
     balance = (w_a / w_total + w_b / w_total) / 2   # ≈ 0.33 при равновесии
     imbalance = abs(w_a / w_total - w_b / w_total)   # 0 = баланс, 1 = дисбаланс
 
-    lci = (1.0 - imbalance) * math.pi   # ∈ [0, π], цель = π
+    lci = (1.0 - imbalance) * math.pi   # ∈ [0, π], цель = π  [Formula A: routing-based]
 
     return lci, gw_dict
 
@@ -159,7 +159,7 @@ def lci_from_embeddings(model: Variant3GPT, start_ids: torch.Tensor,
         s = _emb(start_ids)
         e = _emb(end_ids)
         cos = F.cosine_similarity(s.unsqueeze(0), e.unsqueeze(0)).clamp(-1, 1).item()
-    return math.acos(cos) * 4.0   # ∈ [0, 4π], оптимум ≈ π
+    return math.acos(cos) * 4.0   # ∈ [0, 4π], оптимум ≈ π  [Formula B: embedding cosine-based; different range than Formula A]
 
 
 def _scale_temperature(temperature: float, lci: float) -> float:

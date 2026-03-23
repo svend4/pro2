@@ -181,7 +181,6 @@ def tsp_expert_order(
     сначала посещаем эксперта с наибольшим отклонением от π.
     """
     _, gw = lci_from_routing(model, ids)
-    lci_r, _ = lci_from_routing(model, ids)
 
     # Оценка LCI каждого эксперта по его группе: если группа доминирует → LCI отклоняется
     expert_cost: Dict[str, float] = {}
@@ -266,7 +265,7 @@ def _lci_loss_step(model: Variant3GPT, ids: torch.Tensor, lr: float) -> float:
     w_b = gw_dict.get("CONCRETE", avg_gw[2] if len(avg_gw) > 2 else avg_gw[0])
     w_total = avg_gw.sum() + 1e-8
     imbalance = torch.abs(w_a / w_total - w_b / w_total)
-    lci_loss = imbalance * math.pi   # цель: imbalance→0 → LCI→π → loss→0
+    lci_loss = imbalance * math.pi   # loss: minimize routing imbalance; when imbalance→0, LCI (Formula A) →π
 
     opt.zero_grad()
     lci_loss.backward()
