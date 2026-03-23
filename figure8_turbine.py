@@ -72,11 +72,8 @@ except ImportError:
 
 from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
 from yijing_transformer.models.hierarchical_moe import (
-    HMoEConfig,
-    HierarchicalMoEFFN,
     CLUSTER_TO_DOMAIN,
     DOMAIN_GROUPS,
-    DOMAIN_TO_GROUP,
     set_moe_stage,
 )
 
@@ -95,8 +92,6 @@ from self_train_hmoe import (
     _get_moes,
     _freeze_all_except,
     MODEL_CFG,
-    HMOE_CFG,
-    _ODD_SERIES,
     _LCI_EPSILON,
 )
 
