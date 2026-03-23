@@ -116,6 +116,11 @@ def run_pipeline(
     run_id   = f"pipeline_{int(time.time())}"
     history  = []          # [{phase, checkpoint, avg_lci}]
 
+    if not os.path.isfile(start_checkpoint):
+        raise FileNotFoundError(
+            f"start_checkpoint не найден: {start_checkpoint!r}\n"
+            "Убедитесь, что файл существует перед запуском пайплайна."
+        )
     current_ckpt = start_checkpoint
     print(f"\n{'═' * 72}")
     print(f"  CURRICULUM PIPELINE")

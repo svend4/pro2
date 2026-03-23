@@ -541,6 +541,7 @@ def _get_q6_vertex(model: Variant3GPT, ids: torch.Tensor) -> int:
                     proj = router.q6_proj
                 break
         if proj is None:
+            print("[warn] _get_q6_vertex: Q6-проекция не найдена (proj_q6/q6_proj) → fallback -1")
             return -1  # fallback: нет Q6-проекции
         soft_bits = torch.tanh(proj(emb.unsqueeze(0)))    # (1, 6)
         hard_bits = (soft_bits > 0).squeeze(0).int()      # {0, 1}^6
