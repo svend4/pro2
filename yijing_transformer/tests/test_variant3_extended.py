@@ -219,7 +219,7 @@ class TestNumericalStability:
         # Очень агрессивный клиппинг
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 0.01)
         optimizer.step()
-        assert not torch.isnan(torch.tensor(grad_norm))
+        assert not torch.isnan(grad_norm.detach())
 
     def test_hex_weights_uniform_for_zero_input(self):
         """При нулевом входе hex_weights стремятся к равномерному распределению."""

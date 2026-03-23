@@ -358,7 +358,7 @@ class ParameterEfficiencyAnalyzer:
                 'dead_fraction': dead / max(n, 1),
                 'near_zero_fraction': near_zero / max(n, 1),
                 'mean_abs': p.data.abs().mean().item(),
-                'std': p.data.std().item(),
+                'std': p.data.std().item() if p.data.numel() > 1 else 0.0,
                 'max_abs': p.data.abs().max().item(),
             })
 
@@ -422,7 +422,7 @@ class ParameterEfficiencyAnalyzer:
                 flow.append({
                     'name': name,
                     'grad_mean': p.grad.data.abs().mean().item(),
-                    'grad_std': p.grad.data.std().item(),
+                    'grad_std': p.grad.data.std().item() if p.grad.data.numel() > 1 else 0.0,
                     'grad_max': p.grad.data.abs().max().item(),
                     'has_grad': True,
                 })

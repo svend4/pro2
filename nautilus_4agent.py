@@ -44,7 +44,7 @@ import os
 import random
 import sys
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 # Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -55,7 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
 from yijing_transformer.models.hierarchical_moe import (
-    DOMAIN_GROUPS, set_moe_stage,
+    set_moe_stage,
 )
 from self_train_hmoe import (
     lci_from_routing, lci_from_embeddings, micro_train, quality_filter,
@@ -66,7 +66,7 @@ from nautilus_clover import _lci_loss_step
 
 # meta_q6: интеграция с svend4/meta (bent seeds, temperature annealing)
 try:
-    from meta_q6 import bent_seed_texts, metropolis_temperature, cosine_temperature
+    from meta_q6 import bent_seed_texts, metropolis_temperature
     _META_Q6_AVAILABLE = True
 except ImportError:
     _META_Q6_AVAILABLE = False

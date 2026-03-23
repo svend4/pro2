@@ -65,8 +65,8 @@ def compute_quality_metrics(checkpoint_path: str, n_val: int = 20) -> Dict:
         import torch
         import torch.nn.functional as F
         from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
-        from yijing_transformer.models.hierarchical_moe import HMoEConfig, HierarchicalMoEFFN
-        from self_train_hmoe import _get_emb, MODEL_CFG, HMOE_CFG
+        from yijing_transformer.models.hierarchical_moe import HierarchicalMoEFFN
+        from self_train_hmoe import MODEL_CFG, HMOE_CFG
 
         # Загружаем модель
         cfg   = Variant3Config(**MODEL_CFG)

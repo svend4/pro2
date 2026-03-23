@@ -153,7 +153,7 @@ def get_param_stats(model):
                 'shape': list(param.shape),
                 'numel': param.numel(),
                 'mean': param.data.mean().item(),
-                'std': param.data.std().item(),
+                'std': param.data.std().item() if param.data.numel() > 1 else 0.0,
                 'norm': param.data.norm().item(),
             }
             if param.grad is not None:
