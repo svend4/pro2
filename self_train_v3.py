@@ -37,7 +37,7 @@ from torch.optim import AdamW
 from self_train_v2 import (
     CFG, DEVICE, DOMAIN_CORPUS, BAD_TEXTS,
     ALPHA_DOMAIN, BETA_QUALITY, GAMMA_GATE,
-    hexagrams, biangua,
+    biangua,
     hname, HEX_NAMES,
     text_to_ids, ids_pad,
     get_hw_dw, get_hidden, get_metrics, get_gate_counts,
@@ -46,6 +46,7 @@ from self_train_v2 import (
     stage1, stage2, final_eval,
     evaluator, qfilter,
 )
+from self_train_common import hexagrams  # not re-exported by v2
 
 # ── Импорт figure8_dialog из self_train.py ───────────────────────────────────
 from self_train import (
