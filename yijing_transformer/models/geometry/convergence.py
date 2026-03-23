@@ -132,13 +132,13 @@ class GlyphComposer(nn.Module):
             spread = ((window - centroid.unsqueeze(1)) ** 2).sum(dim=-1).mean(dim=1, keepdim=True).add(1e-8).sqrt()  # (B, 1)
 
             # 3. Спектр Лапласиана подграфа
-            # Adjacency: a_ij = 1 если Hamming(v_i, v_j) <= 2
+            # Adjacency: a_ij ≈ σ(gain·(2 - hamming)) — soft порог вокруг hamming=2.
             # В Q6 с {-1,+1}: Hamming = (6 - dot(v_i, v_j)) / 2
-            # Adjacency через Hamming distance (пороговое сравнение не дифференцируемо,
-            # но float() операции должны пропускать градиент через dots → window)
+            # Sigmoid вместо boolean (hamming<=2).float() сохраняет градиенты:
+            # d(adj)/d(dots) ≠ 0, поэтому eigenvalues Лапласиана обучаемы.
             dots = torch.bmm(window, window.transpose(1, 2))  # (B, k, k)
             hamming = (6.0 - dots) / 2.0
-            adj = (hamming <= 2).float()
+            adj = torch.sigmoid(4.0 * (2.0 - hamming))  # soft adjacency, grad-friendly
             # Убираем self-loops для Лапласиана
             adj = adj * (1.0 - torch.eye(k, device=adj.device).unsqueeze(0))
 
