@@ -158,8 +158,8 @@ def _collect_metrics(model: Variant3GPT, texts: List[str]) -> DiagResult:
         gw_mean = {g: 1/3 for g in _GROUPS}
 
     # Энтропия маршрутизации
-    gw_t = torch.tensor([gw_mean[g] for g in _GROUPS])
-    entropy = -(gw_t * torch.log(gw_t + 1e-8)).sum().item()
+    gw_t = torch.tensor([gw_mean[g] for g in _GROUPS]).clamp(min=1e-8)
+    entropy = -(gw_t * torch.log(gw_t)).sum().item()
 
     # Routing LCI
     w_a = gw_mean.get("ABSTRACT", 0.33)

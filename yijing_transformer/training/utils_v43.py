@@ -155,7 +155,10 @@ class LabelSmoothingLoss(nn.Module):
         # Apply mask
         if self.ignore_index >= 0:
             loss = loss * mask.float()
-            return loss.sum() / max(mask.sum().item(), 1)
+            n_valid = mask.sum().item()
+            if n_valid == 0:
+                return loss.new_tensor(0.0)
+            return loss.sum() / n_valid
 
         return loss.mean()
 

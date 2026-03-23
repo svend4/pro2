@@ -192,7 +192,7 @@ class GlyphComposer(nn.Module):
             if start < edge_emb.shape[1]:
                 edge_pooled.append(edge_emb[:, start:end].mean(dim=1))
             else:
-                edge_pooled.append(torch.zeros(B, self.d_model, device=sigil_emb.device))
+                edge_pooled.append(torch.zeros(B, self.d_model, device=edge_emb.device, dtype=edge_emb.dtype))
         edge_pooled = torch.stack(edge_pooled, dim=1)  # (B, n_sigils, d_model)
 
         # Glyph-level pooling (тот же windowing)
@@ -321,7 +321,7 @@ class TokenAbstractor(nn.Module):
         if self.d_model >= 6:
             centers_q6 = self.cluster_centers[:, :6]  # (64, 6)
         else:
-            return torch.tensor(0.0, device=self.cluster_centers.device)
+            return self.cluster_centers.new_tensor(0.0)
 
         # Sign → бинаризация
         centers_binary = centers_q6.sign()  # (64, 6) в {-1, +1}

@@ -341,7 +341,7 @@ class RuleBank(nn.Module):
         actions_out = actions_out * torch.sigmoid(hit_strength)
 
         # Полные веса хитов для диагностики (sparse → dense)
-        hit_weights = torch.zeros(B, T, self.n_rules, device=events.device)
+        hit_weights = torch.zeros(B, T, self.n_rules, device=events.device, dtype=events.dtype)
         hit_weights.scatter_(2, topk_idx, hit_weights_sparse)
 
         return actions_out, hit_weights
@@ -454,6 +454,7 @@ class AbrialeLayer(nn.Module):
                  dropout: float = 0.1):
         super().__init__()
         self.d_model = d_model
+        self.n_hits = n_hits
 
         # 1. Изотропный attention (симметричные N-арные связи)
         self.isotropic_attn = IsotropicAttention(
