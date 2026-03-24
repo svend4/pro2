@@ -11,21 +11,49 @@ quartet.py — Четыре Бременских Музыканта (Four Bremen
        Инструмент: скрипка (точность, чистота линий)
        Элемент: Огонь (энергия преобразования)
        Сезон: Лето (максимальная активность)
+       Модули из репозитория:
+         - geometry/core.py: generate_hypercube, generate_hexagrams, E8 lattice
+         - geometry/quantizers.py: GumbelQuantizer, E8Quantizer, WHT
+         - geometry/positional.py: RotaryEmbedding, CubicPE
+         - geometry/equivariant.py: D4EquivariantLayer, BianGuaTransform
+         - geometry/q6_algebra.py: Z₂⁶ group algebra, bent functions
 
     ② АРХЕТИПИСТ (Archetypist) — физика, архетипы, сложные формулы
        Инструмент: виолончель (глубина, обертоны)
        Элемент: Земля (фундаментальность)
        Сезон: Осень (сбор урожая паттернов)
+       Модули из репозитория:
+         - geometry/attention.py: 15 attention patterns (Heisenberg, Palace,
+           CubeDiagonal, Mobius, FlowerOfLife, SOLAN, Triangular, etc.)
+         - geometry/routing.py: GatedPathSelector, GeometricSourceRouter
+         - geometry/nautilus.py: NautilusHierarchy (7 chambers micro→macro)
+         - geometry/interlingua_fixed.py: 64 archetypes as mediator hub
+         - geometry/convergence.py: GlyphComposer, TokenAbstractor
 
     ③ АЛГОРИТМИСТ (Algorithmist) — химия, алгоритмы, комбинаторика
        Инструмент: духовые (трансформация, потоки)
        Элемент: Вода (адаптивность, текучесть)
        Сезон: Зима (кристаллизация структур)
+       Модули из репозитория:
+         - geometry/ffn.py: TrigramMoE, DomainMoE, GeometricFFN
+         - geometry/six_sources.py: SixSourceLayer (6 theories unified)
+         - geometry/kasatkin_router.py: KasatkinQ6Router
+         - hierarchical_moe.py: HierarchicalMoE, Q6ExpertBank
+         - expert_choice.py: ExpertChoiceRouter
+         - geometry/abriale.py: AbrialeLayer (event-driven relations)
+         - diff_attn.py: DifferentialAttention
 
     ④ ЛИНГВИСТ (Linguist) — язык, философия, психология, биология
        Инструмент: ударные (ритм, паттерн)
        Элемент: Воздух (связь, коммуникация)
        Сезон: Весна (порождение нового)
+       Модули из репозитория:
+         - geometry/quantizers.py: TernaryQuantizer ({-1,0,+1} = yes/no/unknown)
+         - geometry/convergence.py: MatrixGrammar (2D syntax)
+         - pseudo_rag.py: PseudoRAGProjection (Q4→Q6 embedding)
+         - tokenizer/glyph_tokenizer.py: GlyphTokenizer (SOLAN visual alphabet)
+         - inference/generate.py: generation strategies
+         - cross_domain_analogy.py: hexagram-based analogies
 
 Каждый Музыкант — это миди-эксперт, состоящий из микро-экспертов.
 Они не иерархия (не вертикаль), а четыре горизонтальных профессии
@@ -39,6 +67,97 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# ═══════════════════════════════════════════════════════════════
+# Cluster Registry: mapping existing modules to four professions
+# ═══════════════════════════════════════════════════════════════
+
+# Each musician has access to specific geometric modules.
+# This registry defines which "instruments" each profession plays.
+CLUSTER_REGISTRY = {
+    'formalist': {
+        'description': 'Математика, формулы, точные структуры',
+        'element': 'Огонь', 'season': 'Лето', 'instrument': 'скрипка',
+        'geometric_modules': [
+            # Exact geometric structures (pure math)
+            'D4EquivariantLayer',     # D₄ group symmetry
+            'CubeDiagonalAttention',  # corner symmetry patterns
+            'PrivilegedAxisAttention', # main axis extraction
+        ],
+        'quantizer': 'gumbel',  # discrete → exact vertices
+        'micro_expert_style': 'precise',  # narrow, focused experts
+    },
+    'archetypist': {
+        'description': 'Физика, архетипы, сложные паттерны',
+        'element': 'Земля', 'season': 'Осень', 'instrument': 'виолончель',
+        'geometric_modules': [
+            # Pattern emergence (physics of attention)
+            'HeisenbergAttention',    # uncertainty principle
+            'PalaceAttention',        # 8-palace block structure
+            'FlowerOfLifeGAT',        # sacred geometry graph attention
+        ],
+        'quantizer': 'ternary',  # {-1, 0, +1} = yin/void/yang
+        'micro_expert_style': 'deep',  # fewer but larger experts
+    },
+    'algorithmist': {
+        'description': 'Химия, алгоритмы, комбинаторика',
+        'element': 'Вода', 'season': 'Зима', 'instrument': 'духовые',
+        'geometric_modules': [
+            # Transformations and flows (algorithmic)
+            'MobiusAttentionPattern',    # topological wrapping
+            'TriangularAttentionBias',   # distance-based routing
+            'DualEmbedding',             # yin-yang dual space
+        ],
+        'quantizer': 'factored',  # 3+3 factored = combinatorial
+        'micro_expert_style': 'combinatorial',  # many small experts
+    },
+    'linguist': {
+        'description': 'Язык, философия, психология, биология',
+        'element': 'Воздух', 'season': 'Весна', 'instrument': 'ударные',
+        'geometric_modules': [
+            # Communication and meaning (linguistic)
+            'HexagramAttentionPattern',  # semantic distances
+            'SOLANAttention',            # visual language attention
+            'WeavingLoomArchitecture',   # bidirectional weave
+        ],
+        'quantizer': 'ternary',  # {-1, 0, +1} = yes/no/unknown epistemic
+        'micro_expert_style': 'broad',  # broader but shallower
+    },
+}
+
+
+def _build_geometric_module(name: str, d_model: int) -> Optional[nn.Module]:
+    """Safely import and instantiate a geometric module by name.
+
+    Returns None if the module is not available (graceful degradation).
+    """
+    try:
+        import importlib
+        # Import from absolute path since quartet.py lives in models/
+        attn_mod = importlib.import_module(
+            'yijing_transformer.models.geometry.attention')
+        equiv_mod = importlib.import_module(
+            'yijing_transformer.models.geometry.equivariant')
+
+        registry = {
+            'D4EquivariantLayer': lambda: equiv_mod.D4EquivariantLayer(d_model),
+            'DualEmbedding': lambda: equiv_mod.DualEmbedding(d_model),
+            'CubeDiagonalAttention': lambda: attn_mod.CubeDiagonalAttention(d_model),
+            'PrivilegedAxisAttention': lambda: attn_mod.PrivilegedAxisAttention(d_model),
+            'HeisenbergAttention': lambda: attn_mod.HeisenbergAttention(d_model),
+            'PalaceAttention': lambda: attn_mod.PalaceAttention(d_model),
+            'FlowerOfLifeGAT': lambda: attn_mod.FlowerOfLifeGAT(d_model),
+            'MobiusAttentionPattern': lambda: attn_mod.MobiusAttentionPattern(d_model),
+            'TriangularAttentionBias': lambda: attn_mod.TriangularAttentionBias(),
+            'HexagramAttentionPattern': lambda: attn_mod.HexagramAttentionPattern(d_model, block_size=512),
+            'SOLANAttention': lambda: attn_mod.SOLANAttention(d_model),
+            'WeavingLoomArchitecture': lambda: attn_mod.WeavingLoomArchitecture(d_model),
+        }
+        if name in registry:
+            return registry[name]()
+    except (ImportError, Exception):
+        pass
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -59,6 +178,9 @@ class MusicianConfig:
     # Специализация: какие геометрические модули включены
     use_quantizer: bool = True
     quantizer_type: str = 'ternary'
+    # Geometric modules from CLUSTER_REGISTRY (loaded by name)
+    geometric_modules: List[str] = field(default_factory=list)
+    use_geometric: bool = True     # whether to use geometric enrichment
 
 
 @dataclass
@@ -180,12 +302,74 @@ class MicroExpertMoE(nn.Module):
 # Musician Layer (один слой внутри Музыканта)
 # ═══════════════════════════════════════════════════════════════
 
+class GeometricEnrichment(nn.Module):
+    """Geometric enrichment from a set of specialized modules.
+
+    Each Musician has its own set of geometric "instruments" — modules from
+    geometry/ that define its professional specialization. The enrichment
+    is soft-gated: the model learns how much each geometric module contributes.
+    """
+    def __init__(self, d_model: int, module_names: List[str]):
+        super().__init__()
+        self.d_model = d_model
+        self.module_names = []
+        modules = []
+        for name in module_names:
+            mod = _build_geometric_module(name, d_model)
+            if mod is not None:
+                modules.append(mod)
+                self.module_names.append(name)
+
+        self.geo_modules = nn.ModuleList(modules)
+        n = len(self.geo_modules)
+        if n > 0:
+            # Per-module learnable gate (how much this instrument contributes)
+            self.gate_logits = nn.Parameter(torch.zeros(n))
+            # Projection from geometric output to d_model (if shapes differ)
+            self.proj = nn.Linear(d_model, d_model, bias=False)
+            nn.init.zeros_(self.proj.weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply geometric modules and return soft-gated enrichment delta."""
+        if len(self.geo_modules) == 0:
+            return torch.zeros_like(x)
+
+        gates = torch.sigmoid(self.gate_logits)  # (n_modules,)
+        enrichment = torch.zeros_like(x)
+
+        for i, mod in enumerate(self.geo_modules):
+            try:
+                # Geometric modules have diverse interfaces:
+                # - Some return bias (B, T, T) for attention
+                # - Some return transformed x (B, T, D)
+                # We handle both via duck typing
+                if hasattr(mod, 'get_bias'):
+                    bias = mod.get_bias(x)
+                    T = x.shape[1]
+                    causal = torch.tril(torch.ones(T, T, device=x.device))
+                    bias = bias.masked_fill(causal.unsqueeze(0) == 0, float('-inf'))
+                    weights = F.softmax(bias, dim=-1).nan_to_num(0.0)
+                    delta = torch.bmm(weights, x) - x
+                else:
+                    out = mod(x)
+                    if out.shape == x.shape:
+                        delta = out - x
+                    else:
+                        delta = torch.zeros_like(x)
+            except Exception:
+                delta = torch.zeros_like(x)
+
+            enrichment = enrichment + gates[i] * delta
+
+        return self.proj(enrichment)
+
+
 class MusicianLayer(nn.Module):
     """Один трансформер-слой внутри Музыканта.
 
-    Attention → MicroExpert MoE → LayerNorm.
+    Attention → [Geometric Enrichment] → MicroExpert MoE → LayerNorm.
     """
-    def __init__(self, cfg: MusicianConfig):
+    def __init__(self, cfg: MusicianConfig, layer_idx: int = 0):
         super().__init__()
         d = cfg.d_model
 
@@ -194,6 +378,14 @@ class MusicianLayer(nn.Module):
         self.attn = nn.MultiheadAttention(
             d, cfg.n_heads, dropout=cfg.dropout, batch_first=True
         )
+
+        # Geometric enrichment (profession-specific instruments)
+        self.has_geo = cfg.use_geometric and len(cfg.geometric_modules) > 0
+        if self.has_geo:
+            self.ln_geo = nn.LayerNorm(d)
+            self.geo = GeometricEnrichment(d, cfg.geometric_modules)
+            # Learnable gate: how much geometry vs vanilla
+            self.geo_gate = nn.Parameter(torch.tensor(0.0))
 
         # Micro-Expert MoE
         self.ln2 = nn.LayerNorm(d)
@@ -211,6 +403,11 @@ class MusicianLayer(nn.Module):
         h = self.ln1(x)
         attn_out, _ = self.attn(h, h, h, attn_mask=attn_mask)
         x = x + attn_out
+
+        # Geometric enrichment (profession-specific)
+        if self.has_geo:
+            geo_delta = self.geo(self.ln_geo(x))
+            x = x + torch.sigmoid(self.geo_gate) * geo_delta
 
         # Micro-expert MoE
         x = x + self.moe(self.ln2(x))
@@ -240,7 +437,7 @@ class Musician(nn.Module):
 
         # Стек слоёв (собственный трансформер)
         self.layers = nn.ModuleList([
-            MusicianLayer(cfg) for _ in range(cfg.n_layers)
+            MusicianLayer(cfg, layer_idx=i) for i in range(cfg.n_layers)
         ])
 
         # Проекция обратно в общее пространство
@@ -639,7 +836,8 @@ def build_quartet(
             n_micro_experts=micro_experts,
             micro_expert_dim=micro_dim,
             top_k_micro=2,
-            quantizer_type='gumbel',
+            quantizer_type=CLUSTER_REGISTRY['formalist']['quantizer'],
+            geometric_modules=CLUSTER_REGISTRY['formalist']['geometric_modules'],
             **musician_defaults,
         ),
         archetypist=MusicianConfig(
@@ -647,7 +845,8 @@ def build_quartet(
             n_micro_experts=max(micro_experts * 3 // 4, 2),
             micro_expert_dim=int(micro_dim * 1.5),
             top_k_micro=2,
-            quantizer_type='ternary',
+            quantizer_type=CLUSTER_REGISTRY['archetypist']['quantizer'],
+            geometric_modules=CLUSTER_REGISTRY['archetypist']['geometric_modules'],
             **musician_defaults,
         ),
         algorithmist=MusicianConfig(
@@ -655,7 +854,8 @@ def build_quartet(
             n_micro_experts=micro_experts,
             micro_expert_dim=micro_dim,
             top_k_micro=2,
-            quantizer_type='factored',
+            quantizer_type=CLUSTER_REGISTRY['algorithmist']['quantizer'],
+            geometric_modules=CLUSTER_REGISTRY['algorithmist']['geometric_modules'],
             **musician_defaults,
         ),
         linguist=MusicianConfig(
@@ -663,9 +863,234 @@ def build_quartet(
             n_micro_experts=max(micro_experts * 3 // 4, 2),
             micro_expert_dim=int(micro_dim * 1.5),
             top_k_micro=2,
-            quantizer_type='ternary',
+            quantizer_type=CLUSTER_REGISTRY['linguist']['quantizer'],
+            geometric_modules=CLUSTER_REGISTRY['linguist']['geometric_modules'],
             **musician_defaults,
         ),
     )
 
     return BremenQuartet(cfg)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Cluster Inventory: full mapping of repo files → four professions
+# ═══════════════════════════════════════════════════════════════
+
+FULL_CLUSTER_INVENTORY = {
+    'formalist': {
+        'description': '① ФОРМАЛИСТ — Математика, формулы, точные структуры',
+        'element': 'Огонь 🔥', 'season': 'Лето', 'instrument': 'Скрипка',
+        'files': {
+            # ─── Ядро: чистая математика ───
+            'geometry/core.py': [
+                'generate_hypercube()',    # Z₂ⁿ вершины
+                'generate_hexagrams()',    # 64 гексаграммы
+                'generate_e8_roots()',     # E8 решётка (240 корней)
+                'generate_ternary_hypercube()',  # Z₃ⁿ
+                'generate_ternary_trigrams()',   # 27 тернарных триграмм
+            ],
+            # ─── Квантизация (проекция на вершины) ───
+            'geometry/quantizers.py': [
+                'GumbelQuantizer',          # Gumbel-Softmax дискретизация
+                'E8Quantizer',              # E8 решётка
+                'WHTQuantizer',             # Walsh-Hadamard
+                'HierarchicalQuantizer',    # Q3→Q6 иерархия
+                'DeformableQuantizer',      # обучаемые вершины
+                'GroupedQuantizer',         # группированный
+            ],
+            # ─── Позиционное кодирование (формулы) ───
+            'geometry/positional.py': [
+                'RotaryEmbedding',          # RoPE
+                'CubicPositionalEncoding',  # 3D Касаткин
+                'FourLevelPositionalEncoding',  # 4-уровневый Андреев
+            ],
+            # ─── Группы симметрий ───
+            'geometry/equivariant.py': [
+                'D4EquivariantLayer',       # D₄ группа (8 операций)
+                'BianGuaTransform',         # 变卦 трансформация
+                'GraduatedBianGuaTransform',  # мягкая BianGua
+            ],
+            # ─── Алгебра ───
+            'geometry/q6_algebra.py': [
+                'Q6Arithmetic',             # Z₂⁶ групповая алгебра
+                # XOR, Hamming, GERMES, bent-функции
+            ],
+            # ─── Конфигурация ───
+            'config/config.py': ['YiJingConfig'],
+            'constants.py': ['HEXAGRAM_NAMES', 'DOMAIN_NAMES'],
+        },
+    },
+
+    'archetypist': {
+        'description': '② АРХЕТИПИСТ — Физика, архетипы, сложные паттерны',
+        'element': 'Земля 🌍', 'season': 'Осень', 'instrument': 'Виолончель',
+        'files': {
+            # ─── 15 паттернов внимания (как геометрия → нейросеть) ───
+            'geometry/attention.py': [
+                'HeisenbergAttention',       # принцип неопределённости
+                'PalaceAttention',           # 8 дворцов × 8 гексаграмм
+                'FlowerOfLifeGAT',           # граф-внимание «Цветок жизни»
+                'CubeDiagonalAttention',     # симметрии углов куба
+                'PrivilegedAxisAttention',   # выделенные оси
+                'MobiusAttentionPattern',    # топологическая лента
+                'TriangularAttentionBias',   # треугольные расстояния
+                'SOLANAttention',            # визуальный алфавит
+                'HexagramAttentionPattern',  # семантические расстояния
+                'WeavingLoomArchitecture',   # ткацкий станок
+                'QuadrantAttention',         # 4-квадрантное
+                'RecursiveCubeAttention',    # рекурсивный куб
+                'StructuralDefectLayer',     # дефекты структуры
+                'FourLevelAttention',        # 4-уровневое
+                'BidirectionalTriangularAttention',  # двунаправленное
+            ],
+            # ─── Маршрутизация ───
+            'geometry/routing.py': [
+                'GatedPathSelector',         # standard ↔ geometric gate
+                'AdaptiveGatedPathSelector', # с адаптивным gate
+                'GeometricSourceRouter',     # маршрутизатор источников
+                'GeometricSourceMixer',      # смеситель источников
+                'GateLogger',                # мониторинг gates
+            ],
+            # ─── Наутилус (7 камер) ───
+            'geometry/nautilus.py': [
+                'NautilusHierarchy',         # иерархия 7 камер
+                'NautilusChamber',           # одна камера
+                'NautilusScheduler',         # curriculum активации
+            ],
+            # ─── Интерлингва (64 архетипа) ───
+            'geometry/interlingua_fixed.py': [
+                'ArchetypalInterlinguaFixed', # 64 архетипа-медиатора
+            ],
+            # ─── Конвергенция (глифы ↔ токены) ───
+            'geometry/convergence.py': [
+                'GlyphComposer',             # bottom-up композиция
+                'TokenAbstractor',           # top-down абстракция
+                'ConvergenceBridge',         # мост глифы↔токены
+            ],
+        },
+    },
+
+    'algorithmist': {
+        'description': '③ АЛГОРИТМИСТ — Химия, алгоритмы, комбинаторика',
+        'element': 'Вода 💧', 'season': 'Зима', 'instrument': 'Духовые',
+        'files': {
+            # ─── FFN с геометрической маршрутизацией ───
+            'geometry/ffn.py': [
+                'SwiGLU',                    # LLaMA-style FFN
+                'TrigramMoE',                # 8 экспертов по триграммам
+                'DomainMoE',                 # 6 доменных экспертов
+                'GeometricFFN',              # FFN через гиперкуб
+                'MultiScaleHypercubeLayer',  # multi-scale проекция
+            ],
+            # ─── 6 теоретических источников ───
+            'geometry/six_sources.py': [
+                'PalaceSource',              # Склярова
+                'AntipodalSource',           # Фомюк
+                'TriangularSource',          # Андреев
+                'KasatkinSource',            # Касаткин
+                'HermannSource',             # Германн
+                'BelyaevSource',             # Беляев
+                'SixSourceLayer',            # все 6 вместе
+            ],
+            # ─── Иерархический MoE ───
+            'hierarchical_moe.py': [
+                'HierarchicalMoE',           # Q2→Q3→Q6 маршрутизация
+                'Q6ExpertBank',              # 64 эксперта
+                'BidirBridgeExpert',         # мост между группами
+            ],
+            # ─── Модели-алгоритмы ───
+            'model.py': [
+                'YiJingGPT',                 # основная модель
+                'YiJingTransformer',         # backbone
+                'YiJingTransformerLayer',    # один слой
+            ],
+            'variant3.py': ['Variant3GPT'],
+            'hierarchical_e2.py': ['HierarchicalE2'],
+            'nautilus_yijing.py': ['NautilusYiJing'],
+            # ─── Маршрутизаторы ───
+            'geometry/kasatkin_router.py': ['KasatkinQ6Router'],
+            'expert_choice.py': ['ExpertChoiceRouter'],
+            'diff_attn.py': ['DifferentialAttention'],
+            'geometry/abriale.py': ['AbrialeLayer', 'IsotropicNet'],
+            # ─── Оптимизация обучения ───
+            'training/optim.py': ['optimizer factory + LLRD'],
+            'training/regularization.py': ['TokenMerger', 'GradientNoise'],
+            'training/distillation.py': ['DistillationLoss'],
+            'lora.py': ['LoRALayer'],
+        },
+    },
+
+    'linguist': {
+        'description': '④ ЛИНГВИСТ — Язык, философия, психология, биология',
+        'element': 'Воздух 🌬️', 'season': 'Весна', 'instrument': 'Ударные',
+        'files': {
+            # ─── Тернарное квантование (да/нет/не знаю) ───
+            'geometry/quantizers.py': [
+                'TernaryQuantizer',          # {-1, 0, +1} эпистемическая
+                'FactoredYiJingQuantizer',   # 3+3 факторизация
+                'FourStateQuantizer',        # 4 состояния
+                'AntipodalQuantizer',        # антиподальная пара
+            ],
+            # ─── Грамматика и синтаксис ───
+            'geometry/convergence.py': [
+                'MatrixGrammar',             # 2D матричная грамматика
+            ],
+            # ─── Мосты и аналогии ───
+            'pseudo_rag.py': [
+                'PseudoRAGProjection',       # Q4→Q6 вложение
+            ],
+            # ─── Токенизация (семантика букв) ───
+            'tokenizer/glyph_tokenizer.py': [
+                'GlyphTokenizer',            # SOLAN-76 визуальный алфавит
+            ],
+            # ─── Генерация текста ───
+            'inference/generate.py': ['generate()'],
+            'inference/bridge_inference.py': ['AdvancedGenerator'],
+            'speculative.py': ['SpeculativeDecoder'],
+            # ─── Оценка и интерпретация ───
+            'evaluation/eval_suite.py': ['evaluation harness'],
+            # ─── Кросс-доменные аналогии ───
+            'scripts/cross_domain_analogy.py': ['hexagram analogies'],
+            'scripts/self_description.py': ['model self-reflection'],
+            # ─── Данные (обработка языка) ───
+            'data_utils/text_dataset.py': ['TextDataset'],
+            'data_utils/svend4_dataset.py': ['Svend4Dataset (6 domains)'],
+            # ─── Обучение NautilusMoME ───
+            'scripts/train_nautilus_mome.py': [
+                'organic_detect_domain()',
+                'ExpertRouter',
+                'Phase 0-11 training pipeline',
+            ],
+        },
+    },
+}
+
+
+def cluster_inventory() -> str:
+    """Выводит полную карту: какие файлы → какая профессия.
+
+    Usage:
+        print(cluster_inventory())
+    """
+    lines = []
+    lines.append('=' * 70)
+    lines.append('ЧЕТЫРЕ БРЕМЕНСКИХ МУЗЫКАНТА — Карта репозитория')
+    lines.append('=' * 70)
+
+    for name, cluster in FULL_CLUSTER_INVENTORY.items():
+        lines.append('')
+        lines.append(f'  {cluster["description"]}')
+        lines.append(f'  {cluster["element"]} | {cluster["season"]} | {cluster["instrument"]}')
+        lines.append(f'  {"─" * 60}')
+        for filepath, items in cluster['files'].items():
+            lines.append(f'    {filepath}:')
+            for item in items:
+                lines.append(f'      • {item}')
+        lines.append('')
+
+    lines.append('=' * 70)
+    lines.append('Всего: 4 кластера × ~3 геометрических модуля = 12 инструментов')
+    lines.append('Каждый Музыкант играет на СВОИХ инструментах.')
+    lines.append('Вместе — оркестр. По одиночке — бессмысленны.')
+    lines.append('=' * 70)
+    return '\n'.join(lines)
