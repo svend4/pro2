@@ -415,6 +415,12 @@ model = HierarchicalMoE(config)
 
 | Класс | Файл | Назначение |
 |-------|------|-----------|
+| `GatedPathSelector` | `geometry/routing.py:11` | Выбор геометрического vs стандартного пути |
+| `AdaptiveGatedPathSelector` | `geometry/routing.py:37` | Контентно-зависимый гейт с температурой |
+| `AbrialeBridgeMediator` | `geometry/routing.py:573` | Лучший результат PPL 1.24 (v59) |
+| `ArchetypalInterlingua` | `geometry/routing.py:946` | 64-экспертный банк (⚠️ баг: единый trit_proj) |
+| `ArchetypalInterlinguaFixed` | `geometry/interlingua_fixed.py` | Исправленная версия (per-source proj) |
+| `DynamicCurriculumController` | `geometry/routing.py:1818` | Адаптирует силу геометрии при обучении |
 | `GatedPathSelector` | `geometry/routing.py` | Выбор геометрического vs стандартного пути |
 | `AdaptiveGatedPathSelector` | `geometry/routing.py` | Контентно-зависимый гейт с температурой |
 | `AbrialeBridgeMediator` | `geometry/routing.py` | Лучший результат PPL 1.24 (v59) |
@@ -477,6 +483,12 @@ python self_train_v3.py
 | `self_train.py` | 3 стадии: Self-Topology → RAG-буфер → Wild | Базовый |
 | `self_train_v2.py` | То же + domain triplet + gate entropy loss | +3 вспомогательных лосса |
 | `self_train_v3.py` | v2 + Stage0 = figure-8 обход Q6 | Алгоритм Скарабея |
+| `figure8_turbine.py` | 4 эксперта, TSP-маршрут | Greedy/2-opt TSP |
+| `nautilus_4agent.py` | 4 агента по кольцам META/ABSTRACT/DYNAMIC/CONCRETE | Наутилус-4 |
+| `nautilus_15agent.py` | 15 агентов (Q4⊂Q6, 60/64 вершин) | Полное Q6-покрытие |
+| `roundabout.py` | Кольцо с адаптивным числом оборотов | Адаптивный LCI |
+| `bidir_turbine.py` | Два встречных потока, встреча в DYNAMIC | Bidirectional |
+| `multi_salesman.py` | 2–3 агента с общим RAG | Multi-agent |
 | `bidir_train.py` | Два встречных потока, специализация ↔ генерализация | Bidirectional |
 | `train_hmoe_curriculum.py` | Curriculum learning для HMoE | Поэтапный |
 | `train_hmoe_staged.py` | Staged training HMoE | Multi-stage |
@@ -533,6 +545,13 @@ model.load_state_dict(ckpt.get("model_state", ckpt), strict=False)
 ```
 pro2/
 ├── self_train*.py           # Самообучение (v1/v2/v3)
+├── self_train_hmoe*.py      # HMoE-специфическое самообучение
+├── figure8_turbine.py       # Figure-8 + TSP routing
+├── nautilus_4agent.py       # 4-агентный Наутилус (META/ABSTRACT/DYNAMIC/CONCRETE)
+├── nautilus_15agent.py      # 15-агентный Наутилус (15 Q4-тессерактов ⊂ Q6)
+├── roundabout.py            # Кольцевой маршрут (адаптивные обороты до LCI≈π)
+├── bidir_turbine.py         # Двунаправленная турбина
+├── multi_salesman.py        # Multi-agent торговые представители
 ├── bidir_train*.py          # Бидирекционное обучение
 ├── train_hmoe_*.py          # HMoE curriculum/staged
 ├── train_e2*.py             # E2-архитектура
@@ -550,6 +569,18 @@ pro2/
     ├── constants.py               # HEX_NAMES (64 гексаграммы Вэнь-Вана)
     │
     ├── models/
+    │   ├── variant3.py                 # Variant3GPT (главная модель)
+    │   ├── hierarchical_moe.py         # HierarchicalMoEFFN (Q2→Q3→Q6)
+    │   ├── hierarchical_e2.py          # HierarchicalE2 (E2 архитектура)
+    │   └── geometry/
+    │       ├── core.py                 # Q6-гиперкуб, 64 гексаграммы, кодбуки
+    │       ├── quantizers.py           # 13 квантизаторов (TernaryQ, WHT_Q, E8Q ...)
+    │       ├── routing.py              # Гейты, маршрутизаторы, curriculum
+    │       ├── q6_algebra.py           # Z₂^6: Теорема 3, V₄ (И-Цзин), BentFunctions
+    │       ├── kasatkin_router.py      # KasatkinQ6Router (3D-куб), Q6ExpertBank
+    │       └── interlingua_fixed.py    # ArchetypalInterlinguaFixed (per-source)
+    ├── scripts/                        # Утилиты и эксперименты
+    └── training/                       # Тренировочные утилиты
     │   ├── model.py               # YiJingGPT — основная модель (90KB)
     │   ├── variant3.py            # Variant3GPT — архетипо-центричный вариант
     │   ├── variant3_extensions.py # Расширения Variant3

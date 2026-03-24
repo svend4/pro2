@@ -39,7 +39,10 @@ Q6-гиперкуб {-1,+1}⁶
   ├── YiJingGPT (v8)        ← полная модель с геометрией
   ├── Variant3GPT           ← production (HMoE + BianGua)
   ├── HierarchicalE2        ← 5-уровневая иерархия
-  └── NautilusYiJing        ← MoE + Q6 routing
+  ├── NautilusYiJing        ← MoE + Q6 routing
+  ├── PureGeometricGPT      ← только geometry-модули, без классической attention
+  ├── HybridGatedGPT        ← SwiGLU-ворота между классикой и геометрией
+  └── AdaptiveHybridGPT     ← конвейер 6 стадий (HexProj→BianGua→Ternary→Interlingua→Analogy→FFN)
 
 Обучение
   ├── self_train*.py         ← самообучение (3 стадии)
@@ -103,7 +106,10 @@ LCI (Loop Closure Index)
 **Хочу узнать что изменилось в последней сессии:**
 → [CHANGELOG.md](CHANGELOG.md)
 
-**Хочу исправить баг ArchetypalInterlingua (PPL=vanilla):**
+**Хочу понять, где используется ArchetypalInterlinguaFixed:**
+→ Интегрирован в: `variant3.py`, `hierarchical_e2.py`, `variant3_extensions.py`
+→ Баг оригинала: один общий `trit_proj` → все источники одинаковы → PPL=vanilla
+→ Исправление: per-source `trit_projs`, diversity_loss, Gumbel-Softmax
 → [IMPLEMENTATION_STATUS.md — interlingua_fixed](IMPLEMENTATION_STATUS.md#2-archetypalinterlinguafixed)
 → `yijing_transformer/models/geometry/interlingua_fixed.py`
 

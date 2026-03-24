@@ -259,7 +259,73 @@ model.freeze_all_except('core_level')
 
 ---
 
-## 8. Вспомогательные модули
+## 8. Ablation-варианты `model.py`
+
+**Файл:** `yijing_transformer/models/model.py`
+
+Три варианта `YiJingGPT` для ablation-исследований геометрии.
+
+| Класс | Строка | Назначение |
+|-------|--------|-----------|
+| `PureGeometricGPT` | 1612 | Только геометрические слои — потолок геометрии без стандартного attention |
+| `HybridGatedGPT` | 1696 | Обучаемый гейт: модель сама выбирает geometric vs standard |
+| `AdaptiveHybridGPT` | 1928 | Расширение HybridGated с curriculum и детальной статистикой |
+
+### `PureGeometricGPT`
+
+Для чистого ablation: «насколько геометрия решает задачу без attention?»
+
+```python
+from yijing_transformer.models.model import PureGeometricGPT
+from yijing_transformer.config.config import YiJingConfig
+
+cfg = YiJingConfig.small(vocab_size=256)
+model = PureGeometricGPT(cfg)
+logits, loss, _ = model(idx, targets)
+```
+
+### `HybridGatedGPT`
+
+Гейт `g ∈ [0,1]` на каждом слое: `output = g·geometric + (1−g)·standard`. Поддерживает `GateLogger` (прозрачность) и `GeometryCurriculumScheduler` (постепенное усиление).
+
+```python
+from yijing_transformer.models.model import HybridGatedGPT
+
+model = HybridGatedGPT(cfg)
+
+# Обновление curriculum по шагу
+model.update_curriculum(step=500)
+
+# Статистика гейтов
+stats = model.get_gate_stats()  # {'mean_gate': 0.43, 'std_gate': 0.12, ...}
+```
+
+### `AdaptiveHybridGPT`
+
+Добавляет к `HybridGatedGPT`:
+- per-layer индивидуальные гейты (не общий)
+- дополнительные aux losses для разнообразия гейтов
+- метод `get_detailed_stats()` с разбивкой по слоям
+
+```python
+from yijing_transformer.models.model import AdaptiveHybridGPT
+
+model = AdaptiveHybridGPT(cfg)
+logits, loss, aux_info = model(idx, targets)
+# aux_info содержит gate_diversity_loss и per_layer_gates
+```
+
+**Когда использовать:**
+
+| Задача | Рекомендация |
+|--------|-------------|
+| Проверить ценность геометрии | `PureGeometricGPT` — чистый абляшн |
+| Продакшн с геометрией | `Variant3GPT` или `HybridGatedGPT` |
+| Исследование адаптации | `AdaptiveHybridGPT` |
+
+---
+
+## 9. Вспомогательные модули
 
 ### LoRA (`lora.py`)
 

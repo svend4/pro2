@@ -4,6 +4,42 @@
 
 ---
 
+## 2026-03-24 — Session: repository-audit-fvlEG (продолжение 2)
+
+### B. Интеграция ArchetypalInterlinguaFixed
+
+Баг оригинала (один общий `trit_proj` → PPL=vanilla) устранён во всех трёх точках использования:
+
+| Файл | Было | Стало |
+|------|------|-------|
+| `variant3.py` `Variant3Block` | `ArchetypalInterlingua` | `ArchetypalInterlinguaFixed` |
+| `hierarchical_e2.py` `MethodLevel` | `ArchetypalInterlingua` | `ArchetypalInterlinguaFixed` |
+| `variant3_extensions.py` `AdaptiveHybridGPTBlock` | `ArchetypalInterlingua` | `ArchetypalInterlinguaFixed` |
+
+API-изменение: `forward(x, sources)` → `forward(sources, core) → (output, aux_loss)`
+
+Побочный эффект: `readout_attn` (MultiheadAttention, мёртвый код) удалён из `interlingua_fixed.py`.
+
+### C. Smoke-тесты обучающих скриптов (`tests/test_training_smoke.py`)
+
+22 теста, покрытие:
+- `self_train_common`: CFG, hexagrams/biangua форма, text_to_ids
+- `self_train_hmoe`: RagBuffer, quality_filter, lci_from_routing, lci_from_embeddings, micro_train (1 шаг), _generate
+- `nautilus_4agent`: RINGS/AGENTS структуры, Aut(Q6) орбиты (все 64 вершины)
+- `figure8_turbine`: kirchhoff_balance forward pass, _EXPERT_FREEZE_MAP
+- `pipeline`: run_phase сигнатура, константы
+
+### D. docs/INDEX.md
+
+- Карта концепций: добавлены `PureGeometricGPT`, `HybridGatedGPT`, `AdaptiveHybridGPT`
+- Быстрый поиск: секция ArchetypalInterlinguaFixed → интеграция в 3 файла
+
+### Состояние тестов
+
+**1741/1741** (все тесты проходят)
+
+---
+
 ## 2026-03-24 — Session: repository-audit-fvlEG
 
 ### Новые файлы

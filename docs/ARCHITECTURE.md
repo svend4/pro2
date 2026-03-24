@@ -505,7 +505,12 @@ class HMoEConfig:
     lambda_dynamic:     float = 0.0    # DYNAMIC ≥ 0.20
     lambda_temp_reg:    float = 0.0    # Ising temp регуляризация
     ising_T_c:          float = 3.0    # критическая температура Q6
+    use_q4:             bool  = False  # Q4 масштаб (16 вершин PseudoRAG) между Q2 и Q3
+    hex_tier_d_ff_mult: int   = 1      # множитель d_ff для Q6ExpertBank (d_ff = d_model × mult)
+    balance_threshold:  float = 0.40   # порог для kirchhoff_ok: max_group_weight ≤ threshold
 ```
+
+> **Примечание:** `use_q4=True` добавляет промежуточный масштаб PseudoRAG (16 вершин Q4⊂Q6) между Q2 и Q3 в `MultiScaleGlobalRouter`. `balance_threshold=0.40` определяет метрику `kirchhoff_ok` в `HierarchicalMoEFFN.get_routing_stats()`.
 
 ### Архитектура прохода (forward)
 

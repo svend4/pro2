@@ -70,11 +70,6 @@ class ArchetypalInterlinguaFixed(nn.Module):
         # Проектор: n_archetypes-мерный консенсус → d_model через Q6-якоря
         self.anchor_to_hidden = nn.Linear(6, d_model, bias=False)
 
-        # Readout attention
-        self.readout_attn = nn.MultiheadAttention(
-            d_model, num_heads=4, batch_first=True, dropout=0.0
-        )
-
         # Gate: сколько брать из интерлингвы vs прямого пути
         self.gate = nn.Parameter(torch.zeros(1))
 

@@ -1097,7 +1097,7 @@ class ConveyorVariant3Block(nn.Module):
             HexagramProjection, BianGuaAttention, TernaryGate,
             CrossHexagramAnalogy
         )
-        from yijing_transformer.models.geometry.routing import ArchetypalInterlingua
+        from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInterlinguaFixed
 
         self.norm_hex = nn.LayerNorm(d_model)
         self.norm_attn = nn.LayerNorm(d_model)
@@ -1106,7 +1106,8 @@ class ConveyorVariant3Block(nn.Module):
         self.hex_proj = HexagramProjection(d_model)
         self.biangua_attn = BianGuaAttention(d_model, n_heads, hamming_lambda)
         self.ternary_gate = TernaryGate(d_model, uncertainty_budget)
-        self.interlingua = ArchetypalInterlingua(d_model, n_sources=2)
+        # Заменяет багованный ArchetypalInterlingua (один общий trit_proj → PPL=vanilla)
+        self.interlingua = ArchetypalInterlinguaFixed(d_model, n_sources=2)
         self.analogy = CrossHexagramAnalogy(d_model)
 
         self.use_hierarchical_moe = use_hierarchical_moe
@@ -1153,8 +1154,8 @@ class ConveyorVariant3Block(nn.Module):
         if out:
             out.record("TERNARY_GATE", x)
 
-        # Stage 4: INTERLINGUA
-        x = self.interlingua(attn_out, [attn_out, ternary_out])
+        # Stage 4: INTERLINGUA — сигнатура Fixed: forward(sources, core) → (out, aux)
+        x, _ = self.interlingua([attn_out, ternary_out], attn_out)
         if out:
             out.record("INTERLINGUA", x)
 

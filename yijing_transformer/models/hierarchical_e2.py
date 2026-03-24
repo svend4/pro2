@@ -60,8 +60,8 @@ from yijing_transformer.models.variant3 import (
 from yijing_transformer.models.geometry.convergence import (
     ConvergenceBridge, MatrixGrammar, TokenAbstractor,
 )
-from yijing_transformer.models.geometry.routing import (
-    ArchetypalInterlingua,
+from yijing_transformer.models.geometry.interlingua_fixed import (
+    ArchetypalInterlinguaFixed,
 )
 from yijing_transformer.models.geometry.nautilus import (
     NautilusHierarchy,
@@ -231,14 +231,11 @@ class MethodLevel(nn.Module):
 
     def __init__(self, d_model: int, n_archetypes: int, use_ternary: bool):
         super().__init__()
-        self.interlingua = ArchetypalInterlingua(
+        # Заменяет багованный ArchetypalInterlingua (один общий trit_proj → PPL=vanilla)
+        self.interlingua = ArchetypalInterlinguaFixed(
             d_model=d_model,
             n_sources=2,                  # glyph + core
             n_archetypes=n_archetypes,
-            use_ternary=use_ternary,
-            uncertainty_budget=0.25,
-            n_heads=4,
-            ternary_warmup_steps=1000,
         )
 
     def forward(self, x_glyph: torch.Tensor,
@@ -252,7 +249,9 @@ class MethodLevel(nn.Module):
             x_method: (B, T, D) — синтез через архетипы
         """
         # identity = x_core (более информативный)
-        return self.interlingua(x_core, [x_glyph, x_core])
+        # Сигнатура Fixed: forward(source_outputs, core_hidden) → (output, aux_loss)
+        out, _ = self.interlingua([x_glyph, x_core], x_core)
+        return out
 
 
 # ══════════════════════════════════════════════════════════════════════════════

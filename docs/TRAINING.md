@@ -72,8 +72,8 @@ python self_train_v3.py    # + Stage0 = figure-8 обход Q6
 | `figure8_turbine.py` | 4 агента, TSP-маршрут | A | `--lci-loss`, `--cycles`, `--steps_per_expert` |
 | `nautilus_4agent.py` | 4 агента по кольцам | A + B | `--cycles`, `--step-scale`, `--bent-seeds` |
 | `nautilus_clover.py` | Клеверный маршрут | A | — |
-| `nautilus_15agent.py` | 15 агентов | A | — |
-| `roundabout.py` | Кольцо с адаптивными оборотами | A | `--max-laps` |
+| `nautilus_15agent.py` | 15 агентов (Q4⊂Q6) | A | `--cycles`, `--steps`, `--fast`, `--no-bent` |
+| `roundabout.py` | Кольцо с адаптивными оборотами | A | `--cycles`, `--lap-steps`, `--max-laps`, `--fast` |
 | `bidir_turbine.py` | Два встречных потока | A | — |
 | `bidir_train.py` / `bidir_train_v2.py` | Bidirectional обучение | B | — |
 | `multi_salesman.py` | 2–3 агента с общим RAG | A | `--n-agents` |
@@ -145,8 +145,12 @@ Greedy/2-opt TSP → оптимальный порядок обхода эксп
 Агент движется по кольцу экспертов, число оборотов определяется LCI-прогрессом — не фиксированное, а до достижения порога.
 
 ```bash
-python roundabout.py --checkpoint model.pt --max-laps 5 --lci-threshold 3.0
+python roundabout.py --checkpoint model.pt --cycles 4 --max-laps 5 --lap-steps 20
+python roundabout.py --fast                   # smoke test без checkpoint
 ```
+
+Аргументы: `--cycles` (дефолт 2), `--lap-steps` (шагов за оборот, дефолт 8), `--max-laps` (дефолт 2), `--temperature`, `--lr`, `--fast`, `--no-train`.
+
 
 #### `multi_salesman.py` — K агентов с общим RAG
 
@@ -161,8 +165,12 @@ python multi_salesman.py --n-agents 2 --checkpoint model.pt
 Каждый агент обрабатывает один Q4-тессеракт (C(6,4)=15 копий Q4 в Q6). Все 15×16=240 вершинных маршрутов покрывают 60/64 Q6-вершин.
 
 ```bash
-python nautilus_15agent.py --checkpoint model.pt --cycles 3
+python nautilus_15agent.py --checkpoint model.pt --cycles 4 --steps 15
+python nautilus_15agent.py --fast               # smoke test без checkpoint
 ```
+
+Аргументы: `--cycles` (дефолт 2), `--steps` (шагов/агент/цикл, дефолт 3 в fast), `--temperature`, `--temp-decay`, `--lr`, `--fast`, `--no-bent` (отключить bent seeds), `--no-train`, `--save`.
+
 
 #### `nautilus_clover.py` — 4-листный клевер
 
@@ -249,7 +257,7 @@ python pipeline.py --checkpoint hmoe_self_trained_v4.pt --no-adaptive-lr
 | `nautilus_cycles` | 8 | циклов за один проход |
 | `nautilus_step_scale` | 0.4 | масштаб шагов |
 | `turbine_cycles` | 8 | циклов в фазе 2 |
-| `turbine_spe` | 8 | шагов на эксперта в турбине |
+| `turbine_spe` | 8 | шагов на эксперта в турбине (`--turbine-spe` в pipeline.py → передаётся как `--steps_per_expert` в figure8_turbine.py) |
 | `turbine_lci_loss` | 0.1 | вес LCI-loss в турбине |
 | `adaptive_lr` | True | снижать lr до 5e-6 при LCI > 2.8 |
 | `reset_rag_pass` | 3 | с какого прохода использовать bent seeds |
@@ -532,9 +540,23 @@ print(log[-1])  # последний цикл
 # {'cycle': 12, 'avg_lci_r': 3.21, 'avg_lci_emb': 3.08, 'resonance_rate': 0.67, ...}
 ```
 
-Поддерживаемые форматы лога (читает `pipeline.read_avg_lci()`):
-- `avg_lci_all` — nautilus_4agent
-- `avg_lci_r` — figure8_turbine
-- `avg_LCI_r` — устаревший формат
-- `lci_r_final` — nautilus_clover
-- `avg_lci` — multi_salesman, bidir
+### Таблица соответствия log-ключей
+
+| Ключ в JSON | Скрипт | Описание |
+|------------|--------|---------|
+| `avg_lci_all` | `nautilus_4agent.py`, `nautilus_15agent.py` | Среднее LCI по всем агентам (Formula A) |
+| `avg_lci_r` | `figure8_turbine.py`, `roundabout.py` | Routing LCI финального цикла |
+| `avg_LCI_r` | legacy (`self_train_hmoe.py` v1-v3) | Устаревший формат, то же что `avg_lci_r` |
+| `lci_r_final` | `nautilus_clover.py` | LCI в конце прогона (не среднее) |
+| `avg_lci` | `multi_salesman.py`, `bidir_turbine.py` | Среднее LCI всех агентов/потоков |
+| `cycle` | все скрипты | Номер цикла (0-based) |
+| `resonance_rate` | `figure8_turbine.py`, `roundabout.py` | Доля циклов с LCI ∈ [π−0.3, π+0.3] |
+| `kirchhoff_ok` | `figure8_turbine.py` | True если max_group_weight ≤ balance_threshold |
+| `n_resonant` | `nautilus_15agent.py` | Число агентов в резонансе (из 15) |
+| `load_balance` | `nautilus_15agent.py` | Равномерность покрытия Q4 (0..1, цель ≥ 0.8) |
+| `lci_r_end` | `roundabout.py` | LCI в конце кольца (после всех оборотов) |
+| `n_laps` | `roundabout.py` | Число оборотов (≤ max_laps) |
+| `exited_early` | `roundabout.py` | True если резонанс достигнут до max_laps |
+| `ppl_val` | `self_train*.py` | Perplexity на валидационной выборке |
+
+Используется в `pipeline.py::read_avg_lci()` для выбора правильного ключа:
