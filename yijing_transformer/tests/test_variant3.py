@@ -472,15 +472,9 @@ class TestVariant3Block:
 
     def test_all_parameters_get_gradients(self, block):
         """Обучаемые параметры получают градиенты (кроме известных мёртвых путей)."""
-        # Известные исключения:
-        # - interlingua.log_uncertainty: STE-путь не пропускает градиент через порог
-        # - interlingua.encode_norm.*: LayerNorm определён в ArchetypalInterlingua,
-        #   но не используется в forward (мёртвый код в библиотеке)
-        KNOWN_DEAD = {
-            'interlingua.log_uncertainty',
-            'interlingua.encode_norm.weight',
-            'interlingua.encode_norm.bias',
-        }
+        # После миграции на ArchetypalInterlinguaFixed все параметры участвуют в forward.
+        # Пустой набор — нет известных мёртвых путей.
+        KNOWN_DEAD: set = set()
         x = torch.randn(2, 4, 64)
         out = block(x)
         loss = out.sum()
