@@ -68,22 +68,26 @@ class NautilusChamber(nn.Module):
         # Learnable scale per chamber — initialized with soft progression
         # but free to adapt during training (no fixed geometric ratio).
         # softplus ensures positive scale without hard clamp.
-        init_value = math.log(math.exp(init_scale * (1.0 + 3.0 * (chamber_idx / max(n_chambers - 1, 1)))) - 1.0 + 1e-6)
+        progression = chamber_idx / max(n_chambers - 1, 1)
+        init_value = math.log(math.exp(init_scale * (1.0 + 3.0 * progression)) - 1.0 + 1e-6)
         self._scale_param = nn.Parameter(torch.tensor(init_value))
+        # Learnable progression bias — replaces the hard 3.0 multiplier
+        self._progression_logit = nn.Parameter(torch.tensor(0.0))
+
+        # Content-dependent gate: «нужна ли эта камера для данного токена?»
+        self.gate_proj = nn.Linear(d_model, 1, bias=True)
+        nn.init.zeros_(self.gate_proj.weight)
+        # Neutral init: sigmoid(0) = 0.5, letting the model learn the preference
+        nn.init.zeros_(self.gate_proj.bias)
+
+        # Диагностика
+        self._last_gate_mean = 0.5
+        self._last_scale = init_scale
 
     @property
     def scale(self):
         """Positive scale via softplus — learnable without hard constraints."""
         return F.softplus(self._scale_param)
-
-        # Content-dependent gate: «нужна ли эта камера для данного токена?»
-        self.gate_proj = nn.Linear(d_model, 1, bias=True)
-        nn.init.zeros_(self.gate_proj.weight)
-        nn.init.constant_(self.gate_proj.bias, 0.0)  # sigmoid(0) = 0.5
-
-        # Диагностика
-        self._last_gate_mean = 0.5
-        self._last_scale = init_scale
 
     def forward(self, x: torch.Tensor, curriculum_mask: float = 1.0) -> torch.Tensor:
         """Применяет камеру с gate и масштабом.
@@ -240,12 +244,15 @@ class NautilusHierarchy(nn.Module):
             warmup_steps=warmup_steps,
         )
 
-        # Для параллельного режима: обучаемое объединение
-        if mode == 'parallel':
-            self.merge_proj = nn.Linear(
-                d_model * len(self.chambers), d_model, bias=False
-            )
-            nn.init.zeros_(self.merge_proj.weight)
+        # Always create merge_proj for soft mode blending
+        self.merge_proj = nn.Linear(
+            d_model * len(self.chambers), d_model, bias=False
+        )
+        nn.init.zeros_(self.merge_proj.weight)
+
+        # Learnable mode gate: sigmoid → 0=sequential, 1=parallel
+        init_mode = 0.0 if mode == 'sequential' else 0.0
+        self._mode_logit = nn.Parameter(torch.tensor(init_mode))
 
         # Layer norm перед и после (стабилизация)
         self.ln_pre = nn.LayerNorm(d_model)
@@ -292,27 +299,25 @@ class NautilusHierarchy(nn.Module):
         masks = self.scheduler.get_masks(self._current_step)
         h = self.ln_pre(x)
 
-        if self.mode == 'sequential':
-            # Каскадный режим: каждая камера обогащает результат предыдущей
-            enrichment = torch.zeros_like(h)
-            for i, chamber in enumerate(self.chambers):
-                mask = masks[i] if i < len(masks) else 1.0
-                delta = chamber(h + enrichment, curriculum_mask=mask)
-                enrichment = enrichment + delta
+        # Soft mode blending: both paths computed, gate decides the mix
+        mode_gate = torch.sigmoid(self._mode_logit)  # 0=sequential, 1=parallel
 
-        elif self.mode == 'parallel':
-            # Параллельный режим: все камеры независимо, затем merge
-            deltas = []
-            for i, chamber in enumerate(self.chambers):
-                mask = masks[i] if i < len(masks) else 1.0
-                delta = chamber(h, curriculum_mask=mask)
-                deltas.append(delta)
-            # Конкатенация + проекция
-            concatenated = torch.cat(deltas, dim=-1)  # (B, T, D*N)
-            enrichment = self.merge_proj(concatenated)
+        # Sequential path: cascading enrichment
+        seq_enrichment = torch.zeros_like(h)
+        deltas = []
+        for i, chamber in enumerate(self.chambers):
+            mask = masks[i] if i < len(masks) else 1.0
+            delta_seq = chamber(h + seq_enrichment, curriculum_mask=mask)
+            seq_enrichment = seq_enrichment + delta_seq
+            delta_par = chamber(h, curriculum_mask=mask)
+            deltas.append(delta_par)
 
-        else:
-            raise ValueError(f"Unknown mode: {self.mode}")
+        # Parallel path: independent chambers + merge
+        concatenated = torch.cat(deltas, dim=-1)  # (B, T, D*N)
+        par_enrichment = self.merge_proj(concatenated)
+
+        # Blend: learned gate mixes sequential and parallel
+        enrichment = (1 - mode_gate) * seq_enrichment + mode_gate * par_enrichment
 
         # Post-norm + residual gate
         enrichment = self.ln_post(enrichment)

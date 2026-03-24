@@ -124,10 +124,11 @@ class GateLogger:
         if not self.history:
             return {}
         last = self.history[-1]
-        geo_layers = sum(1 for g in last['gates'].values()
-                         if g.get('geometry_preference', g.get('gate_mean', 0)) > 0.5)
-        std_layers = sum(1 for g in last['gates'].values()
-                         if g.get('geometry_preference', g.get('gate_mean', 0)) <= 0.5)
+        # Soft counting: each layer contributes its gate value as a continuous weight
+        gate_vals = [g.get('geometry_preference', g.get('gate_mean', 0.5))
+                     for g in last['gates'].values()]
+        geo_layers = sum(gate_vals)  # soft count of geometry-preferring layers
+        std_layers = sum(1.0 - v for v in gate_vals)  # soft count of standard layers
         return {
             'step': last['step'],
             'layers_prefer_geometry': geo_layers,
@@ -242,11 +243,13 @@ class GeometricSourceRouter(nn.Module):
         temp = self.log_temperature.exp().clamp(min=0.1, max=10.0)
         logits = self.router_proj(x) / temp  # (B, T, N)
 
-        # Top-k selection
+        # Soft top-k: temperature-scaled suppression instead of hard -inf masking
         if self.top_k < self.n_sources:
             top_vals, top_idx = logits.topk(self.top_k, dim=-1)  # (B, T, k)
-            mask = torch.zeros_like(logits).scatter(-1, top_idx, 1.0)
-            logits = logits.masked_fill(mask == 0, float('-inf'))
+            threshold = top_vals[..., -1:].detach()  # lowest top-k value
+            # Soft suppression: push non-top-k logits down with steep sigmoid
+            suppression = torch.sigmoid(10.0 * (logits - threshold))
+            logits = logits * suppression
 
         weights = F.softmax(logits, dim=-1)  # (B, T, N)
 
