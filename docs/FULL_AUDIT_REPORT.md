@@ -299,14 +299,16 @@ README.md, CONCEPTUAL_STAGE.md, KNOWLEDGE_FRAMEWORK.md, PSEUDORAG_YIJING_BRIDGE.
 | Метрика | Значение |
 |---------|----------|
 | Строк Python-кода | 89 981 |
-| nn.Module классов | 83 (geometry) + 31 (models) = **114** |
-| Тестов (def test_) | **1 957** |
-| Тестовых файлов | 24 |
+| nn.Module классов | 82 (geometry) + 31 (models) = **113+** |
+| Квантизаторов | **16** (включая WHT_Quantizer и Hypercube) |
+| Тестов (def test_) | **1 987** |
+| Тестовых файлов | 25 |
 | Конфиг-флагов (bool) | 126 |
 | Training utils | 43 файла (v12–v54) |
+| Training скриптов | 28 |
 | Чекпоинтов (.pt) | 11 файлов, ~200 MB |
 | Бенчмарк-скриптов | 22 |
-| Документов (.md) | 38 (16 docs/ + 22 root) |
+| Документов (.md) | **47** (16 docs/ + 21 root + 10 other) |
 | Портал-адаптеров | **7/7** |
 | Бенчмарк PPL (лучший) | **1.01** (nautilus/adamw_wsd v69, toy-scale) |
 
