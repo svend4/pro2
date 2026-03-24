@@ -84,6 +84,7 @@ from .attention import (
     GeometricAttention,
     MagicSquareInitializer,
     TriangularCurriculumScheduler,
+    SOLANAttention,
 )
 
 # Positional encodings
@@ -150,6 +151,18 @@ from .nautilus import (
     NautilusScheduler,
     MatryoshkaNautilus,
     PostCascadeMatryoshkaNautilus,
+)
+
+# Six Sources: единая интеграция 6 теоретических источников (PLAN-v51)
+from .six_sources import (
+    SixSourceConfig,
+    SixSourceLayer,
+    PalaceSource,
+    AntipodalSource,
+    TriangularSource,
+    KasatkinSource,
+    HermannSource,
+    BelyaevSource,
 )
 
 # Core: ternary hypercube & spacetime

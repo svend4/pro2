@@ -556,3 +556,55 @@ class TriangularCurriculumScheduler:
         level = int(progress * self.max_level)
         level = max(0, min(level, len(self.levels) - 1))
         return self.levels[level]
+
+
+class SOLANAttention(nn.Module):
+    """SOLAN-76 attention: геометрический приор из 6D гиперкуба Q6.
+
+    Проецирует токены в 6-мерное SOLAN-пространство {-1,+1}⁶ и вычисляет
+    геометрическое сходство (dot-product в Q6), смешивая его со стандартным
+    multi-head attention через обучаемый гейт.
+    """
+
+    def __init__(self, d_model: int, n_heads: int = 4, block_size: int = 512):
+        super().__init__()
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        # Стандартные проекции Q/K/V
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+        # SOLAN Q6 проекция
+        self.q6_proj = nn.Linear(d_model, 6, bias=False)
+        # Обучаемый гейт: alpha = sigmoid(gate) → доля стандартного attention
+        self.gate = nn.Parameter(torch.tensor(0.0))
+        self.scale = self.head_dim ** -0.5
+        self.register_buffer('causal_mask',
+                             torch.tril(torch.ones(block_size, block_size)).bool())
+
+    def forward(self, x, mask=None):
+        B, T, D = x.shape
+        # --- Стандартный multi-head attention ---
+        q = self.q_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        std_scores = (q @ k.transpose(-2, -1)) * self.scale
+        causal = self.causal_mask[:T, :T]
+        std_scores = std_scores.masked_fill(~causal, float('-inf'))
+        if mask is not None:
+            std_scores = std_scores.masked_fill(mask == 0, float('-inf'))
+        std_attn = F.softmax(std_scores, dim=-1).nan_to_num(0.0)
+        std_out = (std_attn @ v).transpose(1, 2).contiguous().view(B, T, D)
+        # --- SOLAN Q6 геометрический attention ---
+        q6 = torch.tanh(self.q6_proj(x))  # (B, T, 6) — мягкие Q6 координаты
+        solan_scores = q6 @ q6.transpose(-2, -1)  # (B, T, T)
+        solan_scores = solan_scores.masked_fill(~causal, float('-inf'))
+        solan_attn = F.softmax(solan_scores, dim=-1).nan_to_num(0.0)
+        v_flat = v.transpose(1, 2).contiguous().view(B, T, D)
+        solan_out = solan_attn @ v_flat  # (B, T, D)
+        # --- Смешивание через гейт ---
+        alpha = torch.sigmoid(self.gate)
+        out = alpha * std_out + (1.0 - alpha) * solan_out
+        return self.out_proj(out)

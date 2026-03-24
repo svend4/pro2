@@ -328,6 +328,9 @@ class YiJingConfig:
     use_expert_choice: bool = False       # Expert Choice routing (Zhou et al., 2022)
     expert_choice_capacity: float = 1.0   # capacity factor для Expert Choice
 
+    # Six Sources: единая интеграция 6 теоретических источников (PLAN-v51)
+    use_six_sources: bool = False         # SixSourceLayer после квантизатора
+
     # PseudoRAG: мост Q4 (16 архетипов) → Q6 (64 гексаграммы)
     # Ref: PSEUDORAG_YIJING_BRIDGE.md — формальное вложение Q4 ⊂ Q6
     use_pseudo_rag: bool = False          # PseudoRAG Q4→Q6 projection bridge
@@ -351,6 +354,8 @@ class YiJingConfig:
     use_graduated_biangua: bool = False  # градуированная 变卦 (Склярова 1.3)
     use_d4_equivariant: bool = False    # D₄-эквивариантный слой (Фомюк 2.2)
     use_heisenberg_attention: bool = False  # Гейзенберг-attention (Беляев 6.1)
+    use_solan_attention: bool = False       # SOLAN-76 Q6 attention (Ступень 7.1)
+    use_six_sources: bool = False           # единый модуль 6 источников (Склярова+Фомюк+Андреев+Касаткин+Герман+Беляев)
     use_dual_mode_head: bool = False    # мезонный/барионный head (Беляев 6.4)
     use_recursive_cube: bool = False    # рекурсивный куб-attention (Беляев 6.5)
     use_weaving_loom: bool = False      # 4-уровневый ткацкий станок (Беляев 6.8)
