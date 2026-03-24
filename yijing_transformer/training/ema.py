@@ -1,6 +1,7 @@
 """
-EXPERIMENTAL — не используется в training pipeline.
-Импортируется только в test_model_pytest.py. Оставлен для будущих экспериментов.
+Готов к использованию в training pipeline.
+EMA: use_ema=True в YiJingConfig, вызывать ema.update() после каждого шага.
+EarlyStopping: early_stop_patience > 0 в YiJingConfig.
 
 EMA (Exponential Moving Average) и Early Stopping для YiJing-Transformer.
 

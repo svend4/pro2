@@ -1,6 +1,7 @@
 """
-EXPERIMENTAL — не используется в production моделях (YiJingGPT, LeanYiJingGPT, Variant3GPT).
-Импортируется только в test_model_pytest.py. Оставлен для будущих экспериментов.
+Интегрирован в YiJingGPT:
+- PrefixTuning через prefix_len > 0 в YiJingConfig
+- MultiTokenPredictionHead через mtp_n_future > 0 в YiJingConfig
 
 Prefix Tuning, Logit Lens, Multi-Token Prediction.
 

@@ -92,6 +92,10 @@ from yijing_transformer.models.expert_choice import ExpertChoiceRouter
 from yijing_transformer.models.pseudo_rag import PseudoRAGProjection, PseudoRAGDistillationLoss
 # Единый модуль 6 источников (Склярова+Фомюк+Андреев+Касаткин+Герман+Беляев)
 from yijing_transformer.models.geometry.six_sources import SixSourceLayer
+# v14: Differential Attention (Ye et al., 2024)
+from yijing_transformer.models.diff_attn import DifferentialAttention
+# v17: Prefix Tuning + Multi-Token Prediction
+from yijing_transformer.models.prefix_tuning import PrefixTuning, MultiTokenPredictionHead
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 from yijing_transformer.tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
@@ -367,7 +371,13 @@ class YiJingTransformerLayer(nn.Module):
         self.use_recursive_cube = getattr(cfg, 'use_recursive_cube', False)
         self.use_weaving_loom = getattr(cfg, 'use_weaving_loom', False)
 
-        if self.use_quadrant_attention:
+        # v14: Differential Attention (two-softmax difference)
+        self.use_diff_attn = getattr(cfg, 'use_diff_attn', False)
+
+        if self.use_diff_attn:
+            self.attn = DifferentialAttention(cfg.d_model, cfg.n_heads, dropout=cfg.dropout)
+            self._attn_returns_cache = False
+        elif self.use_quadrant_attention:
             self.attn = QuadrantAttention(cfg.d_model, cfg.n_heads)
             self._attn_returns_cache = False
         elif self.use_recursive_cube:
@@ -1055,6 +1065,22 @@ class YiJingGPT(nn.Module):
             )
             self._pseudo_rag_distill_weight = getattr(cfg, 'pseudo_rag_distill_weight', 0.1)
 
+        # v17: Prefix Tuning — обучаемые prefix-токены
+        self.prefix_len = getattr(cfg, 'prefix_len', 0)
+        if self.prefix_len > 0:
+            self.prefix_tuning = PrefixTuning(cfg, prefix_len=self.prefix_len)
+        else:
+            self.prefix_tuning = None
+
+        # v17: Multi-Token Prediction — предсказание N следующих токенов
+        self.mtp_n_future = getattr(cfg, 'mtp_n_future', 0)
+        if self.mtp_n_future > 0:
+            self.mtp_head = MultiTokenPredictionHead(
+                cfg.d_model, cfg.vocab_size, n_future=self.mtp_n_future,
+            )
+        else:
+            self.mtp_head = None
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -1224,6 +1250,11 @@ class YiJingGPT(nn.Module):
                 q6_logits_for_distill = q6_expanded + self.pseudo_rag.blend_scale * q6_logits_full
                 distill_loss = self.pseudo_rag_distill(q6_logits_for_distill, q4_targets)
                 loss = loss + self._pseudo_rag_distill_weight * distill_loss
+
+            # v17: Multi-Token Prediction auxiliary loss
+            if self.mtp_head is not None:
+                mtp_loss, _ = self.mtp_head.compute_loss(hidden, targets)
+                loss = loss + 0.1 * mtp_loss
 
         return logits, loss, new_kv_cache
 
