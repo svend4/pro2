@@ -1,0 +1,44 @@
+[
+  {
+    "cycle": 1,
+    "lci_r0": 2.1026,
+    "lci_r_end": 2.2841,
+    "n_laps": 2,
+    "exited_early": false,
+    "n_generated": 24,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.1226,
+        "resonant": false
+      },
+      {
+        "lap": 2,
+        "avg_lci_r": 2.3837,
+        "resonant": false
+      }
+    ],
+    "elapsed_s": 16.8
+  },
+  {
+    "cycle": 2,
+    "lci_r0": 2.2841,
+    "lci_r_end": 2.6058,
+    "n_laps": 2,
+    "exited_early": false,
+    "n_generated": 24,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.5435,
+        "resonant": false
+      },
+      {
+        "lap": 2,
+        "avg_lci_r": 2.604,
+        "resonant": false
+      }
+    ],
+    "elapsed_s": 15.58
+  }
+]

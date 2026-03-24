@@ -946,6 +946,18 @@ class SourceSpecializer(nn.Module):
 class ArchetypalInterlingua(nn.Module):
     """Архетипальная Интерлингва: hub-and-spoke посредник для N модулей.
 
+    .. warning::
+        ИЗВЕСТНЫЙ БАГ: В данной реализации все N источников разделяют
+        *один* ``trit_proj`` (строка ~990). Это создаёт bottleneck:
+        градиенты от разных источников конкурируют за один проектор,
+        что снижает качество представления (PPL ≈ 2.93 вместо 2.75).
+
+        Используйте ``ArchetypalInterlinguaFixed`` из модуля
+        ``geometry.interlingua_fixed`` — там каждый источник имеет
+        собственный ``trit_proj[i]``.
+
+        Ссылка: docs/THEORY_VS_PRACTICE.md, CHANGELOG.md 2026-03-24.
+
     Вместо дерева попарных мостов (BridgeOfModules) — единое промежуточное
     представление из 64 архетипов, через которое проходят все источники.
 

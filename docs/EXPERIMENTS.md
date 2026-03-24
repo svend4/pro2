@@ -168,6 +168,26 @@ python experiments/train_with_glyph.py --steps 1000
 | −0.02 – +0.02 | Нейтрально, нужно больше шагов |
 | < −0.02 | GlyphTokenizer вреден на этих данных |
 
+**Последний результат (2026-03-24):**
+
+```json
+{
+  "char":  {"margin": 0.4528, "accuracy": 1.0},
+  "glyph": {"margin": 0.7810, "accuracy": 1.0},
+  "integrate": true
+}
+```
+
+| Метрика | CharTokenizer | GlyphTokenizer | Δ |
+|---------|--------------|----------------|---|
+| margin (pos − neg sim) | 0.453 | **0.781** | **+0.328** |
+| accuracy | 1.0 | 1.0 | = |
+
+**Вывод: Δ = +0.33 >> порог +0.02 → интеграция рекомендована (`integrate: true`).**
+
+**Статус интеграции:** реализован (флаг `--glyph` в `self_train_hmoe.py`), не активирован по умолчанию.
+Для активации: `python self_train_hmoe.py --glyph ...`
+
 **Результат:** `experiments/glyph_comparison.json`
 
 ---
@@ -189,6 +209,72 @@ python monitor_improve.py --watch 10
 
 ---
 
+## 7. nautilus_15agent — 15 Q4-тессерактов
+
+**Файл:** `nautilus_15agent.py`
+**Идея:** 15 агентов специализируются на 15 копиях Q4⊂Q6, покрывая все 64 вершины.
+**Преимущество перед 4-agent:** математически обоснованная топология вместо ручных колец.
+
+```bash
+python nautilus_15agent.py --fast                          # smoke test
+python nautilus_15agent.py --cycles 4 --steps 10           # быстрый прогон
+python nautilus_15agent.py --checkpoint model.pt --cycles 8
+```
+
+**Критерий успеха:**
+
+| Метрика | Норма | Значение |
+|---------|-------|----------|
+| `n_resonant` | 15/15 | все агенты в резонансе |
+| `avg_lci_all` | ≥ π ≈ 3.142 | Kirchhoff-баланс |
+| `kirchhoff` | True | |
+| `load_balance` | > 0.8 | равномерность Q4-покрытия |
+
+**Первый прогон (2026-03-24, fast, холодный старт):**
+
+| Цикл | avg_LCI | resonant | kirchhoff |
+|------|---------|----------|-----------|
+| 1 | 2.999 | 15/15 | ✓ |
+| 2 | **3.027** | 15/15 | ✓ |
+
+load_balance = 0.933, Δπ = −0.115 (близко к цели, нужен прогрев с checkpoint)
+**Лог:** `experiments/nautilus_15agent_log.json`
+
+---
+
+## 8. roundabout — Кольцевая развязка
+
+**Файл:** `roundabout.py`
+**Идея:** адаптивный цикл ABSTRACT→DYNAMIC→CONCRETE→META с условием выхода `|LCI − π| < ε`.
+**Отличие от turbine:** число оборотов не фиксировано — делает витки пока не достигнет резонанса.
+
+```bash
+python roundabout.py --fast                                # smoke test
+python roundabout.py --cycles 4 --lap-steps 10            # быстрый прогон
+python roundabout.py --checkpoint model.pt --max-laps 5
+```
+
+**Критерий успеха:**
+
+| Метрика | Норма | Значение |
+|---------|-------|----------|
+| `exited_early` | > 0 | ранний выход = достигнут резонанс |
+| `lci_r_end` | ≥ π | цель |
+| `avg_laps` | < max_laps | не застрял в петле |
+
+**Первый прогон (2026-03-24, fast, холодный старт):**
+
+| Цикл | LCI_start | LCI_end | обороты | ранний выход |
+|------|-----------|---------|---------|-------------|
+| 1 | 2.103 | 2.284 | 2/2 | ✗ |
+| 2 | 2.284 | **2.606** | 2/2 | ✗ |
+
+Без checkpoint: LCI растёт (+0.5 за 2 цикла), резонанс не достигнут (π = 3.14).
+С checkpoint: ожидается выход на LCI ≈ π за 3–4 цикла.
+**Лог:** `experiments/roundabout_log.json`
+
+---
+
 ## Матрица: что запускать когда
 
 | Ситуация | Эксперимент |
@@ -200,6 +286,8 @@ python monitor_improve.py --watch 10
 | Тест новой токенизации | эксперимент 5 |
 | Проверка что Q4→Q6 работает | эксперимент 1 |
 | Во время долгого `e2_self_improve` | эксперимент 6 (монитор) |
+| Тест 15-агентной топологии Q4⊂Q6 | эксперимент 7 (nautilus_15agent) |
+| Тест адаптивного кольца вместо turbine | эксперимент 8 (roundabout) |
 
 ---
 
@@ -211,6 +299,9 @@ python monitor_improve.py --watch 10
 | `experiments/xerox_test_result.json` | xerox_test.py | `score`, `passed`, `total` |
 | `experiments/glyph_comparison.json` | train_with_glyph.py | `char`, `glyph`, delta |
 | `e2_self_improve_log.json` | e2_self_improve.py | `avg_ppl` по итерациям |
+| `experiments/nautilus_15agent_log.json` | nautilus_15agent.py | `avg_lci_all`, `n_resonant`, `kirchhoff` |
+| `experiments/roundabout_log.json` | roundabout.py | `lci_r_end`, `n_laps`, `exited_early` |
+| `experiments/new_agents_summary.json` | — | сводка первых прогонов (2026-03-24) |
 
 ---
 

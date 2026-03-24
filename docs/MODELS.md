@@ -95,7 +95,7 @@ class YiJingConfig:
     hex_strength:     float = 0.01   # сила геометрического вклада
     quantizer_type:   str   = 'factored6'  # тип квантизатора
     use_bian_gua:     bool  = True   # BianGuaTransform
-    adaptive_temp:    bool  = True   # обучаемая температура квантизации
+    adaptive_temp:    bool  = True   # обучаемая температура квантизации (TernaryQuantizer)
 
     # Архитектура
     use_rope:         bool  = True   # RoPE
@@ -139,6 +139,33 @@ model = YiJingGPT(cfg)
 logits, loss, aux = model(idx, targets)
 tokens = model.generate(idx, max_new_tokens=50, temperature=1.0, top_k=40)
 ```
+
+### Температурное расписание квантизаторов (`step_temp`)
+
+Квантизаторы с `adaptive_temp=True` (TernaryQuantizer и другие) поддерживают
+cosine annealing температуры: **нужно явно вызывать `.step_temp()` каждый шаг**.
+
+```python
+from yijing_transformer.models.geometry import TernaryQuantizer
+
+q = TernaryQuantizer(
+    d_model=128,
+    warmup_steps=5000,   # количество шагов до достижения end_temp
+    start_temp=1.0,      # начальная температура (мягкое распределение)
+    end_temp=0.05,       # конечная температура (жёсткая квантизация)
+)
+
+for step, batch in enumerate(dataloader):
+    loss = model(batch)
+    optimizer.step()
+    q.step_temp()        # ← обязательно после каждого шага
+
+# Текущая температура:
+print(q.temp)
+```
+
+Без вызова `step_temp()` температура остаётся фиксированной на `start_temp`.
+Все квантизаторы модели обновляются через `_step_all_quantizers()` в `self_train_hmoe.py`.
 
 ---
 

@@ -186,19 +186,31 @@
 
 ### Модели и архитектура
 
-| Компонент | Статус | Файл | Документ |
-|-----------|--------|------|---------|
-| Q6 = {-1,+1}^6 гиперкуб | ✅ | `models/variant3.py` | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| HierarchicalMoE (4 уровня) | ✅ | `models/hierarchical_moe.py` | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| AbrialeBridgeMediator v59 (PPL 1.24) | ✅ | `geometry/routing.py` | [GEOMETRY.md](GEOMETRY.md) |
-| ArchetypalInterlinguaFixed (баг исправлен) | ✅ | `geometry/interlingua_fixed.py` | [IMPLEMENTATION_STATUS.md — §2](#2-archetypalinterlinguafixed) |
-| KasatkinQ6Router + Q6ExpertBank | ✅ | `geometry/kasatkin_router.py` | [IMPLEMENTATION_STATUS.md — §3](#3-kasatkinq6router) |
-| NautilusHierarchy (7 камер) | ✅ | `geometry/nautilus.py` | [GEOMETRY.md §9](GEOMETRY.md) |
-| ConvergenceBridge + MatrixGrammar | ✅ | `geometry/convergence.py` | [GEOMETRY.md §8](GEOMETRY.md) |
-| AbrialeLayer (событийные связи) | ✅ | `geometry/abriale.py` | [GEOMETRY.md §10](GEOMETRY.md) |
-| E8Quantizer + 9 квантизаторов | ✅ | `geometry/quantizers.py` | [GEOMETRY.md §2](GEOMETRY.md) |
-| GlyphTokenizer (SOLAN) | ✅ | `tokenizer/glyph_tokenizer.py` | [TRAINING.md §9](TRAINING.md) |
-| CharTokenizer / ByteTokenizer / BPETokenizer | ✅ | `tokenizer/char_tokenizer.py` | [TRAINING.md §9](TRAINING.md) |
+> Легенда: ✅ реализован · 🟢 активен в production · 🟡 реализован, не активирован · ⚠️ баг известен
+
+| Компонент | Статус | Production | Файл | Документ |
+|-----------|--------|-----------|------|---------|
+| Q6 = {-1,+1}^6 гиперкуб | ✅ | 🟢 | `models/variant3.py` | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| HierarchicalMoE (4 уровня) | ✅ | 🟢 | `models/hierarchical_moe.py` | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| AbrialeBridgeMediator v59 (PPL 1.24) | ✅ | 🟢 | `geometry/routing.py` | [GEOMETRY.md](GEOMETRY.md) |
+| ArchetypalInterlingua (оригинал) | ✅ | 🟢 | `geometry/routing.py:946` | — |
+| ArchetypalInterlinguaFixed (баг исправлен) | ✅ | 🟡 | `geometry/interlingua_fixed.py` | [§2](#2-archetypalinterlinguafixed) |
+| KasatkinQ6Router + Q6ExpertBank | ✅ | 🟡 | `geometry/kasatkin_router.py` | [§3](#3-kasatkinq6router) |
+| WHT_Quantizer (Теорема 5) | ✅ | 🟡 | `geometry/quantizers.py:1068` | [THEORY_VS_PRACTICE.md](THEORY_VS_PRACTICE.md) |
+| Q6Arithmetic + YiJingOps + BentFunctions | ✅ | 🟡 | `geometry/q6_algebra.py` | [THEORY_VS_PRACTICE.md](THEORY_VS_PRACTICE.md) |
+| NautilusHierarchy (7 камер) | ✅ | 🟢 | `geometry/nautilus.py` | [GEOMETRY.md §9](GEOMETRY.md) |
+| ConvergenceBridge + MatrixGrammar | ✅ | 🟢 | `geometry/convergence.py` | [GEOMETRY.md §8](GEOMETRY.md) |
+| AbrialeLayer (событийные связи) | ✅ | 🟢 | `geometry/abriale.py` | [GEOMETRY.md §10](GEOMETRY.md) |
+| E8Quantizer + 9 квантизаторов | ✅ | 🟢 | `geometry/quantizers.py` | [GEOMETRY.md §2](GEOMETRY.md) |
+| GlyphTokenizer (SOLAN) | ✅ | 🟡 | `tokenizer/glyph_tokenizer.py` | [TRAINING.md §9](TRAINING.md) |
+| CharTokenizer / ByteTokenizer / BPETokenizer | ✅ | 🟢 | `tokenizer/char_tokenizer.py` | [TRAINING.md §9](TRAINING.md) |
+
+> **🟡 Не активированы в production:** ArchetypalInterlinguaFixed (флаг `interlingua_use_fixed`),
+> KasatkinQ6Router/Q6ExpertBank (флаг `use_hex_tier`), WHT_Quantizer/Q6Arithmetic/BentFunctions
+> (подключаются явно), GlyphTokenizer (флаг `--glyph`, по умолчанию CharTokenizer).
+>
+> **⚠️ Баг в ArchetypalInterlingua (routing.py:946):** единый `trit_proj` для всех источников
+> → PPL ≈ 2.93. Используйте `ArchetypalInterlinguaFixed` для новых экспериментов.
 
 ### Скрипты обучения
 

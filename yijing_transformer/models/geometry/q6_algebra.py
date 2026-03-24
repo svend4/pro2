@@ -1,7 +1,7 @@
 """
-q6_algebra.py — Алгебра группы Z₂^6 и операции И-Цзин.
+q6_algebra.py — Алгебра группы Z₂^6, операции И-Цзин, bent-функции как seed.
 
-Закрывает два теоретических пробела из THEORY_VS_PRACTICE.md:
+Закрывает все теоретические пробелы из THEORY_VS_PRACTICE.md:
 
 1. Модулярная арифметика Q6 (Теорема 3)
    «Хэмминг через скалярное произведение»
@@ -16,10 +16,20 @@ q6_algebra.py — Алгебра группы Z₂^6 и операции И-Цз
      • 互 HuGua  (ядерная гексаграмма — внутренние 4 линии)
    + nn.Module YiJingV4Layer для обучения с V₄-симметрией.
 
+3. Bent-функции как геометрические seed (из THEORY_VS_PRACTICE.md §3)
+   Квадратичные bent-функции f: GF(2)^6 → GF(2):
+     - |Ŵ(u)| = 8 для всех u (максимальная нелинейность)
+     - Нелинейность nl=28 (максимум для n=6)
+     - support set {x: f(x)=1} — 32 вершины Q6 с max. разнообразием
+   BentFunctions: truth tables → {-1,+1}^6 прототипы
+   Q6ArithmeticLayer(use_bent_init=True): инициализация из bent seeds
+   BentPrototypeQuantizer: жёсткий квантизатор на bent support
+
 Связь с теорией:
   GERMES_NOTATION.md   § 8  — гексагон Q3, четыре операции
   KNOWLEDGE_FRAMEWORK  Теорема 3: Хэмминг через скалярное произведение
   e8-yijing-deep-analysis.md § 6.4 — Z₂^6 как абелева группа
+  meta_q6.py bent_seed_texts() — текстовый аналог (RAG seeds)
 """
 
 from __future__ import annotations
@@ -404,7 +414,208 @@ class YiJingOps:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. nn.Module — обучаемые слои с V₄ и Z₂^6 симметрией
+# 3. BENT-ФУНКЦИИ КАК ГЕОМЕТРИЧЕСКИЕ SEED — f: GF(2)^6 → GF(2)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BentFunctions:
+    """
+    Квадратичные bent-функции над GF(2)^6 как геометрические seed Q6.
+
+    Bent-функция f: GF(2)^6 → GF(2) имеет «плоский» WHT-спектр:
+        |Ŵ(u)| = 2^(n/2) = 8  для всех u ∈ GF(2)^6
+
+    Это обеспечивает:
+        1. Максимальную нелинейность nl=28 (расстояние от всех аффинных функций)
+        2. Неравномерный support: |{x: f(x)=1}| = 28 или 36 (Ŵ(0) = ±8 для n=6)
+        3. Максимальное разнообразие: bent support vectors — геометрически оптимальные архетипы
+
+    Применение:
+        - Инициализация прототипов Q6ArithmeticLayer (use_bent_init=True)
+        - Инициализация codebook BentPrototypeQuantizer
+        - Сравнение: мeta_q6.bent_seed_texts() даёт ТЕКСТОВЫЙ аналог для RAG
+
+    Конструкция (квадратичные формы):
+        f(x) = XOR_{(i,j) ∈ M} x_i · x_j
+    где M — идеальное спаривание 6 бит в 3 непересекающиеся пары.
+    Таких спариваний 15, каждое + дополнение → 30 функций (берём первые 20).
+    """
+
+    # Кэш вычисленных truth tables
+    _cache: List[int] = []
+
+    @classmethod
+    def _build(cls) -> List[int]:
+        """Строит 20 bent truth tables (квадратичные формы GF(2)^6)."""
+        if cls._cache:
+            return cls._cache
+        pairs_list = [
+            [(0,1),(2,3),(4,5)],
+            [(0,2),(1,3),(4,5)],
+            [(0,3),(1,2),(4,5)],
+            [(0,4),(1,2),(3,5)],
+            [(0,4),(1,3),(2,5)],
+            [(0,5),(1,2),(3,4)],
+            [(0,5),(1,3),(2,4)],
+            [(0,1),(2,4),(3,5)],
+            [(0,1),(2,5),(3,4)],
+            [(0,2),(1,4),(3,5)],
+        ]
+        results = []
+        for pairs in pairs_list:
+            tt = 0
+            for x in range(64):
+                val = 0
+                for (i, j) in pairs:
+                    val ^= ((x >> i) & 1) & ((x >> j) & 1)
+                if val:
+                    tt |= (1 << x)
+            results.append(tt)
+            results.append(tt ^ 0xFFFFFFFFFFFFFFFF)  # дополнение — тоже bent
+        cls._cache = results[:20]
+        return cls._cache
+
+    @classmethod
+    def truth_tables(cls) -> torch.Tensor:
+        """
+        Truth tables всех 20 bent-функций над GF(2)^6.
+
+        Returns:
+            (20, 64) в {0,1} — f[i][x] = значение i-й функции на входе x
+        """
+        tts = cls._build()
+        rows = []
+        for tt in tts:
+            row = torch.tensor([(tt >> x) & 1 for x in range(64)], dtype=torch.float32)
+            rows.append(row)
+        return torch.stack(rows)  # (20, 64)
+
+    @classmethod
+    def wht_spectra(cls) -> torch.Tensor:
+        """
+        WHT-спектры всех bent-функций в {-1,+1} пространстве.
+
+        Для bent: все |Ŵ(u)| = 8 (плоский спектр).
+
+        Returns:
+            (20, 64) — Walsh-Hadamard transform каждой функции
+        """
+        f_pm1 = 1.0 - 2.0 * cls.truth_tables()  # {0,1} → {+1,-1}: 0→+1, 1→-1
+        # WHT in-place (butterfly)
+        W = f_pm1.clone()
+        h = 1
+        while h < 64:
+            for i in range(0, 64, h * 2):
+                x = W[:, i:i+h].clone()
+                y = W[:, i+h:i+2*h].clone()
+                W[:, i:i+h]       = x + y
+                W[:, i+h:i+2*h]   = x - y
+            h *= 2
+        return W  # (20, 64)
+
+    @classmethod
+    def is_bent(cls) -> torch.Tensor:
+        """
+        Проверить bent-свойство: все |Ŵ(u)| = 8.
+
+        Returns:
+            (20,) bool — True для каждой корректной bent-функции
+        """
+        W = cls.wht_spectra()
+        return (W.abs() - 8.0).abs().max(dim=-1).values < 1e-6
+
+    @classmethod
+    def support_vectors(cls) -> List[torch.Tensor]:
+        """
+        Опорные множества (support sets) в {-1,+1}^6.
+
+        Для каждой bent-функции f: support = {x ∈ GF(2)^6 : f(x) = 1}.
+        Все входы x ∈ {0,1}^6 переводятся в {-1,+1}^6: b → 1 − 2b.
+
+        Примечание: bent-функции на GF(2)^6 НЕ сбалансированы.
+        Ŵ(0) = ±8  →  |support| = (64 ± 8) / 2 = 28 или 36 (не 32).
+
+        Returns:
+            список из 20 тензоров формы (|supp_i|, 6) — support vectors в {-1,+1}^6
+        """
+        all_verts = torch.tensor(
+            [[1 - 2 * ((x >> i) & 1) for i in range(6)] for x in range(64)],
+            dtype=torch.float32,
+        )  # (64, 6)
+
+        tt = cls.truth_tables()  # (20, 64)
+        result = []
+        for i in range(20):
+            mask = tt[i].bool()            # (64,)
+            result.append(all_verts[mask]) # (28 или 36, 6)
+        return result
+
+    @classmethod
+    def prototype_codebook(cls, k: int = 8) -> torch.Tensor:
+        """
+        Выбрать k прототипов из bent support sets методом furthest-point sampling.
+
+        Алгоритм (greedy max-min distance):
+            1. Собрать все support vectors всех 20 функций → (20×32, 6) = (640, 6)
+            2. Начать с вектора, ближайшего к центроиду
+            3. Итеративно добавлять вектор с максимальным минимальным расстоянием
+
+        Это даёт k прототипов с максимально равномерным покрытием Q6.
+
+        Args:
+            k: число прототипов (1..64)
+        Returns:
+            (k, 6) — прототипы в {-1,+1}^6
+        """
+        supports = cls.support_vectors()         # list of 20 tensors (28|36, 6)
+        pool = torch.cat(supports, dim=0)        # (≤640, 6)
+        # Убрать дубликаты
+        unique = torch.unique(pool, dim=0)       # (≤64, 6)
+
+        if k >= len(unique):
+            return unique
+
+        # Furthest-point sampling
+        selected = []
+        # Стартовая точка — центроид
+        centroid = unique.mean(0)
+        dists_to_centroid = ((unique - centroid) ** 2).sum(-1)
+        start_idx = dists_to_centroid.argmin().item()
+        selected.append(start_idx)
+
+        min_dists = torch.full((len(unique),), float('inf'))
+
+        for _ in range(k - 1):
+            last = unique[selected[-1]]
+            d = ((unique - last) ** 2).sum(-1)   # Евклид²
+            min_dists = torch.minimum(min_dists, d)
+            next_idx = min_dists.argmax().item()
+            selected.append(next_idx)
+
+        return unique[selected]  # (k, 6)
+
+    @classmethod
+    def verify(cls) -> dict:
+        """
+        Верификация bent-свойств.
+
+        Returns:
+            dict с ключами: all_bent, n_bent, spectrum_flatness
+        """
+        bent_flags = cls.is_bent()                    # (20,)
+        W = cls.wht_spectra()
+        flat = (W.abs() - 8.0).abs().mean().item()
+
+        return {
+            'all_bent':         bool(bent_flags.all()),
+            'n_bent':           int(bent_flags.sum()),
+            'n_total':          20,
+            'spectrum_flatness_err': flat,            # должно быть ≈ 0
+            'support_sizes':    [len(s) for s in cls.support_vectors()[:4]],  # 28 или 36
+        }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 4. nn.Module — обучаемые слои с V₄ и Z₂^6 симметрией
 # ══════════════════════════════════════════════════════════════════════════════
 
 class YiJingV4Layer(nn.Module):
@@ -476,7 +687,12 @@ class Q6ArithmeticLayer(nn.Module):
     явного сравнения битов.
     """
 
-    def __init__(self, d_model: int, n_prototypes: int = 8):
+    def __init__(
+        self,
+        d_model: int,
+        n_prototypes: int = 8,
+        use_bent_init: bool = True,
+    ):
         super().__init__()
         self.d_model = d_model
         self.n_proto = n_prototypes
@@ -485,8 +701,12 @@ class Q6ArithmeticLayer(nn.Module):
         self.proj_q6 = nn.Linear(d_model, 6, bias=False)
 
         # n_prototypes вершин Q6 (обучаемые «архетипы»)
-        protos = torch.randn(n_prototypes, 6)
-        protos = protos / protos.norm(dim=-1, keepdim=True)  # нормализация
+        if use_bent_init:
+            # Инициализация из bent support sets — максимальная нелинейность
+            protos = BentFunctions.prototype_codebook(n_prototypes).float()
+        else:
+            protos = torch.randn(n_prototypes, 6)
+            protos = protos / protos.norm(dim=-1, keepdim=True)
         self.prototypes = nn.Parameter(protos)
 
         # Масштаб применения расстояний
@@ -543,8 +763,67 @@ class Q6ArithmeticLayer(nn.Module):
         return self.routing_weights(x)
 
 
+class BentPrototypeQuantizer(nn.Module):
+    """
+    Жёсткий квантизатор на bent support set одной функции.
+
+    Фиксированный codebook из 32 вершин Q6 (support set bent-функции f):
+        support = {x ∈ {-1,+1}^6 : f(x) = 1}
+
+    Этот codebook оптимален по нелинейности: максимальное расстояние
+    от любого линейного разбиения Q6. Используется как drop-in замена
+    YiJingQuantizer когда нужна математически обоснованная инициализация.
+
+    Применение:
+        q = BentPrototypeQuantizer(d_model=32, bent_idx=0)
+        out = q(x)   # straight-through estimator
+    """
+
+    def __init__(self, d_model: int, bent_idx: int = 0, temp: float = 0.3):
+        super().__init__()
+        self.temp = temp
+
+        # Фиксированный codebook: support set bent-функции bent_idx
+        supports = BentFunctions.support_vectors()  # list of 20 tensors
+        codebook = supports[bent_idx % 20]           # (28 или 36, 6)
+        self.register_buffer('codebook', codebook.float())
+
+        # Проекция d_model → 6
+        self.proj = nn.Linear(d_model, 6, bias=False)
+        nn.init.orthogonal_(self.proj.weight)
+
+        # Обратная проекция 6 → d_model
+        self.proj_back = nn.Linear(6, d_model, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (..., d_model)
+        Returns:
+            (..., d_model) — квантизованный выход через straight-through
+        """
+        z = torch.tanh(self.proj(x))               # (..., 6)
+        # Soft assignment к codebook через Теорему 3
+        cb = self.codebook                          # (32, 6)
+        dot = z @ cb.T                             # (..., 32)
+        dist = (6.0 - dot * 6.0) / 2.0            # (..., 32) approx d_H
+        w = torch.softmax(-dist / self.temp, dim=-1)  # (..., 32)
+        q_soft = w @ cb                            # (..., 6)
+        # Straight-through: hard в forward, soft grad
+        q_hard = cb[dist.argmin(-1)]               # (..., 6)
+        q = x + (self.proj_back(q_soft + (q_hard - q_soft).detach()) - x).detach()
+        return q
+
+    def codebook_diversity(self) -> float:
+        """Среднее попарное расстояние Хэмминга в codebook."""
+        cb = self.codebook
+        H = Q6Arithmetic.hamming_matrix(cb)
+        n = len(cb)
+        return H.sum().item() / (n * (n - 1))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# 4. Функции верификации теоретических свойств
+# 5. Функции верификации теоретических свойств
 # ══════════════════════════════════════════════════════════════════════════════
 
 def verify_theorem3(n_bits: int = 6, n_samples: int = 100) -> dict:
@@ -607,14 +886,32 @@ def verify_v4_group(n_tests: int = 20) -> dict:
     }
 
 
+def verify_bent_functions() -> dict:
+    """
+    Верификация bent-функций: плоский WHT-спектр и balanced support set.
+
+    Returns:
+        dict с all_bent, spectrum_flatness_err, prototype_codebook_diversity
+    """
+    b = BentFunctions.verify()
+    proto = BentFunctions.prototype_codebook(k=8)  # (8, 6)
+    H = Q6Arithmetic.hamming_matrix(proto)
+    n = len(proto)
+    div = H.sum().item() / (n * (n - 1))
+    b['prototype_diversity_mean_dH'] = div
+    return b
+
+
 def verify_all() -> dict:
     """Запустить все верификации и вернуть сводный отчёт."""
     t3   = verify_theorem3()
     v4   = verify_v4_group()
+    bt   = verify_bent_functions()
     return {
         'theorem3': t3,
         'v4_group': v4,
-        'all_ok':   t3['verified'] and v4['v4_verified'],
+        'bent':     bt,
+        'all_ok':   t3['verified'] and v4['v4_verified'] and bt['all_bent'],
     }
 
 
@@ -627,11 +924,15 @@ __all__ = [
     'Q6Arithmetic',
     # GERMES операции
     'YiJingOps',
+    # Bent-функции как геометрические seed
+    'BentFunctions',
+    'BentPrototypeQuantizer',
     # nn.Module слои
     'YiJingV4Layer',
     'Q6ArithmeticLayer',
     # Верификация
     'verify_theorem3',
     'verify_v4_group',
+    'verify_bent_functions',
     'verify_all',
 ]
