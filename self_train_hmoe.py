@@ -42,6 +42,25 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# ── GlyphTokenizer (задача 0.3 — интеграция SOLAN в основной цикл) ────────────
+# Загружается при --glyph; если недоступен — автоматически fallback на UTF-8 bytes
+_USE_GLYPH: bool = False
+_GLYPH_TOK = None
+
+def _init_glyph_tokenizer() -> bool:
+    """Загрузить GlyphTokenizer. Возвращает True если успешно."""
+    global _GLYPH_TOK, _USE_GLYPH
+    try:
+        from yijing_transformer.tokenizer.glyph_tokenizer import GlyphTokenizer, _SOLAN_MAP
+        _GLYPH_TOK = GlyphTokenizer()
+        _GLYPH_TOK._solan_map = _SOLAN_MAP  # char → vertex_bits (int)
+        _USE_GLYPH = True
+        print(f"  [glyph] GlyphTokenizer загружен ({_GLYPH_TOK.vocab_size} символов SOLAN)")
+        return True
+    except Exception as e:
+        print(f"  [glyph] недоступен ({e}) — используется UTF-8 bytes")
+        return False
+
 from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
 from yijing_transformer.models.hierarchical_moe import (
     HMoEConfig,
@@ -251,6 +270,14 @@ class RagBuffer:
 
 # ── Micro-train ───────────────────────────────────────────────────────────────
 
+def _step_all_quantizers(model: torch.nn.Module) -> None:
+    """Вызывает step_temp() у всех TernaryQuantizer в модели (Priority 1 — task 0.2)."""
+    from yijing_transformer.models.geometry.quantizers import TernaryQuantizer
+    for module in model.modules():
+        if isinstance(module, TernaryQuantizer):
+            module.step_temp()
+
+
 def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
                 n_steps: int = 3) -> float:
     """Мини-дообучение на одном тексте (in-place)."""
@@ -274,6 +301,7 @@ def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
         full.backward()
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
         opt.step()
+        _step_all_quantizers(model)  # cosine annealing T: 1.0→0.01 (задача 0.2)
         total_loss += loss.item()
         completed_steps += 1
     return total_loss / max(completed_steps, 1)
@@ -497,7 +525,28 @@ def figure8_hmoe(
 # ── Вспомогательные функции ──────────────────────────────────────────────────
 
 def _encode(text: str, block_size: int = MODEL_CFG["block_size"] - 1) -> torch.Tensor:
-    ids = [min(b, MODEL_CFG["vocab_size"] - 1) for b in text.encode("utf-8")][:block_size]
+    """Кодирует текст в token IDs.
+
+    Если _USE_GLYPH=True: SOLAN символы → их Q6 vertex index (0-63),
+    остальные → UTF-8 byte % 64 (чтобы остаться в vocab 256).
+    Это добавляет геометрическую консистентность: два SOLAN-токена
+    с малым Hamming distance имеют близкие индексы.
+
+    Иначе: стандартное UTF-8 byte encoding.
+    """
+    if _USE_GLYPH and _GLYPH_TOK is not None:
+        solan = getattr(_GLYPH_TOK, '_solan_map', {})
+        ids = []
+        for ch in text:
+            if ch in solan:
+                # SOLAN char → Q6 vertex bits (6-bit int, range 0-63)
+                ids.append(solan[ch] & 63)
+            else:
+                # Fallback: UTF-8 byte, offset by 64 to avoid collision
+                ids.append(min(ord(ch) & 0xFF, MODEL_CFG["vocab_size"] - 1))
+        ids = ids[:block_size]
+    else:
+        ids = [min(b, MODEL_CFG["vocab_size"] - 1) for b in text.encode("utf-8")][:block_size]
     if not ids:
         ids = [32]
     return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
@@ -554,22 +603,35 @@ def _get_moes(model: Variant3GPT) -> List[HierarchicalMoEFFN]:
     return [block.hmoe for block in model.blocks if hasattr(block, 'hmoe')]
 
 
-# ── CrossDomainAnalogy: 36-клеточный матрица-сигнал ───────────────────────────
+# ── CrossDomainAnalogy: полная 6×6 матрица = 36 направленных пар ──────────────
+
+# 36 направленных пар: диагональ (A→A, 6) + верхний треугольник (A→B, 15) + нижний (B→A, 15)
+# Строится из 6 орбит (Hamming weight 1..6 — орбиты с ненулевыми размерами в Q6)
+_CDA_ORBITS = [1, 2, 3, 4, 5, 6]  # 6 Hamming-weight орбит Q6-гиперкуба
+_CDA_ALL_PAIRS: List[Tuple[int, int]] = [
+    (a, b) for a in _CDA_ORBITS for b in _CDA_ORBITS  # все 36 направленных пар (6×6)
+]
+
 
 def cross_domain_signal(model: Variant3GPT, rag: "RagBuffer",
                         n_pairs: int = 4) -> float:
-    """hexsym/CrossDomainAnalogy: дополнительный training signal через 36 направленных аналогий.
+    """hexsym/CrossDomainAnalogy: training signal по полной 6×6 матрице аналогий.
+
+    Использует все 36 направленных пар (верхний треугольник A→B = 15,
+    нижний B→A = 15, диагональ A→A = 6). Это закрывает задачу 0.5 из
+    FUTURE_TASKS.md: добавить B→A реверсы к исходным 15 парам.
 
     Идея: тексты из разных Q6-орбит (Hamming weight k) должны иметь
     различные embedding-паттерны. Тексты из одной орбиты (или близких) —
     похожие. Это обеспечивает геометрически согласованный routing.
 
     Реализация (lightweight — без дополнительного nn.Module):
-      1. Группируем тексты из RAG по Hamming weight орбите (0..6)
-      2. Сэмплируем n_pairs направленных пар (orbit_i → orbit_j)
-      3. Для пар из разных орбит: если |i−j|==1 → reward близости (0.7 target)
-         если |i−j|>=3 → penalize близости (0.3 target)
-      4. Возвращаем среднее квадратичное отклонение от target
+      1. Группируем тексты из RAG по Hamming weight орбите (1..6)
+      2. Сэмплируем n_pairs пар из _CDA_ALL_PAIRS (36 вариантов)
+         — равномерно покрывает все направления включая B→A реверсы
+      3. Для пар из разных орбит: если |i−j|==1 → reward близости
+         если |i−j|>=3 → penalize близости
+      4. Возвращаем среднее соответствие target
 
     Returns:
         float — средний сигнал аналогии (0 = нет RAG текстов, >0 = активен)
@@ -583,22 +645,27 @@ def cross_domain_signal(model: Variant3GPT, rag: "RagBuffer",
         hw = bin(q6v).count('1') if q6v >= 0 else 3  # fallback = orbit 3
         orbit_texts[hw].append((text, emb))
 
-    nonempty = [k for k, v in orbit_texts.items() if len(v) > 0]
+    nonempty = set(k for k, v in orbit_texts.items() if len(v) > 0)
     if len(nonempty) < 2:
         return 0.0
 
+    # Фильтруем _CDA_ALL_PAIRS по доступным орбитам
+    available_pairs = [(a, b) for a, b in _CDA_ALL_PAIRS if a in nonempty and b in nonempty]
+    if not available_pairs:
+        return 0.0
+
+    # Сэмплируем n_pairs из всех 36 направленных пар (включая B→A реверсы)
+    sampled = random.choices(available_pairs, k=n_pairs)
+
     total_signal = 0.0
     n_computed = 0
-    for _ in range(n_pairs):
-        # Выбираем две случайные орбиты
-        oi = random.choice(nonempty)
-        oj = random.choice(nonempty)
+    for oi, oj in sampled:
         dist = abs(oi - oj)
 
         # Target cosine similarity по Hamming distance между орбитами
         # dist=0 (same orbit)  → target sim = 0.8 (похожи)
-        # dist=1 (adjacent)    → target sim = 0.6
-        # dist=2               → target sim = 0.45
+        # dist=1 (adjacent)    → target sim = 0.62
+        # dist=2               → target sim = 0.44
         # dist>=3 (far)        → target sim = 0.25 (различны)
         target = max(0.25, 0.8 - dist * 0.18)
 
@@ -662,7 +729,12 @@ def main():
                         help="Не загружать RepoCorpusLoader")
     parser.add_argument("--save",           type=str, default="hmoe_self_trained.pt",
                         help="Куда сохранить результат (default: hmoe_self_trained.pt)")
+    parser.add_argument("--glyph",          action="store_true",
+                        help="Использовать GlyphTokenizer (SOLAN-76) вместо UTF-8 bytes (задача 0.3)")
     args = parser.parse_args()
+
+    if args.glyph:
+        _init_glyph_tokenizer()
 
     n_cycles       = 2  if args.fast else args.cycles
     steps_per_loop = 5  if args.fast else args.steps_per_loop

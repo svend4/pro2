@@ -46,6 +46,60 @@ from yijing_transformer.models.hierarchical_e2 import HierarchicalE2, E2Config
 from corpus_loader import CorpusLoader
 from repo_corpus_loader import RepoCorpusLoader, CLUSTER_DEFS
 
+# ── Q4⊂Q6 инициализация RAG (задача 0.6) ─────────────────────────────────────
+# 16 PseudoRAG архетипов Q4 ↔ 64 вершины Q6 (avg_hamming=2.56 → PARTIAL)
+# Если avg_hamming < 2.5, организуем тексты по Q4-кластерам для RAG init
+
+_Q4_Q6_RESULT_PATH = Path(__file__).parent / "experiments" / "q4_q6_result.json"
+
+# 16 Q4-архетипов: каждый = 4-битная маска, вложена в Q6 через расширение
+# Маппинг Q4-индекс (0-15) → Q6-вершина (0-63): первые 4 бита из Q4, биты 4-5 = 0
+_Q4_TO_Q6 = {i: i for i in range(16)}  # прямое вложение в первые 16 вершин Q6
+
+# Семантические метки для 16 Q4-архетипов (из validate_q4_q6.py)
+_Q4_LABELS = [
+    "structure", "pattern", "logic", "sequence",
+    "balance", "hierarchy", "transformation", "flow",
+    "duality", "cycle", "emergence", "boundary",
+    "resonance", "synthesis", "recursion", "wholeness",
+]
+
+
+def load_q4_q6_hamming() -> float:
+    """Загружает avg_hamming из предыдущего запуска validate_q4_q6.py."""
+    try:
+        data = json.loads(_Q4_Q6_RESULT_PATH.read_text())
+        # Поддержка обоих форматов результата
+        return float(data.get("global_avg_hamming", data.get("avg_hamming", 99.0)))
+    except Exception:
+        return 99.0  # недоступен → не активируем Q4 init
+
+
+def q4_cluster_init(texts: list[str], n_per_cluster: int = 10) -> dict[str, list[str]]:
+    """Организует тексты по Q4-архетипам на основе ключевых слов.
+
+    Каждый Q4-архетип имеет семантическую метку из _Q4_LABELS.
+    Тексты сортируются по совпадению с меткой (простой keyword match).
+
+    Returns:
+        dict label → list[text] — по n_per_cluster текстов на архетип
+    """
+    clusters: dict[str, list[str]] = {label: [] for label in _Q4_LABELS}
+    for text in texts:
+        text_lower = text.lower()
+        best_label = "wholeness"  # fallback
+        best_score = 0
+        for label in _Q4_LABELS:
+            score = sum(1 for kw in label.split("_") if kw in text_lower)
+            if score > best_score:
+                best_score = score
+                best_label = label
+        clusters[best_label].append(text)
+
+    # Обрезаем до n_per_cluster
+    return {k: v[:n_per_cluster] for k, v in clusters.items() if v}
+
+
 # ── Конфигурация ──────────────────────────────────────────────────────────────
 
 torch.manual_seed(42)
@@ -178,6 +232,27 @@ class SelfDiagnostics:
                   f"{sum(1 for k in self._data if k.startswith('repo/'))} кластеров")
         except Exception as e:
             print(f"    ⚠️  Внутренние кластеры: {e}")
+
+        # ── Q4⊂Q6 инициализация (задача 0.6) ────────────────────────────────
+        # Если avg_hamming < 2.5 → активируем Q4-кластерную организацию данных
+        avg_hamming = load_q4_q6_hamming()
+        if avg_hamming < 2.5:
+            try:
+                all_texts = [t for texts in self._data.values() for t in texts]
+                q4_clusters = q4_cluster_init(all_texts,
+                                              n_per_cluster=15 if self.fast else 40)
+                n_added = 0
+                for label, texts in q4_clusters.items():
+                    key = f"q4/{label}"
+                    if key not in self._data:
+                        self._data[key] = texts
+                        n_added += len(texts)
+                print(f"    Q4⊂Q6: avg_hamming={avg_hamming:.2f} < 2.5 → "
+                      f"добавлено {n_added} текстов по {len(q4_clusters)} архетипам")
+            except Exception as e:
+                print(f"    ⚠️  Q4⊂Q6 init: {e}")
+        else:
+            print(f"    Q4⊂Q6: avg_hamming={avg_hamming:.2f} ≥ 2.5 → Q4 init пропущен")
 
     def diagnose(self, model: HierarchicalE2,
                  n_per_cluster: int = 20) -> dict[str, float]:
