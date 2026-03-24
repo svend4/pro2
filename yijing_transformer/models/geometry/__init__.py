@@ -160,13 +160,16 @@ from .core import (
     generate_spacetime_pairs,
 )
 
-# Q6 Algebra: Z₂^6 арифметика (Теорема 3) + GERMES-нотация как операции
+# Q6 Algebra: Z₂^6 арифметика (Теорема 3) + GERMES-нотация + Bent seeds
 from .q6_algebra import (
     Q6Arithmetic,
     YiJingOps,
+    BentFunctions,
+    BentPrototypeQuantizer,
     YiJingV4Layer,
     Q6ArithmeticLayer,
     verify_theorem3,
     verify_v4_group,
+    verify_bent_functions,
     verify_all as verify_q6_all,
 )
