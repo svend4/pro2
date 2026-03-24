@@ -159,3 +159,14 @@ from .core import (
     hex_digit_semantics,
     generate_spacetime_pairs,
 )
+
+# Q6 Algebra: Z₂^6 арифметика (Теорема 3) + GERMES-нотация как операции
+from .q6_algebra import (
+    Q6Arithmetic,
+    YiJingOps,
+    YiJingV4Layer,
+    Q6ArithmeticLayer,
+    verify_theorem3,
+    verify_v4_group,
+    verify_all as verify_q6_all,
+)
