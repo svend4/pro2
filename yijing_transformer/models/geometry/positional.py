@@ -18,6 +18,7 @@ class RotaryEmbedding(nn.Module):
         self.scaling = scaling
         self.scaling_factor = scaling_factor
         if scaling == 'ntk' and scaling_factor > 1.0:
+            assert dim > 2, f"NTK scaling requires dim > 2, got dim={dim}"
             base = base * (scaling_factor ** (dim / (dim - 2)))
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)
@@ -76,16 +77,26 @@ class ALiBi(nn.Module):
         return torch.tensor(slopes, dtype=torch.float32)
 
     def _build_cache(self, seq_len):
-        positions = torch.arange(seq_len)
+        device = self.slopes.device
+        positions = torch.arange(seq_len, device=device)
         distances = positions.unsqueeze(0) - positions.unsqueeze(1)
         distances = distances.abs().float()
         self.register_buffer('_distances', distances, persistent=False)
 
-    def forward(self, seq_len, offset=0):
-        total_len = seq_len + offset
-        if total_len > self._distances.shape[0]:
-            self._build_cache(total_len)
-        distances = self._distances[offset:offset + seq_len, :total_len]
+    def forward(self, seq_len, offset=0, key_len=None):
+        """Возвращает ALiBi bias shape (1, n_heads, seq_len, key_len).
+
+        Args:
+            seq_len: длина запроса (queries)
+            offset: позиционный сдвиг (для KV-кеша)
+            key_len: длина ключей (если None, = seq_len + offset)
+        """
+        if key_len is None:
+            key_len = seq_len + offset
+        max_len = max(seq_len + offset, key_len)
+        if max_len > self._distances.shape[0]:
+            self._build_cache(max_len)
+        distances = self._distances[offset:offset + seq_len, :key_len]
         bias = -self.slopes.view(1, -1, 1, 1) * distances.unsqueeze(0).unsqueeze(0)
         return bias
 
@@ -107,7 +118,7 @@ class FourLevelPositionalEncoding(nn.Module):
         line_idx = pos % 6
         trigram_idx = (pos % 6) // 3
         hex_idx = (pos // 6) % 64
-        seq_idx = pos
+        seq_idx = pos % self.seq_emb.num_embeddings
         pe = (self.line_emb(line_idx)
               + self.trigram_emb(trigram_idx)
               + self.hexagram_emb(hex_idx)

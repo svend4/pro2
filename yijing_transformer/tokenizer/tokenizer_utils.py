@@ -6,8 +6,12 @@ import sentencepiece as spm
 
 def load_tokenizer(model_path=None):
     if model_path is None:
-        # Ищем в стандартных путях
+        # Ищем относительно расположения модуля, а не CWD
+        _dir = os.path.dirname(os.path.abspath(__file__))
+        _project = os.path.dirname(os.path.dirname(_dir))
         candidates = [
+            os.path.join(_project, "vocab", "e8_morpheme_.model"),
+            os.path.join(_dir, "..", "..", "vocab", "e8_morpheme_.model"),
             "vocab/e8_morpheme_.model",
             "../vocab/e8_morpheme_.model",
         ]

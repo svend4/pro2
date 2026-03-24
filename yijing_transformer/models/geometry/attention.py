@@ -41,6 +41,9 @@ class PalaceAttention(nn.Module):
         mask = palace_attention_mask(64)
         self.register_buffer('palace_mask', mask)
         self.inter_palace_weight = nn.Parameter(torch.tensor(0.1))
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
 
     def get_mask(self, seq_len: int) -> torch.Tensor:
         if seq_len <= 64:
@@ -58,14 +61,15 @@ class PalaceAttention(nn.Module):
         B, T, D = x.shape
         scale = self.head_dim ** -0.5
         palace_mask = self.get_mask(T)
-        q = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        k = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
-        v = x.reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        q = self.q_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(1, 2)
         attn = torch.matmul(q, k.transpose(-2, -1)) * scale
         attn = attn * palace_mask.unsqueeze(0).unsqueeze(0)
         if mask is not None:
             attn = attn.masked_fill(mask.unsqueeze(1) == 0, float('-inf'))
         attn = F.softmax(attn, dim=-1)
+        attn = attn.nan_to_num(0.0)
         out = torch.matmul(attn, v)
         return out.transpose(1, 2).reshape(B, T, D)
 
@@ -175,13 +179,14 @@ class WeavingLoomArchitecture(nn.Module):
 
     def forward(self, x, mask=None):
         B, T, D = x.shape
-        scale = D ** -0.5
+        head_dim = D // max(1, getattr(self, 'n_heads', 1))
+        scale = head_dim ** -0.5
         gate = torch.sigmoid(self.level1_gate(x))
         out = x * gate
         if self.max_level < 2:
             return self.out_proj(out)
-        n_groups = max(1, T // 8)
         group_size = min(8, T)
+        n_groups = max(1, (T + group_size - 1) // group_size)
         pad_len = n_groups * group_size - T
         if pad_len > 0:
             out_padded = F.pad(out, (0, 0, 0, pad_len))
@@ -208,6 +213,7 @@ class WeavingLoomArchitecture(nn.Module):
         if mask is not None:
             attn3 = attn3.masked_fill(mask == 0, float('-inf'))
         attn3 = F.softmax(attn3, dim=-1)
+        attn3 = attn3.nan_to_num(0.0)
         out3 = torch.matmul(attn3, v3)
         return self.out_proj(out3)
 
@@ -272,6 +278,7 @@ class HeisenbergAttention(nn.Module):
         if mask is not None:
             attn = attn.masked_fill(mask == 0, float('-inf'))
         attn = F.softmax(attn, dim=-1)
+        attn = attn.nan_to_num(0.0)
         return torch.matmul(attn, v)
 
 
@@ -310,6 +317,7 @@ class FlowerOfLifeGAT(nn.Module):
         e = self.a(torch.cat([h_i, h_j], dim=-1)).squeeze(-1)
         e = e.masked_fill(self.adjacency == 0, float('-inf'))
         alpha = F.softmax(e, dim=-1)
+        alpha = alpha.nan_to_num(0.0)
         out_nodes = torch.matmul(alpha, h)
         out_nodes = self.out_proj(out_nodes)
         result = x.clone()
@@ -582,3 +590,55 @@ class TriangularCurriculumScheduler:
         level = int(progress * self.max_level)
         level = max(0, min(level, len(self.levels) - 1))
         return self.levels[level]
+
+
+class SOLANAttention(nn.Module):
+    """SOLAN-76 attention: геометрический приор из 6D гиперкуба Q6.
+
+    Проецирует токены в 6-мерное SOLAN-пространство {-1,+1}⁶ и вычисляет
+    геометрическое сходство (dot-product в Q6), смешивая его со стандартным
+    multi-head attention через обучаемый гейт.
+    """
+
+    def __init__(self, d_model: int, n_heads: int = 4, block_size: int = 512):
+        super().__init__()
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        # Стандартные проекции Q/K/V
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+        # SOLAN Q6 проекция
+        self.q6_proj = nn.Linear(d_model, 6, bias=False)
+        # Обучаемый гейт: alpha = sigmoid(gate) → доля стандартного attention
+        self.gate = nn.Parameter(torch.tensor(0.0))
+        self.scale = self.head_dim ** -0.5
+        self.register_buffer('causal_mask',
+                             torch.tril(torch.ones(block_size, block_size)).bool())
+
+    def forward(self, x, mask=None):
+        B, T, D = x.shape
+        # --- Стандартный multi-head attention ---
+        q = self.q_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        std_scores = (q @ k.transpose(-2, -1)) * self.scale
+        causal = self.causal_mask[:T, :T]
+        std_scores = std_scores.masked_fill(~causal, float('-inf'))
+        if mask is not None:
+            std_scores = std_scores.masked_fill(mask == 0, float('-inf'))
+        std_attn = F.softmax(std_scores, dim=-1).nan_to_num(0.0)
+        std_out = (std_attn @ v).transpose(1, 2).contiguous().view(B, T, D)
+        # --- SOLAN Q6 геометрический attention ---
+        q6 = torch.tanh(self.q6_proj(x))  # (B, T, 6) — мягкие Q6 координаты
+        solan_scores = q6 @ q6.transpose(-2, -1)  # (B, T, T)
+        solan_scores = solan_scores.masked_fill(~causal, float('-inf'))
+        solan_attn = F.softmax(solan_scores, dim=-1).nan_to_num(0.0)
+        v_flat = v.transpose(1, 2).contiguous().view(B, T, D)
+        solan_out = solan_attn @ v_flat  # (B, T, D)
+        # --- Смешивание через гейт ---
+        alpha = torch.sigmoid(self.gate)
+        out = alpha * std_out + (1.0 - alpha) * solan_out
+        return self.out_proj(out)

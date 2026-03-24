@@ -131,7 +131,8 @@ class ShuffledBatchIterator:
         self.rng = random.Random(seed)
 
         # Нарезаем на непересекающиеся куски
-        n_chunks = len(dataset) // dataset.block_size
+        # Убеждаемся, что каждый чанк имеет block_size+1 токенов (для x и y)
+        n_chunks = (dataset.n_tokens - 1) // dataset.block_size
         self.indices = list(range(n_chunks))
         self.rng.shuffle(self.indices)
         self.pos = 0

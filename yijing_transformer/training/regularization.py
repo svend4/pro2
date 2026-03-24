@@ -130,13 +130,14 @@ class TokenMerger(nn.Module):
             })
 
         # Pad to same length if needed (batch consistency)
-        max_len = max(r.shape[0] for r in results)
+        max_len = max(res.shape[0] for res in results)
         padded = []
         for r_tensor in results:
             if r_tensor.shape[0] < max_len:
                 pad = torch.zeros(max_len - r_tensor.shape[0], D, device=x.device, dtype=x.dtype)
-                r_tensor = torch.cat([r_tensor, pad])
-            padded.append(r_tensor)
+                padded.append(torch.cat([r_tensor, pad]))
+            else:
+                padded.append(r_tensor)
 
         merged_out = torch.stack(padded)
         return merged_out, unmerge_infos
@@ -329,3 +330,63 @@ class AntipodalRegularization(nn.Module):
         # Антиподальность: Q(x) + Q(-x) ≈ 0
         antipodal_loss = (q_x + q_neg_x).pow(2).mean()
         return self.weight * antipodal_loss
+
+
+class HexagramAntipodalLoss(nn.Module):
+    """Регуляризация Фомюка: антиподальные пары гексаграмм балансируют кодбук.
+
+    Применяется к эмбеддингам кодбука (не к слою attention — это ключевая
+    правка по сравнению с реализацией v59).
+
+    В Q6-гиперкубе гексаграмма i и гексаграмма (63-i) являются антиподами
+    (все 6 бит инвертированы). Их эмбеддинги должны «уравновешивать» друг
+    друга: emb(i) + emb(63-i) ≈ 0.
+
+    Это гарантирует симметрию кодбука и предотвращает «схлопывание»
+    всех гексаграмм в одну область пространства.
+
+    Args:
+        n_hexagrams: число гексаграмм (64 по умолчанию)
+        weight: вес в суммарном loss (рекомендуется 0.001)
+    """
+
+    def __init__(self, n_hexagrams: int = 64, weight: float = 0.001):
+        super().__init__()
+        self.n_hexagrams = n_hexagrams
+        self.weight = weight
+        # Антиподальные пары: (0,63), (1,62), ..., (31,32)
+        self.antipodal_pairs = [(i, n_hexagrams - 1 - i) for i in range(n_hexagrams // 2)]
+
+    def forward(self, codebook: torch.Tensor) -> torch.Tensor:
+        """Вычисляет антиподальный loss для кодбука.
+
+        Args:
+            codebook: (n_hexagrams, d_model) — эмбеддинги всех гексаграмм
+
+        Returns:
+            loss: скаляр — среднее ||emb(i) + emb(63-i)||² по всем парам
+        """
+        losses = []
+        for i, j in self.antipodal_pairs:
+            emb_i = codebook[i]
+            emb_j = codebook[j]
+            # Антиподы должны уравновешивать друг друга: сумма ≈ 0
+            balance_loss = (emb_i + emb_j).pow(2).mean()
+            losses.append(balance_loss)
+        return self.weight * torch.stack(losses).mean()
+
+    def diversity_score(self, codebook: torch.Tensor) -> float:
+        """Метрика разнообразия кодбука (чем выше — тем лучше).
+
+        Высокое разнообразие = антиподальные пары действительно противоположны.
+
+        Returns:
+            diversity: среднее косинусное сходство антиподальных пар
+                       (близко к -1 = хорошо, близко к +1 = плохо)
+        """
+        scores = []
+        for i, j in self.antipodal_pairs:
+            e_i = torch.nn.functional.normalize(codebook[i], dim=0)
+            e_j = torch.nn.functional.normalize(codebook[j], dim=0)
+            scores.append((e_i * e_j).sum().item())
+        return sum(scores) / len(scores) if scores else 0.0

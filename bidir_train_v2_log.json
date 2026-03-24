@@ -1,0 +1,184 @@
+{
+  "run_log": [
+    {
+      "phase": "baseline",
+      "closed": 5,
+      "details": [
+        {
+          "a": "pressure",
+          "b": "pattern",
+          "cos_sim": 0.9999537467956543,
+          "q6_bfs": 1,
+          "hex_a": 49,
+          "hex_b": 48,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "proof",
+          "cos_sim": 0.9998916983604431,
+          "q6_bfs": 1,
+          "hex_a": 49,
+          "hex_b": 48,
+          "closed": true
+        },
+        {
+          "a": "star",
+          "b": "pattern",
+          "cos_sim": 0.9998147487640381,
+          "q6_bfs": 1,
+          "hex_a": 49,
+          "hex_b": 48,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "star",
+          "cos_sim": 0.9998457431793213,
+          "q6_bfs": 0,
+          "hex_a": 49,
+          "hex_b": 49,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "crystal",
+          "cos_sim": 0.9997245073318481,
+          "q6_bfs": 2,
+          "hex_a": 49,
+          "hex_b": 19,
+          "closed": true
+        }
+      ]
+    },
+    {
+      "round": "bridge",
+      "steps": 250,
+      "avg_loss": 3.0164162292480468,
+      "closed": 5,
+      "avg_cos": 0.999824070930481,
+      "closure_details": [
+        {
+          "a": "pressure",
+          "b": "pattern",
+          "cos_sim": 0.99985671043396,
+          "q6_bfs": 1,
+          "hex_a": 54,
+          "hex_b": 38,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "proof",
+          "cos_sim": 0.999793529510498,
+          "q6_bfs": 0,
+          "hex_a": 54,
+          "hex_b": 54,
+          "closed": true
+        },
+        {
+          "a": "star",
+          "b": "pattern",
+          "cos_sim": 0.9997610449790955,
+          "q6_bfs": 3,
+          "hex_a": 51,
+          "hex_b": 38,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "star",
+          "cos_sim": 0.9999018907546997,
+          "q6_bfs": 2,
+          "hex_a": 54,
+          "hex_b": 51,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "crystal",
+          "cos_sim": 0.9998071789741516,
+          "q6_bfs": 3,
+          "hex_a": 54,
+          "hex_b": 19,
+          "closed": true
+        }
+      ]
+    },
+    {
+      "phase": "final",
+      "details": [
+        {
+          "a": "pressure",
+          "b": "pattern",
+          "cos_sim": 0.99985671043396,
+          "q6_bfs": 1,
+          "hex_a": 54,
+          "hex_b": 38,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "proof",
+          "cos_sim": 0.999793529510498,
+          "q6_bfs": 0,
+          "hex_a": 54,
+          "hex_b": 54,
+          "closed": true
+        },
+        {
+          "a": "star",
+          "b": "pattern",
+          "cos_sim": 0.9997610449790955,
+          "q6_bfs": 3,
+          "hex_a": 51,
+          "hex_b": 38,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "star",
+          "cos_sim": 0.9999018907546997,
+          "q6_bfs": 2,
+          "hex_a": 54,
+          "hex_b": 51,
+          "closed": true
+        },
+        {
+          "a": "pressure",
+          "b": "crystal",
+          "cos_sim": 0.9998071789741516,
+          "q6_bfs": 3,
+          "hex_a": 54,
+          "hex_b": 19,
+          "closed": true
+        }
+      ],
+      "closed": 5
+    }
+  ],
+  "bridge_pairs": [
+    [
+      "pressure",
+      "pattern"
+    ],
+    [
+      "pressure",
+      "proof"
+    ],
+    [
+      "star",
+      "pattern"
+    ],
+    [
+      "pressure",
+      "star"
+    ],
+    [
+      "pressure",
+      "crystal"
+    ]
+  ],
+  "n_bridge_texts": 40,
+  "n_integ_texts": 8
+}

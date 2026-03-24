@@ -107,7 +107,11 @@ class NautilusChamber(nn.Module):
         if hasattr(self.module, 'get_bias'):
             # Bias-producing modules (CubeDiagonal, PrivilegedAxis, etc.)
             bias = self.module.get_bias(x)  # (B, T, T)
+            T = x.shape[1]
+            causal = torch.tril(torch.ones(T, T, device=x.device))
+            bias = bias.masked_fill(causal.unsqueeze(0) == 0, float('-inf'))
             weights = F.softmax(bias, dim=-1)
+            weights = weights.nan_to_num(0.0)
             enrichment = torch.bmm(weights, x) - x  # delta
         else:
             # Direct modules — try forward, extract delta
@@ -436,7 +440,8 @@ class MatryoshkaNautilus(nn.Module):
                 state_after = h + enrichment
 
                 # Matryoshka: encode what this chamber changed
-                q_before = self.to_q(state_before.detach() if not self.training else state_before)
+                # Detach при train чтобы Matryoshka gradient не корруптил Nautilus cascade
+                q_before = self.to_q(state_before.detach() if self.training else state_before)
                 q_after = self.to_q(state_after)
                 m_out, m_info = self.matryoshka(q_after, x_ref=q_before)
 

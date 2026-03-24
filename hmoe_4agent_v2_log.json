@@ -1,0 +1,322 @@
+[
+  {
+    "cycle": 1,
+    "lci_r0": 3.1292,
+    "rings": {
+      "META": {
+        "lci_r": 3.0561,
+        "lci_emb": 1.7686,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.103,
+        "lci_emb": 2.5809,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.0693,
+        "lci_emb": 2.5425,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 2.9149,
+        "lci_emb": 2.5278,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.0358,
+    "lci_r_final": 3.0256,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.0358,
+    "load_balance": 0.9401,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 16.32,
+    "resonant": true,
+    "step_scale": 0.4
+  },
+  {
+    "cycle": 2,
+    "lci_r0": 3.0256,
+    "rings": {
+      "META": {
+        "lci_r": 3.0069,
+        "lci_emb": 2.4494,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.1178,
+        "lci_emb": 0.9244,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.0724,
+        "lci_emb": 1.2698,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 3.1242,
+        "lci_emb": 0.722,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.0803,
+    "lci_r_final": 3.0436,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.0803,
+    "load_balance": 0.9627,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 14.8,
+    "resonant": true,
+    "step_scale": 0.4
+  },
+  {
+    "cycle": 3,
+    "lci_r0": 3.0436,
+    "rings": {
+      "META": {
+        "lci_r": 3.0151,
+        "lci_emb": 1.4383,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.0771,
+        "lci_emb": 0.7307,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.1198,
+        "lci_emb": 0.6399,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 3.0721,
+        "lci_emb": 0.7628,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.071,
+    "lci_r_final": 2.9763,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.071,
+    "load_balance": 0.9667,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 14.81,
+    "resonant": true,
+    "step_scale": 0.4
+  },
+  {
+    "cycle": 4,
+    "lci_r0": 2.9763,
+    "rings": {
+      "META": {
+        "lci_r": 3.0915,
+        "lci_emb": 1.0086,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.122,
+        "lci_emb": 1.0919,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.1254,
+        "lci_emb": 0.6495,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 3.0865,
+        "lci_emb": 0.7631,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.1063,
+    "lci_r_final": 3.0621,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.1063,
+    "load_balance": 0.9876,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 15.72,
+    "resonant": true,
+    "step_scale": 0.4
+  },
+  {
+    "cycle": 5,
+    "lci_r0": 3.0621,
+    "rings": {
+      "META": {
+        "lci_r": 3.0769,
+        "lci_emb": 0.6322,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.1253,
+        "lci_emb": 0.98,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.1267,
+        "lci_emb": 0.9507,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 3.1316,
+        "lci_emb": 0.9824,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.1151,
+    "lci_r_final": 2.9816,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.1151,
+    "load_balance": 0.9826,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 15.08,
+    "resonant": true,
+    "step_scale": 0.4
+  },
+  {
+    "cycle": 6,
+    "lci_r0": 2.9816,
+    "rings": {
+      "META": {
+        "lci_r": 3.0707,
+        "lci_emb": 1.04,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.141,
+        "lci_emb": 1.0128,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.1258,
+        "lci_emb": 1.0044,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 3.1293,
+        "lci_emb": 1.1253,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.1167,
+    "lci_r_final": 3.0605,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.1167,
+    "load_balance": 0.9776,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 15.59,
+    "resonant": true,
+    "step_scale": 0.4
+  },
+  {
+    "cycle": 7,
+    "lci_r0": 3.0605,
+    "rings": {
+      "META": {
+        "lci_r": 3.0646,
+        "lci_emb": 0.9358,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.1078,
+        "lci_emb": 0.9935,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.128,
+        "lci_emb": 1.0563,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 3.071,
+        "lci_emb": 1.3095,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.0928,
+    "lci_r_final": 3.1243,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.0928,
+    "load_balance": 0.9798,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 15.08,
+    "resonant": true,
+    "step_scale": 0.4
+  },
+  {
+    "cycle": 8,
+    "lci_r0": 3.1243,
+    "rings": {
+      "META": {
+        "lci_r": 3.0575,
+        "lci_emb": 0.6554,
+        "steps": 4,
+        "gen": 4
+      },
+      "ABSTRACT": {
+        "lci_r": 3.1332,
+        "lci_emb": 1.1165,
+        "steps": 8,
+        "gen": 8
+      },
+      "DYNAMIC": {
+        "lci_r": 3.1079,
+        "lci_emb": 1.4182,
+        "steps": 12,
+        "gen": 12
+      },
+      "CONCRETE": {
+        "lci_r": 3.1012,
+        "lci_emb": 1.5765,
+        "steps": 16,
+        "gen": 16
+      }
+    },
+    "avg_lci_all": 3.1,
+    "lci_r_final": 3.0015,
+    "kirchhoff": true,
+    "kirchhoff_val": 3.1,
+    "load_balance": 0.9759,
+    "n_resonant": 4,
+    "n_generated": 40,
+    "elapsed_s": 15.55,
+    "resonant": true,
+    "step_scale": 0.4
+  }
+]

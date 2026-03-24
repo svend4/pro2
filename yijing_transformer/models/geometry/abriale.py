@@ -267,7 +267,7 @@ class RuleBank(nn.Module):
         self.d_event = d_event
         self.d_model = d_model
         self.n_rules = n_rules
-        self.n_hits = n_hits
+        self.n_hits = min(n_hits, n_rules)
         self.n_alternatives = n_alternatives
 
         # Паттерны (образцы): каждый паттерн = вектор в d_event
@@ -341,7 +341,7 @@ class RuleBank(nn.Module):
         actions_out = actions_out * torch.sigmoid(hit_strength)
 
         # Полные веса хитов для диагностики (sparse → dense)
-        hit_weights = torch.zeros(B, T, self.n_rules, device=events.device)
+        hit_weights = torch.zeros(B, T, self.n_rules, device=events.device, dtype=events.dtype)
         hit_weights.scatter_(2, topk_idx, hit_weights_sparse)
 
         return actions_out, hit_weights
@@ -454,6 +454,7 @@ class AbrialeLayer(nn.Module):
                  dropout: float = 0.1):
         super().__init__()
         self.d_model = d_model
+        self.n_hits = n_hits
 
         # 1. Изотропный attention (симметричные N-арные связи)
         self.isotropic_attn = IsotropicAttention(
@@ -569,5 +570,6 @@ class AbrialeLayer(nn.Module):
             loss: скаляр — штраф за неравномерное использование
         """
         avg_usage = hit_weights.mean(dim=(0, 1))  # (n_rules,)
-        target = 1.0 / hit_weights.shape[-1]
+        # target = n_hits/n_rules (т.к. scatter помещает mass только на n_hits правил)
+        target = self.n_hits / hit_weights.shape[-1]
         return ((avg_usage - target) ** 2).sum() * hit_weights.shape[-1]

@@ -1,4 +1,8 @@
 """
+Готов к использованию в training pipeline.
+EMA: use_ema=True в YiJingConfig, вызывать ema.update() после каждого шага.
+EarlyStopping: early_stop_patience > 0 в YiJingConfig.
+
 EMA (Exponential Moving Average) и Early Stopping для YiJing-Transformer.
 
 EMA поддерживает скользящее среднее весов модели для более стабильного инференса.
@@ -73,10 +77,10 @@ class EMA:
             self.restore()
 
     def state_dict(self):
-        return {'shadow': self.shadow, 'decay': self.decay}
+        return {'shadow': {k: v.clone() for k, v in self.shadow.items()}, 'decay': self.decay}
 
     def load_state_dict(self, state):
-        self.shadow = state['shadow']
+        self.shadow = {k: v.clone() for k, v in state['shadow'].items()}
         self.decay = state['decay']
 
 

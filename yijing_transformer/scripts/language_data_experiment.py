@@ -27,7 +27,7 @@ from models.model import HybridGatedGPT, AdaptiveHybridGPT
 from models.baseline import VanillaGPT
 
 SEED = 42
-DEVICE = 'cpu'
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 STEPS = 500
 BATCH_SIZE = 8
 BLOCK_SIZE = 128

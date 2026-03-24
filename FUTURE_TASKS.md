@@ -1,0 +1,172 @@
+# Задачи на будущее / Future Tasks
+# Обновляется по мере работы — не удалять
+#
+# Документация по сессиям: docs/CHANGELOG.md
+# Полный статус реализации: docs/IMPLEMENTATION_STATUS.md
+# Все эксперименты: docs/EXPERIMENTS.md
+# Теория vs код: docs/THEORY_VS_PRACTICE.md  ← НОВЫЙ
+
+---
+
+## ✅ ПРИОРИТЕТ 0 — закрыть разрывы теория→код (из аудита 2026-03-24)
+
+Полная дорожная карта: [docs/THEORY_VS_PRACTICE.md — Часть 5](docs/THEORY_VS_PRACTICE.md)
+
+| # | Задача | Статус | Файл |
+|---|--------|--------|------|
+| 0.1 | Подключить `interlingua_fixed.py` в `model.py` | ✅ 2026-03-24 | `models/model.py` |
+| 0.2 | Temperature `end_temp=0.01`, `warmup_steps=5000` | ✅ 2026-03-24 | `geometry/quantizers.py` |
+| 0.3 | Запустить `train_with_glyph.py --steps 1000`, интегрировать | ✅ 2026-03-24 | `experiments/train_with_glyph.py` + `self_train_hmoe.py` |
+| 0.4 | Реализовать `WHT_Quantizer` (Walsh-Hadamard, O(6 log 6)) | ✅ 2026-03-24 | `geometry/quantizers.py` |
+| 0.5 | CrossDomainAnalogy 15→36 пар (добавить B→A реверсы) | ✅ 2026-03-24 | `self_train_hmoe.py` |
+| 0.6 | Q4⊂Q6 инициализация RAG из Q4-кластеров (если hamming<2.5) | ✅ 2026-03-24 | `e2_self_improve.py` |
+
+**Все 6 задач PRIORITY 0 закрыты (commit c1b4d6b):**
+- ✅ 0.1: `model.py` использует `ArchetypalInterlinguaFixed` по умолчанию
+- ✅ 0.2: `TernaryQuantizer.step_temp()` + `_build_quantizer` передаёт warmup params
+- ✅ 0.3: `train_with_glyph.py` triplet-loss → delta_margin=+0.33; `--glyph` флаг в `self_train_hmoe.py`
+- ✅ 0.4: `WHT_Quantizer` — Walsh-Hadamard O(n log n) в `quantizers.py`
+- ✅ 0.5: `cross_domain_signal()` — 36 направленных пар, B→A реверсы
+- ✅ 0.6: `e2_self_improve.py` — `q4_cluster_init()` + условная активация при hamming<2.5
+
+**Текущий статус (avg_hamming=2.56):** Q4 init реализован, но не активируется (2.56 > 2.5).
+
+---
+
+## ✅ ВЫПОЛНЕНО 2026-03-24 — experiments + geometry modules
+
+Ветка: `claude/repository-audit-fvlEG` | Коммиты: `88ddec5`, `67fd389`
+
+| Задача | Файл | Результат |
+|--------|------|-----------|
+| validate_q4_q6.py | `experiments/validate_q4_q6.py` | avg_hamming=2.56 (PARTIAL) |
+| interlingua_fixed: start_temp/end_temp, readout_attn, self-test | `geometry/interlingua_fixed.py` | spread=0.25 → PASS |
+| kasatkin_router: hex_label, Q6ExpertBank, DOMAIN_ALT | `geometry/kasatkin_router.py` | confidence=0.44 → PASS |
+| xerox_test: 11→14 кейсов, multi-arch loader | `experiments/xerox_test.py` | 6/14 mock |
+| run_all_checks.sh: 4→5 проверок, $CHECKPOINT | `run_all_checks.sh` | — |
+| monitor_improve.py | `monitor_improve.py` | создан |
+| train_with_glyph.py | `experiments/train_with_glyph.py` | создан |
+| Документация: EXPERIMENTS.md, IMPLEMENTATION_STATUS.md, CHANGELOG.md | `docs/` | создана |
+
+Детали: [docs/CHANGELOG.md](docs/CHANGELOG.md) · [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
+
+---
+
+## 🔴 ПРИОРИТЕТ 1 — интеграция с meta-репозиторием
+
+### Проблема
+`pro2` решает задачу эмпирически (curriculum pipeline, LCI-метрика, bench_all).
+`svend4/meta` решает те же математические структуры формально и с тестами.
+
+Верификация (2026-03-22): 10/11 claims VERIFIED, 1 PARTIAL (hexdim Q4 enumerations).
+
+### Конкретные интеграции
+
+**hexnet → Q6-router в HMoE** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- log_hamming_mix: -1.0 → 2.0 (alpha: 0.27 → 0.88), clamp(min=0) → alpha ≥ 0.5
+- Gate std=0.138 (нет коллапса к 0.5), 3.3× более геометрический routing
+- Реализовано в GlobalRouter и MultiScaleGlobalRouter
+
+**hexlearn → инициализация RAG** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- RagBuffer хранит Q6-вершину (int 0..63) для каждого текста
+- retrieve() использует Hamming distance вместо косинуса
+- _get_q6_vertex() проецирует через proj_q6 → hard {0,1}^6
+- 8 уникальных вершин из 20 случайных входов
+
+**hexsym → Aut(Q6) для routing-аугментации** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- _AUT_Q6_ORBITS: 7 орбит по Hamming weight k=0..6 (B₆ = S₆ ⋉ (Z₂)⁶)
+- RINGS: META=орбиты(0,6), ABSTRACT=орбиты(4,5), DYNAMIC=орбита(3), CONCRETE=орбиты(1,2)
+- Шаги пропорциональны размеру орбиты (10:26:25:26 vs 1:2:3:4)
+
+**hexphys → Metropolis annealing в pipeline** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- Реализовано в nautilus_4agent.py (--temp-decay) и figure8_turbine.py (--temp-decay)
+- T(c) = max(0.5, T0 × 0.85^c): 1.4 → 1.190 → 1.011 → 0.860 → ...
+- A/B тест результат: mid_v2 LCI +0.007 vs baseline (умеренный эффект)
+- ВАЖНО: эффект сильнее для слабых моделей (weak: +0.080 LCI total)
+
+**hexring → bent-функции как seed архетипы** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- Реализовано в meta_q6.py: bent_seed_texts(n=20), nl=28, WHT равномерный
+- Критическое исправление: первоначальная реализация дала cosine=0.979 (хуже!)
+- После исправления: bent cosine=0.309 vs normal cosine=0.463 (bent 33% разнообразнее)
+- A/B тест: weak_v2 pass1 LCI 2.855→3.003 (+0.148), но strong_v2 pass1 упал
+
+**hexdim → Q4⊂Q6 агенты** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- nautilus_15agent.py: Q6/Hamming RAG интегрирован
+- 15 Q4-тессерактов × 16 вершин = 64/64 уникальных Q6 вершин покрыто
+- Все rag.add/retrieve используют q6_vert для Hamming-поиска
+
+---
+
+## 🟡 ПРИОРИТЕТ 2 — улучшение pipeline.py
+
+### Ещё не решённые технические вопросы
+
+**LCI > π — теоретически возможно?** ✅ ПРОТЕСТИРОВАНО (2026-03-22)
+- 5 seed'ов × 20 hex-промптов: mean=2.8735, std=0.0036 (между seed'ами)
+- ВЫВОД: π — обученный аттрактор (не архитектурный). Базовое равновесие = 2.87
+- π достигается только через curriculum training (3000+ шагов)
+
+**Анnealing температуры** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- --temp-decay реализован в nautilus_4agent.py и figure8_turbine.py
+- Тест: mid_v2 LCI +0.007, weak: +0.080 (эффект сильнее для слабых)
+
+**Saturation при 3-м проходе** ✅ ИССЛЕДОВАНО (2026-03-22)
+- Гипотеза 2 (LR) подтверждена: pipeline.py adaptive LR threshold 3.0→2.8
+- --lr-threshold CLI аргумент добавлен (default=2.8)
+- При LCI > 2.8 на 2+ проходе: lr автоматически снижается 1e-5 → 5e-6
+- Гипотеза 1 (RAG diversity collapse): частично решена через Q6/Hamming RAG
+
+**Воспроизводимость 0.998** ✅ ТЕСТ ЗАПУЩЕН (2026-03-22)
+- test_reproducibility.py создан: 5 прогонов variant 5
+- Результаты будут в experiments/reproducibility_results.json
+
+---
+
+## 🟢 ПРИОРИТЕТ 3 — исследование
+
+**Направление 5 — переносимость pipeline** ✅ ЗАВЕРШЕНО (2026-03-22)
+
+Протестированы 3 чекпоинта (baseline vs meta_q6 A/B тест):
+
+| Чекпоинт | Start LCI | Turb LCI (base) | Turb LCI (A/B) | Score base | Score A/B |
+|---------|-----------|----------------|----------------|------------|-----------|
+| weak (v4) | 2.978 | 2.966 | 3.046 (+0.080) | 0.978 | 0.988 (+0.010) |
+| mid (v5) | 2.978 | 3.102 | 3.109 (+0.007) | 0.995 | 0.996 (+0.001) |
+| strong | 3.141 | 2.975 | 2.983 (+0.008) | 0.979 | 0.980 (+0.001) |
+
+КЛЮЧЕВОЙ ВЫВОД: pipeline оптимален для моделей с LCI≈2.978 (mid).
+- Для слабых моделей: meta_q6 даёт +0.080 LCI (существенно)
+- Для сильных моделей (LCI>3.1): pipeline ДЕГРАДИРУЕТ (3.141→2.975)
+- meta_q6 bent+annealing помогает больше всего слабым моделям
+- Минимальный порог для успешного pipeline: LCI 2.7-3.1 (выше → вред)
+
+**CrossDomainAnalogy (из pro2 истории)** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- Расширено с 15 → 36 направленных пар (полная матрица 6×6)
+- Добавлена диагональ (A→A self-analogy): 6 новых пар
+- Добавлена нижняя треугольная (B→A reverse): 15 новых пар
+- cross_domain_signal() в self_train_hmoe.py: orbit-based cosine target
+- Логируется как cda_signal (0..1) в каждом цикле figure8_hmoe
+
+**Реальные метрики качества** ✅ РЕАЛИЗОВАНО (2026-03-22)
+- bench_all.py: compute_quality_metrics() — ppl_val, diversity, coherence
+- --quality флаг: опциональный подсчёт реальных метрик
+- print_table() показывает ppl/div/coh колонки при --quality
+
+---
+
+## 📋 Лог принятых решений
+
+| Дата | Решение | Почему |
+|------|---------|--------|
+| 2026-03-22 | step_scale=0.4 оптимален | 0.6/0.8/1.0 дают хуже |
+| 2026-03-22 | 2 прохода nautilus, не 3 | 3-й проход: 3.090→3.065 |
+| 2026-03-22 | cross-pollinate вредит | diversity важнее distillation |
+| 2026-03-22 | n_steps=1 в micro_train | n_steps=2 вызывал forgetting |
+| 2026-03-22 | LCI-loss вредит 4-agent | 2.934 vs 3.010 без него |
+| 2026-03-22 | Pipeline: nautilus×2→turbine-LCI | 0.998 score, LCI=3.127 |
+| 2026-03-22 | meta_q6 bent+annealing реализованы | weak: +0.080 LCI, mid: +0.007 LCI |
+| 2026-03-22 | OMP_NUM_THREADS=1 для pipeline | устраняет 87-минутные зависания |
+| 2026-03-22 | Strong модель деградирует в pipeline | 3.141→2.975 (−0.166), pipeline вреден для LCI>3.1 |
+| 2026-03-22 | Mid — оптимальная точка входа | score 0.995→0.996, LCI 3.102→3.109 |
+| 2026-03-22 | CrossDomainAnalogy 15→36 пар | полная 6×6 матрица, cda_signal в логе |
+| 2026-03-22 | Реальные метрики в bench_all | --quality: ppl_val, diversity, coherence |

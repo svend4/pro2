@@ -3,6 +3,7 @@ Routing, gating, curriculum, logging.
 """
 
 import math
+import threading
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,19 +22,20 @@ class GatedPathSelector(nn.Module):
         self.gate_proj = nn.Linear(d_model * 2, 1, bias=True)
         nn.init.zeros_(self.gate_proj.weight)
         nn.init.constant_(self.gate_proj.bias, init_bias)
-        self._last_gate_mean = 0.5
-        self._last_gate_std = 0.0
+        self._local = threading.local()
 
     def forward(self, x_standard, x_geometric):
         # Content-dependent: gate sees both paths, decides per-token
         gate_input = torch.cat([x_standard, x_geometric], dim=-1)
         gate = torch.sigmoid(self.gate_proj(gate_input))
         with torch.no_grad():
-            self._last_gate_mean = gate.mean().item()
-            self._last_gate_std = gate.std().item()
+            self._local.gate_mean = gate.mean().item()
+            self._local.gate_std = gate.std().item()
         return gate * x_geometric + (1 - gate) * x_standard
 
     def get_gate_stats(self):
+        mean = getattr(self._local, 'gate_mean', 0.5)
+        std  = getattr(self._local, 'gate_std',  0.0)
         return {
             'gate_mean': self._last_gate_mean,
             'gate_std': self._last_gate_std,
@@ -50,9 +52,7 @@ class AdaptiveGatedPathSelector(nn.Module):
         nn.init.zeros_(self.gate_proj.weight)
         nn.init.constant_(self.gate_proj.bias, init_bias)
         self.log_temperature = nn.Parameter(torch.tensor(0.0))
-        self._last_gate_mean = 0.5
-        self._last_gate_std = 0.0
-        self._last_gate_entropy = 0.0
+        self._local = threading.local()
 
     def forward(self, x_standard, x_geometric):
         combined = (x_standard + x_geometric) * 0.5
@@ -62,17 +62,20 @@ class AdaptiveGatedPathSelector(nn.Module):
         if self.n_heads > 1:
             gate = gate.mean(dim=-1, keepdim=True)
         with torch.no_grad():
-            self._last_gate_mean = gate.mean().item()
-            self._last_gate_std = gate.std().item()
+            self._local.gate_mean = gate.mean().item()
+            self._local.gate_std = gate.std().item()
             g = gate.mean().clamp(1e-6, 1 - 1e-6)
-            self._last_gate_entropy = -(g * g.log() + (1-g) * (1-g).log()).item()
+            self._local.gate_entropy = -(g * g.log() + (1-g) * (1-g).log()).item()
         return gate * x_geometric + (1 - gate) * x_standard
 
     def get_gate_stats(self):
+        mean    = getattr(self._local, 'gate_mean',    0.5)
+        std     = getattr(self._local, 'gate_std',     0.0)
+        entropy = getattr(self._local, 'gate_entropy', 0.0)
         return {
-            'gate_mean': self._last_gate_mean,
-            'gate_std': self._last_gate_std,
-            'gate_entropy': self._last_gate_entropy,
+            'gate_mean': mean,
+            'gate_std': std,
+            'gate_entropy': entropy,
             'temperature': self.log_temperature.exp().item(),
             'geometry_preference': self._last_gate_mean,
         }
@@ -85,7 +88,7 @@ class TaskAwareRouter(nn.Module):
         self.n_strategies = n_strategies
         self.strategy_proj = nn.Linear(d_model, n_strategies, bias=True)
         self.strategy_biases = nn.Parameter(torch.linspace(-1.0, 1.0, n_strategies))
-        self._last_strategy_probs = None
+        self._local = threading.local()
 
     def forward(self, x):
         x_mean = x.mean(dim=1)
@@ -93,12 +96,13 @@ class TaskAwareRouter(nn.Module):
         probs = F.softmax(logits, dim=-1)
         gate_bias = (probs * self.strategy_biases.unsqueeze(0)).sum(dim=-1)
         with torch.no_grad():
-            self._last_strategy_probs = probs.mean(dim=0).tolist()
+            self._local.strategy_probs = probs.mean(dim=0).tolist()
         return gate_bias.unsqueeze(1).unsqueeze(2)
 
     def get_strategy_stats(self):
-        if self._last_strategy_probs is not None:
-            return {f'strategy_{i}': p for i, p in enumerate(self._last_strategy_probs)}
+        probs = getattr(self._local, 'strategy_probs', None)
+        if probs is not None:
+            return {f'strategy_{i}': p for i, p in enumerate(probs)}
         return {}
 
 
@@ -961,6 +965,18 @@ class SourceSpecializer(nn.Module):
 class ArchetypalInterlingua(nn.Module):
     """Архетипальная Интерлингва: hub-and-spoke посредник для N модулей.
 
+    .. warning::
+        ИЗВЕСТНЫЙ БАГ: В данной реализации все N источников разделяют
+        *один* ``trit_proj`` (строка ~990). Это создаёт bottleneck:
+        градиенты от разных источников конкурируют за один проектор,
+        что снижает качество представления (PPL ≈ 2.93 вместо 2.75).
+
+        Используйте ``ArchetypalInterlinguaFixed`` из модуля
+        ``geometry.interlingua_fixed`` — там каждый источник имеет
+        собственный ``trit_proj[i]``.
+
+        Ссылка: docs/THEORY_VS_PRACTICE.md, CHANGELOG.md 2026-03-24.
+
     Вместо дерева попарных мостов (BridgeOfModules) — единое промежуточное
     представление из 64 архетипов, через которое проходят все источники.
 
@@ -998,7 +1014,7 @@ class ArchetypalInterlingua(nn.Module):
                  n_archetypes: int = 64, d_bottleneck: int = 0,
                  use_ternary: bool = True, uncertainty_budget: float = 0.3,
                  n_heads: int = 4,
-                 ternary_warmup_steps: int = 2000,
+                 ternary_warmup_steps: int = 3000,
                  ternary_min_temp: float = 0.1,
                  use_paired_bit: bool = False):
         super().__init__()
@@ -1041,9 +1057,17 @@ class ArchetypalInterlingua(nn.Module):
                 nn.init.zeros_(self.paired_bit_proj.bias)
                 self.paired_bit_temp = 1.0  # начальная температура сигмоиды
             else:
-                # Тернарный scoring: каждый модуль → {-1, 0, +1} на каждый архетип
-                self.trit_proj = nn.Linear(d_model, 1, bias=True)
-                nn.init.zeros_(self.trit_proj.bias)
+                # ИСПРАВЛЕНИЕ БАГА v60: каждый источник получает НЕЗАВИСИМУЮ
+                # проекцию trit_proj. Ранее использовался общий trit_proj для
+                # всех источников → все модули голосовали одинаково → 64 архетипа
+                # все идентичные → readout видел const → PPL = vanilla.
+                # Теперь: n_sources отдельных матриц → дифференцированное голосование.
+                self.trit_projs = nn.ModuleList([
+                    nn.Linear(d_model, 1, bias=True)
+                    for _ in range(n_sources)
+                ])
+                for proj in self.trit_projs:
+                    nn.init.zeros_(proj.bias)
             # Learnable uncertainty budget
             self.log_uncertainty = nn.Parameter(
                 torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
@@ -1062,7 +1086,9 @@ class ArchetypalInterlingua(nn.Module):
         self.readout_proj = nn.Linear(d_model, d_model, bias=False)
 
         # Global gate: возможность отключить интерлингву
-        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        # Инициализация с bias=+0.5 → sigmoid ≈ 0.62 — стимулирует использование
+        # interlingua pathway. Если бесполезна — gate быстро уйдёт к 0.
+        self.global_gate = nn.Parameter(torch.tensor(0.5))
         # Learnable scale
         self.scale = nn.Parameter(torch.tensor(0.1))
 
@@ -1079,6 +1105,7 @@ class ArchetypalInterlingua(nn.Module):
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
         self._last_direction_stats = {'spring': 0.0, 'autumn': 0.0}
         self._last_raw_scores = None  # для activation loss
+        self._last_all_trit_scores = None  # для diversity loss (Variant C)
         self._last_archetype_usage = None
 
         # Q6 якоря для корреляционного анализа
@@ -1196,7 +1223,8 @@ class ArchetypalInterlingua(nn.Module):
 
         return trit_scores
 
-    def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+    def _ternary_quantize(self, contribution: torch.Tensor,
+                          source_idx: int = 0) -> torch.Tensor:
         """Тернарная квантизация вклада: {-1, 0, +1} per archetype.
 
         С temperature annealing: на ранних шагах обучения используются мягкие
@@ -1205,6 +1233,9 @@ class ArchetypalInterlingua(nn.Module):
 
         Args:
             contribution: (B, n_archetypes, d_model)
+            source_idx: индекс источника — выбирает ИНДИВИДУАЛЬНЫЙ trit_proj.
+                Каждый источник имеет свою проекцию, что обеспечивает
+                дифференцированное голосование за архетипы.
 
         Returns:
             trit_scores: (B, n_archetypes) — мягкие или жёсткие триты
@@ -1213,9 +1244,11 @@ class ArchetypalInterlingua(nn.Module):
         if self.use_paired_bit:
             return self._paired_bit_quantize(contribution)
 
-        scores = self.trit_proj(contribution).squeeze(-1)  # (B, n_archetypes)
+        # Используем trit_proj ЭТОГО конкретного источника (не общий!)
+        proj = self.trit_projs[source_idx]
+        scores = proj(contribution).squeeze(-1)  # (B, n_archetypes)
 
-        # Сохраняем raw scores для activation loss
+        # Сохраняем raw scores для activation loss (последний источник)
         self._last_raw_scores = scores
 
         temp = self.ternary_temperature
@@ -1250,7 +1283,8 @@ class ArchetypalInterlingua(nn.Module):
             contributions.append(contrib)  # (B, n_archetypes, d_model)
 
             if self.use_ternary:
-                trits = self._ternary_quantize(contrib)  # (B, n_archetypes)
+                # Передаём source_idx — каждый источник использует свой trit_proj
+                trits = self._ternary_quantize(contrib, source_idx=i)
                 trit_scores_list.append(trits)
 
         # === Фаза 2: Агрегация ===
@@ -1259,17 +1293,29 @@ class ArchetypalInterlingua(nn.Module):
             if self.training:
                 self._ternary_step += 1
 
+            # Сохраняем все trit scores для diversity loss (Variant C)
+            self._last_all_trit_scores = torch.stack(trit_scores_list, dim=0)  # (N, B, archetypes)
+
             # Тернарное голосование: суммируем триты всех модулей
-            trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)  # (B, n_archetypes)
+            trit_sum = self._last_all_trit_scores.sum(dim=0)  # (B, n_archetypes)
             consensus = torch.tanh(trit_sum / max(self.n_sources, 1))  # (B, n_archetypes)
 
             # Epsilon leak: гарантирует gradient flow к encoders даже при consensus≈0
             weights = (consensus.abs() + 0.01).unsqueeze(-1)  # (B, n_archetypes, 1)
 
-            # Средний вклад, взвешенный консенсусом
+            # Взвешенное агрегирование: каждый источник взвешен по согласованности
+            # с консенсусом. Если source_i проголосовал +1 и consensus=+0.8,
+            # его вес = softmax(trit_i * consensus) — выше для согласных источников.
+            # Это решает проблему mean_contrib: при идентичных голосах работает
+            # как среднее, но при расхождении усиливает мнение большинства.
             stacked = torch.stack(contributions, dim=0)  # (N, B, archetypes, d_model)
-            mean_contrib = stacked.mean(dim=0)  # (B, archetypes, d_model)
-            aggregated = mean_contrib * weights  # (B, archetypes, d_model)
+            all_trits = self._last_all_trit_scores      # (N, B, archetypes)
+            # alignment: насколько каждый source согласен с консенсусом
+            alignment = all_trits * consensus.unsqueeze(0)  # (N, B, archetypes)
+            # softmax по sources: (N, B, archetypes) → мягкие веса
+            source_weights = F.softmax(alignment, dim=0).unsqueeze(-1)  # (N, B, arch, 1)
+            weighted_contrib = (stacked * source_weights).sum(dim=0)  # (B, arch, d_model)
+            aggregated = weighted_contrib * weights  # (B, archetypes, d_model)
 
             # Статистика тритов
             with torch.no_grad():
@@ -1310,10 +1356,10 @@ class ArchetypalInterlingua(nn.Module):
         Три компонента:
         1. Archetype balance: все архетипы используются примерно одинаково
         2. Uncertainty penalty: штраф за несоответствие тритового баланса бюджету
-        3. Activation encouragement: толкает trit_proj scores от нуля
-           (обеспечивает gradient flow через trit_proj на ранних этапах)
+        3. Activation encouragement: толкает trit_projs scores от нуля
+           (обеспечивает gradient flow через все per-source trit_projs)
         """
-        loss = torch.tensor(0.0, device=self.archetype_queries.device)
+        loss = self.archetype_queries.new_tensor(0.0)
 
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
@@ -1321,21 +1367,44 @@ class ArchetypalInterlingua(nn.Module):
             balance_loss = ((usage - target) ** 2).mean()
             loss = loss + 0.1 * balance_loss
 
-        if self.use_ternary:
+        if self.use_ternary and not self.use_paired_bit:
             zero_frac = self._last_trit_distribution.get('zero', 0.33)
             target_frac = self.uncertainty_budget.item()
             uncertainty_loss = (zero_frac - target_frac) ** 2
             loss = loss + 0.05 * uncertainty_loss
 
-            # Activation encouragement: штрафует scores ≈ 0
-            # Gradient течёт напрямую через trit_proj (не detached!)
-            # Сила убывает по мере annealing (когда scores уже большие, не нужен)
+            # Activation encouragement: применяем ко всем trit_projs
+            # Это гарантирует gradient flow к каждому источнику независимо
             if self._last_raw_scores is not None:
                 temp = self.ternary_temperature
                 encouragement_weight = max(temp - self.ternary_min_temp, 0.0)
                 if encouragement_weight > 0:
                     activation_loss = -self._last_raw_scores.abs().clamp(max=2.0).mean()
                     loss = loss + 0.02 * encouragement_weight * activation_loss
+
+            # ── Variant C: Diversity loss ───────────────────────────────
+            # Штраф за идентичные тритовые паттерны между источниками.
+            # Без этого per-source trit_projs могут сколлапсировать к одной и той же
+            # проекции (информационный bottleneck v60-v61).
+            # Метрика: средняя попарная cos-similarity между trit-паттернами
+            # источников. При n=2: одна пара. При n>2: C(n,2) пар.
+            if (self._last_all_trit_scores is not None
+                    and self._last_all_trit_scores.shape[0] >= 2):
+                trits = self._last_all_trit_scores  # (N, B, archetypes)
+                N = trits.shape[0]
+                # Flatten batch: (N, B*archetypes)
+                flat = trits.reshape(N, -1)
+                # Normalize per source
+                flat_norm = F.normalize(flat, dim=-1, eps=1e-8)
+                # Pairwise cosine similarity matrix: (N, N)
+                cos_sim = flat_norm @ flat_norm.T
+                # Mean off-diagonal absolute cosine similarity
+                mask = ~torch.eye(N, device=cos_sim.device, dtype=torch.bool)
+                mean_cos = cos_sim[mask].abs().mean()
+                # Цель: cos_sim → 0 (ортогональные голоса).
+                # Вес 0.1 — достаточно сильный чтобы разделить проекции,
+                # но не доминирует над основным CE loss.
+                loss = loss + 0.1 * mean_cos
 
         return loss
 
@@ -1366,7 +1435,7 @@ class ArchetypalInterlingua(nn.Module):
         Аналог TokenAbstractor.cluster_hexagram_correlation().
         """
         if self.d_model < 6:
-            return torch.tensor(0.0, device=self.archetype_queries.device)
+            return self.archetype_queries.new_tensor(0.0)
 
         # Берём первые 6 компонент archetype_queries
         q6_proj = self.archetype_queries[:, :6]  # (64, 6)
@@ -1425,7 +1494,7 @@ class BridgedInterlingua(nn.Module):
                  use_ternary: bool = True, uncertainty_budget: float = 0.3,
                  n_heads: int = 4, bridge_n_heads: int = 2,
                  bridge_dropout: float = 0.1,
-                 ternary_warmup_steps: int = 2000,
+                 ternary_warmup_steps: int = 3000,
                  ternary_min_temp: float = 0.1,
                  use_paired_bit: bool = False):
         super().__init__()
@@ -1492,8 +1561,14 @@ class BridgedInterlingua(nn.Module):
                 nn.init.zeros_(self.paired_bit_proj.bias)
                 self.paired_bit_temp = 1.0
             else:
-                self.trit_proj = nn.Linear(d_model, 1, bias=True)
-                nn.init.zeros_(self.trit_proj.bias)
+                # ИСПРАВЛЕНИЕ БАГА v61: per-bridge-output trit_projs.
+                # Каждый bridge-выход голосует своей проекцией → дифференциация.
+                self.trit_projs = nn.ModuleList([
+                    nn.Linear(d_model, 1, bias=True)
+                    for _ in range(self.n_bridge_outputs)
+                ])
+                for proj in self.trit_projs:
+                    nn.init.zeros_(proj.bias)
             self.log_uncertainty = nn.Parameter(
                 torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
             )
@@ -1509,7 +1584,7 @@ class BridgedInterlingua(nn.Module):
         self.readout_proj = nn.Linear(d_model, d_model, bias=False)
 
         # Гейты и масштаб
-        self.global_gate = nn.Parameter(torch.tensor(0.0))
+        self.global_gate = nn.Parameter(torch.tensor(0.5))  # bias=+0.5 → sigmoid≈0.62
         self.scale = nn.Parameter(torch.tensor(0.1))
 
         # --- Temperature annealing для тернарной квантизации ---
@@ -1522,6 +1597,7 @@ class BridgedInterlingua(nn.Module):
         self._last_global_gate = 0.5
         self._last_trit_distribution = {'pos': 0.33, 'zero': 0.33, 'neg': 0.33}
         self._last_direction_stats = {'spring': 0.0, 'autumn': 0.0}
+        self._last_all_trit_scores = None  # для diversity loss
         self._last_archetype_usage = None
         self._last_bridge_compatibility = []
         self._last_raw_scores = None
@@ -1637,7 +1713,8 @@ class BridgedInterlingua(nn.Module):
         if self.use_paired_bit:
             return self._paired_bit_quantize(contribution)
 
-        scores = self.trit_proj(contribution).squeeze(-1)
+        proj = self.trit_projs[source_idx]
+        scores = proj(contribution).squeeze(-1)
         self._last_raw_scores = scores
 
         temp = self.ternary_temperature
@@ -1675,7 +1752,8 @@ class BridgedInterlingua(nn.Module):
             contributions.append(contrib)
 
             if self.use_ternary:
-                trits = self._ternary_quantize(contrib)
+                # Передаём source_idx — каждый bridge-выход использует свой trit_proj
+                trits = self._ternary_quantize(contrib, source_idx=i)
                 trit_scores_list.append(trits)
 
         # === Фаза 3: Тернарная агрегация ===
@@ -1683,13 +1761,19 @@ class BridgedInterlingua(nn.Module):
             if self.training:
                 self._ternary_step += 1
 
-            trit_sum = torch.stack(trit_scores_list, dim=0).sum(dim=0)
+            # Сохраняем все trit scores для diversity loss
+            self._last_all_trit_scores = torch.stack(trit_scores_list, dim=0)  # (K, B, arch)
+
+            trit_sum = self._last_all_trit_scores.sum(dim=0)
             consensus = torch.tanh(trit_sum / max(self.n_bridge_outputs, 1))
             weights = (consensus.abs() + 0.01).unsqueeze(-1)
 
+            # Взвешенное агрегирование: source weight пропорционален согласию
             stacked = torch.stack(contributions, dim=0)
-            mean_contrib = stacked.mean(dim=0)
-            aggregated = mean_contrib * weights
+            alignment = self._last_all_trit_scores * consensus.unsqueeze(0)
+            source_weights = F.softmax(alignment, dim=0).unsqueeze(-1)
+            weighted_contrib = (stacked * source_weights).sum(dim=0)
+            aggregated = weighted_contrib * weights
 
             with torch.no_grad():
                 all_trits = torch.stack(trit_scores_list, dim=0)
@@ -1721,7 +1805,7 @@ class BridgedInterlingua(nn.Module):
 
     def get_interlingua_loss(self) -> torch.Tensor:
         """Вспомогательный loss (совместим с ArchetypalInterlingua API)."""
-        loss = torch.tensor(0.0, device=self.archetype_queries.device)
+        loss = self.archetype_queries.new_tensor(0.0)
 
         if self._last_archetype_usage is not None:
             usage = self._last_archetype_usage
@@ -1742,6 +1826,18 @@ class BridgedInterlingua(nn.Module):
                 if encouragement_weight > 0:
                     activation_loss = -self._last_raw_scores.abs().clamp(max=2.0).mean()
                     loss = loss + 0.02 * encouragement_weight * activation_loss
+
+            # Diversity loss (Variant C) — аналогично ArchetypalInterlingua
+            if (self._last_all_trit_scores is not None
+                    and self._last_all_trit_scores.shape[0] >= 2):
+                trits = self._last_all_trit_scores
+                N = trits.shape[0]
+                flat = trits.reshape(N, -1)
+                flat_norm = F.normalize(flat, dim=-1, eps=1e-8)
+                cos_sim = flat_norm @ flat_norm.T
+                mask = ~torch.eye(N, device=cos_sim.device, dtype=torch.bool)
+                mean_cos = cos_sim[mask].abs().mean()
+                loss = loss + 0.1 * mean_cos
 
         return loss
 
@@ -1780,7 +1876,7 @@ class BridgedInterlingua(nn.Module):
     def archetype_q6_correlation(self) -> torch.Tensor:
         """Корреляция архетипов с гексаграммами Q6."""
         if self.d_model < 6:
-            return torch.tensor(0.0, device=self.archetype_queries.device)
+            return self.archetype_queries.new_tensor(0.0)
         q6_proj = self.archetype_queries[:, :6]
         q6_binary = q6_proj.sign()
         dots = torch.matmul(q6_binary, self.q6_anchors[:64].T)

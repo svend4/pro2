@@ -1,0 +1,30 @@
+[
+  {
+    "stage": 2,
+    "cluster": "all",
+    "ppl_before": 47.04,
+    "ppl_after": 71.22,
+    "delta_pct": -51.4
+  },
+  {
+    "stage": 3,
+    "cluster": "all",
+    "ppl_before": 48.02,
+    "ppl_after": 47.63,
+    "delta_pct": 0.8
+  },
+  {
+    "stage": 4,
+    "cluster": "all",
+    "ppl_before": 51.0,
+    "ppl_after": 44.94,
+    "delta_pct": 11.9
+  },
+  {
+    "stage": 5,
+    "cluster": "all",
+    "ppl_before": 44.05,
+    "ppl_after": 43.48,
+    "delta_pct": 1.3
+  }
+]

@@ -271,8 +271,8 @@ def palace_attention_mask(block_size: int = 64) -> torch.Tensor:
         for i in indices:
             for j in indices:
                 mask[i, j] = 1.0
-    # Ослабленная связность между дворцами
-    mask = mask + 0.1 * (1 - mask)
+    # Возвращаем бинарную маску: 1.0 = intra-palace, 0.0 = inter-palace
+    # Взвешивание inter-palace выполняется в PalaceAttention.get_mask()
     return mask
 
 
@@ -464,7 +464,7 @@ def kasatkin_embedding() -> torch.Tensor:
 
     def pair_to_coord(b1, b2):
         """Отображение пары {-1,+1}² → {0,1,2,3}."""
-        return int((b1 + 1) + (b2 + 1) / 2)
+        return int((b1 + 1) // 2 * 2 + (b2 + 1) // 2)
 
     coords = torch.zeros(64, 3, dtype=torch.float32)
     for i in range(64):

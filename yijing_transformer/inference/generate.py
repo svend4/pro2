@@ -48,7 +48,7 @@ def generate(model, sp, prompt="Once upon a time", max_tokens=100,
             mask[0] = False
             probs[sorted_idx[mask]] = 0.0
 
-        probs = probs / probs.sum()
+        probs = probs / (probs.sum() + 1e-10)
         next_token = torch.multinomial(probs, num_samples=1)
         context = torch.cat((context, next_token.unsqueeze(0)), dim=1)
         token_id = next_token.item()

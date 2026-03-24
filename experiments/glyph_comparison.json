@@ -1,0 +1,15 @@
+{
+  "char": {
+    "accuracy": 1.0,
+    "avg_pos_sim": 0.7648789485295614,
+    "avg_neg_sim": 0.31207732670009136,
+    "margin": 0.45280162182947
+  },
+  "glyph": {
+    "accuracy": 1.0,
+    "avg_pos_sim": 0.6049791475137075,
+    "avg_neg_sim": -0.17606096342206,
+    "margin": 0.7810401109357675
+  },
+  "integrate": true
+}

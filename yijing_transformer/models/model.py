@@ -27,6 +27,7 @@ from .geometry import (
     ALiBi,
     SwiGLU,
     TrigramMoE,
+    DomainMoE,
     GatedPathSelector,
     GeometricAttention,
     GeometricFFN,
@@ -55,6 +56,7 @@ from .geometry import (
     MobiusAttentionPattern,
     PrivilegedAxisAttention,
     HeisenbergAttention,
+    SOLANAttention,
     FlowerOfLifeGAT,
     StructuralDefectLayer,
     HexagramAttentionPattern,
@@ -71,6 +73,8 @@ from .geometry import (
     ArchetypalInterlingua,
     # v61: BridgedInterlingua (двойная прослойка)
     BridgedInterlingua,
+    # v51-unified: Six Sources integration
+    SixSourceLayer,
     # v54: Kasatkin 3D embedding
     CubicAttentionBias,
     CubicPositionalEncoding,
@@ -80,6 +84,18 @@ from .geometry import (
     # v56: Ternary Quantizer
     TernaryQuantizer,
 )
+# v60-fixed: ArchetypalInterlinguaFixed — per-source trit_proj, diversity loss, cosine annealing
+from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInterlinguaFixed
+# Expert Choice MoE routing (Zhou et al., 2022)
+from yijing_transformer.models.expert_choice import ExpertChoiceRouter
+# PseudoRAG: Q4 (16 архетипов) → Q6 (64 гексаграмм) bridge
+from yijing_transformer.models.pseudo_rag import PseudoRAGProjection, PseudoRAGDistillationLoss
+# Единый модуль 6 источников (Склярова+Фомюк+Андреев+Касаткин+Герман+Беляев)
+from yijing_transformer.models.geometry.six_sources import SixSourceLayer
+# v14: Differential Attention (Ye et al., 2024)
+from yijing_transformer.models.diff_attn import DifferentialAttention
+# v17: Prefix Tuning + Multi-Token Prediction
+from yijing_transformer.models.prefix_tuning import PrefixTuning, MultiTokenPredictionHead
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 from yijing_transformer.tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
@@ -152,6 +168,10 @@ def build_quantizer(cfg):
             adaptive_temp=cfg.adaptive_temp,
             uncertainty_budget=getattr(cfg, 'ternary_uncertainty', 0.3),
             max_zeros=getattr(cfg, 'ternary_max_zeros', 2),
+            # Cosine annealing schedule (задача 0.2): step_temp() вызывается в тренировочном цикле
+            warmup_steps=getattr(cfg, 'ternary_warmup_steps', 5000),
+            start_temp=getattr(cfg, 'ternary_start_temp', 1.0),
+            end_temp=getattr(cfg, 'ternary_end_temp', 0.01),
         )
     else:
         raise ValueError(f"Unknown quantizer_type: {cfg.quantizer_type}")
@@ -351,7 +371,13 @@ class YiJingTransformerLayer(nn.Module):
         self.use_recursive_cube = getattr(cfg, 'use_recursive_cube', False)
         self.use_weaving_loom = getattr(cfg, 'use_weaving_loom', False)
 
-        if self.use_quadrant_attention:
+        # v14: Differential Attention (two-softmax difference)
+        self.use_diff_attn = getattr(cfg, 'use_diff_attn', False)
+
+        if self.use_diff_attn:
+            self.attn = DifferentialAttention(cfg.d_model, cfg.n_heads, dropout=cfg.dropout)
+            self._attn_returns_cache = False
+        elif self.use_quadrant_attention:
             self.attn = QuadrantAttention(cfg.d_model, cfg.n_heads)
             self._attn_returns_cache = False
         elif self.use_recursive_cube:
@@ -402,6 +428,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_heisenberg and not (self.use_quadrant_attention or self.use_recursive_cube or self.use_weaving_loom):
             self.heisenberg_attn = HeisenbergAttention(cfg.d_model)
 
+        # v71: SOLAN-76 Q6 attention — additive enrichment
+        self.use_solan_attn = getattr(cfg, 'use_solan_attention', False)
+        if self.use_solan_attn:
+            self.solan_attn = SOLANAttention(cfg.d_model, n_heads=cfg.n_heads, block_size=cfg.block_size)
+
         # v53: Hexagram attention pattern (64 fixed patterns)
         self.use_hex_attn_pattern = getattr(cfg, 'use_hex_attn_pattern', False)
         if self.use_hex_attn_pattern:
@@ -440,6 +471,8 @@ class YiJingTransformerLayer(nn.Module):
             self._enrichment_sources = []
             if self.use_heisenberg:
                 self._enrichment_sources.append('heisenberg')
+            if self.use_solan_attn:
+                self._enrichment_sources.append('solan')
             if self.use_palace_attention:
                 self._enrichment_sources.append('palace')
             if self.use_privileged_axis:
@@ -469,16 +502,29 @@ class YiJingTransformerLayer(nn.Module):
                     )
                     self.use_archetypal_interlingua = True  # reuse forward path
                 elif self.use_archetypal_interlingua:
-                    # v60: Archetypal Interlingua — hub-and-spoke посредник
-                    self.archetypal_interlingua = ArchetypalInterlingua(
-                        cfg.d_model, n_sources,
-                        n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
-                        d_bottleneck=getattr(cfg, 'interlingua_d_bottleneck', 0),
-                        use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
-                        uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
-                        n_heads=getattr(cfg, 'interlingua_n_heads', 4),
-                        use_paired_bit=getattr(cfg, 'interlingua_use_paired_bit', False),
-                    )
+                    # v60-fixed: ArchetypalInterlinguaFixed — per-source trit_proj
+                    # Заменяет багованный ArchetypalInterlingua (один общий trit_proj)
+                    use_fixed = getattr(cfg, 'interlingua_use_fixed', True)
+                    if use_fixed:
+                        self.archetypal_interlingua = ArchetypalInterlinguaFixed(
+                            cfg.d_model, n_sources,
+                            n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
+                            diversity_weight=getattr(cfg, 'interlingua_diversity_weight', 0.01),
+                            warmup_steps=getattr(cfg, 'interlingua_warmup_steps', 3000),
+                            start_temp=getattr(cfg, 'interlingua_start_temp', 1.0),
+                            end_temp=getattr(cfg, 'interlingua_end_temp', 0.05),
+                        )
+                    else:
+                        # Оригинал (для сравнения/ablation)
+                        self.archetypal_interlingua = ArchetypalInterlingua(
+                            cfg.d_model, n_sources,
+                            n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
+                            d_bottleneck=getattr(cfg, 'interlingua_d_bottleneck', 0),
+                            use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
+                            uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
+                            n_heads=getattr(cfg, 'interlingua_n_heads', 4),
+                            use_paired_bit=getattr(cfg, 'interlingua_use_paired_bit', False),
+                        )
                 elif self.use_abriale_bridge:
                     # v59: AbrialeBridge — гибрид Abriale + Bridge
                     self.bridge_of_modules = AbrialeBridgeMediator(
@@ -568,6 +614,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_d4_equivariant:
             self.d4_layer = D4EquivariantLayer(cfg.d_model)
 
+        # v51-unified: Six Sources integration (после квантизатора)
+        self.use_six_sources = getattr(cfg, 'use_six_sources', False)
+        if self.use_six_sources:
+            self.six_sources = SixSourceLayer(cfg.d_model)
+
         # v51: Dual Embedding (Касаткин 4.4)
         self.use_dual_embedding = getattr(cfg, 'use_dual_embedding', False)
         if self.use_dual_embedding:
@@ -575,9 +626,28 @@ class YiJingTransformerLayer(nn.Module):
 
         # FFN или MoE
         self.use_moe = cfg.use_hex_moe
+        self.use_domain_moe = getattr(cfg, 'use_domain_moe', False)
+        self.use_expert_choice = getattr(cfg, 'use_expert_choice', False)
         self.ln_ffn = nn.LayerNorm(cfg.d_model)
 
-        if cfg.use_hex_moe:
+        if self.use_expert_choice:
+            self.ffn = ExpertChoiceRouter(
+                d_model=cfg.d_model,
+                n_experts=cfg.n_experts,
+                capacity_factor=getattr(cfg, 'expert_choice_capacity', 1.0),
+                ffn_hidden=cfg.ffn_hidden,
+                dropout=cfg.dropout,
+            )
+        elif self.use_domain_moe:
+            self.ffn = DomainMoE(
+                d_model=cfg.d_model,
+                n_experts=getattr(cfg, 'domain_moe_n_experts', 6),
+                top_k=getattr(cfg, 'domain_moe_top_k', 2),
+                ffn_hidden=cfg.ffn_hidden,
+                dropout=cfg.dropout,
+                domain_supervision_weight=getattr(cfg, 'domain_supervision_weight', 0.1),
+            )
+        elif cfg.use_hex_moe:
             self.ffn = TrigramMoE(
                 d_model=cfg.d_model,
                 n_experts=cfg.n_experts,
@@ -595,7 +665,7 @@ class YiJingTransformerLayer(nn.Module):
                 nn.Dropout(cfg.dropout),
             )
 
-    def forward(self, x, kv_cache=None):
+    def forward(self, x, kv_cache=None, domain_ids=None):
         B, T, C = x.shape
 
         # 1. Attention (standard or v51 module)
@@ -626,7 +696,8 @@ class YiJingTransformerLayer(nn.Module):
             attn_out = self.attn(h)
             # For alternative attentions: compose bias post-hoc
             if extra_bias is not None:
-                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
+                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (?,T,T)
+                bias_w = bias_w.expand(B, -1, -1)  # (B,T,T)
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
         # v54/v58/v59: Geometric source mixing (replaces fixed coefficients)
@@ -637,6 +708,8 @@ class YiJingTransformerLayer(nn.Module):
             enrichments = []
             if self.use_heisenberg:
                 enrichments.append(self.heisenberg_attn(h))
+            if self.use_solan_attn:
+                enrichments.append(self.solan_attn(h))
             if self.use_palace_attention:
                 enrichments.append(self.palace_attn(h))
             if self.use_privileged_axis:
@@ -687,6 +760,10 @@ class YiJingTransformerLayer(nn.Module):
             if self.use_heisenberg:
                 attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
 
+            # v71: SOLAN-76 Q6 attention enrichment (additive)
+            if self.use_solan_attn:
+                attn_out = attn_out + 0.1 * self.solan_attn(h)
+
             # v51: compose additional attention biases (additive post-processing)
             if self.use_palace_attention:
                 palace_out = self.palace_attn(h)
@@ -721,6 +798,10 @@ class YiJingTransformerLayer(nn.Module):
         else:
             self._antipodal_loss = 0.0
 
+        # v51-unified: Six Sources integration
+        if self.use_six_sources:
+            x, _six_aux = self.six_sources(x)
+
         # 3. 变卦 трансформация
         if self.bian_gua is not None:
             x = self.bian_gua(x)
@@ -741,7 +822,15 @@ class YiJingTransformerLayer(nn.Module):
 
         # 5. FFN или MoE
         h_ffn = self.ln_ffn(x)
-        if self.use_moe:
+        if self.use_expert_choice:
+            ffn_out, aux_info = self.ffn(h_ffn)
+            x = x + ffn_out
+            self._aux_loss = 0.0  # Expert Choice has perfect load balance, no aux loss
+        elif self.use_domain_moe:
+            ffn_out, aux_loss = self.ffn(h_ffn, domain_ids=domain_ids)
+            x = x + ffn_out
+            self._aux_loss = aux_loss
+        elif self.use_moe:
             ffn_out, aux_loss = self.ffn(h_ffn)
             x = x + ffn_out
             self._aux_loss = aux_loss
@@ -791,7 +880,7 @@ class YiJingTransformer(nn.Module):
         else:
             self.mod_routers = None
 
-    def forward(self, x, kv_cache=None):
+    def forward(self, x, kv_cache=None, domain_ids=None):
         new_kv_cache = []
         for i, layer in enumerate(self.layers):
             layer_cache = kv_cache[i] if kv_cache is not None else None
@@ -811,7 +900,7 @@ class YiJingTransformer(nn.Module):
                 x_selected = x[batch_idx, top_idx_sorted]  # (B, k, D)
 
                 # Прогоняем через слой (без KV-cache при MoD)
-                out_selected, new_kv = layer(x_selected, kv_cache=None)
+                out_selected, new_kv = layer(x_selected, kv_cache=None, domain_ids=domain_ids)
 
                 # Записываем обратно (residual для пропущенных токенов = identity)
                 x_out = x.clone()
@@ -823,11 +912,14 @@ class YiJingTransformer(nn.Module):
                 layer._mod_loss = self._compute_mod_balance_loss(router_logits, k)
             else:
                 if self.cfg.use_gradient_ckpt and self.training and kv_cache is None:
+                    # grad_checkpoint requires positional args; wrap to pass domain_ids
+                    def _ckpt_fwd(x_, cache_, domain_ids_=domain_ids):
+                        return layer(x_, kv_cache=cache_, domain_ids=domain_ids_)
                     x, new_kv = grad_checkpoint(
-                        layer, x, layer_cache, use_reentrant=False
+                        _ckpt_fwd, x, layer_cache, use_reentrant=False
                     )
                 else:
-                    x, new_kv = layer(x, kv_cache=layer_cache)
+                    x, new_kv = layer(x, kv_cache=layer_cache, domain_ids=domain_ids)
                 new_kv_cache.append(new_kv)
         return self.final_norm(x), new_kv_cache
 
@@ -964,6 +1056,31 @@ class YiJingGPT(nn.Module):
                 enabled_chambers=enabled,
             )
 
+        # PseudoRAG: Q4→Q6 bridge (формальное вложение 16 архетипов → 64 гексаграммы)
+        self.use_pseudo_rag = getattr(cfg, 'use_pseudo_rag', False)
+        if self.use_pseudo_rag:
+            self.pseudo_rag = PseudoRAGProjection(d_model=cfg.d_model)
+            self.pseudo_rag_distill = PseudoRAGDistillationLoss(
+                temperature=getattr(cfg, 'distill_temp', 2.0),
+            )
+            self._pseudo_rag_distill_weight = getattr(cfg, 'pseudo_rag_distill_weight', 0.1)
+
+        # v17: Prefix Tuning — обучаемые prefix-токены
+        self.prefix_len = getattr(cfg, 'prefix_len', 0)
+        if self.prefix_len > 0:
+            self.prefix_tuning = PrefixTuning(cfg, prefix_len=self.prefix_len)
+        else:
+            self.prefix_tuning = None
+
+        # v17: Multi-Token Prediction — предсказание N следующих токенов
+        self.mtp_n_future = getattr(cfg, 'mtp_n_future', 0)
+        if self.mtp_n_future > 0:
+            self.mtp_head = MultiTokenPredictionHead(
+                cfg.d_model, cfg.vocab_size, n_future=self.mtp_n_future,
+            )
+        else:
+            self.mtp_head = None
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -1014,7 +1131,7 @@ class YiJingGPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.trunc_normal_(module.weight, std=0.02)
 
-    def forward(self, idx, targets=None, kv_cache=None, glyph_vertices=None):
+    def forward(self, idx, targets=None, kv_cache=None, glyph_vertices=None, domain_ids=None):
         b, t = idx.size()
         x = self.tok_emb(idx)
 
@@ -1068,7 +1185,27 @@ class YiJingGPT(nn.Module):
         if self.use_nautilus:
             x, nautilus_info = self.nautilus(x)
 
-        hidden, new_kv_cache = self.core(x, kv_cache=kv_cache)
+        hidden, new_kv_cache = self.core(x, kv_cache=kv_cache, domain_ids=domain_ids)
+
+        # PseudoRAG: blend Q4→Q6 projection with quantizer-enriched hidden states
+        pseudo_rag_info = None
+        if self.use_pseudo_rag:
+            # Q6 weights from PseudoRAG bridge: (B, T, 64)
+            q6_weights = self.pseudo_rag(hidden)
+            # Full Q6 embedding: (64, 6) → project back to d_model via from_qd of first layer
+            q6_embed = self.pseudo_rag.get_full_q6_embedding()  # (64, 6)
+            # Мягкая реконструкция: weighted sum of Q6 vertices → (B, T, 6)
+            q6_soft = torch.matmul(q6_weights, q6_embed)  # (B, T, 6)
+            # Проецируем 6D → d_model через первый слой from_qd (shared geom)
+            first_layer = self.core.layers[0]
+            q6_contribution = first_layer.from_qd(q6_soft)  # (B, T, D)
+            # Blend: масштабируем как hex_scale первого слоя
+            hidden = hidden + first_layer.hex_scale * 0.5 * q6_contribution
+            pseudo_rag_info = {
+                'q6_weights': q6_weights,
+                'q4_logits': self.pseudo_rag.get_q4_logits(hidden),
+            }
+
         logits = self.head(hidden)
 
         loss = None
@@ -1096,6 +1233,28 @@ class YiJingGPT(nn.Module):
                     abriale_info['hit_weights']
                 )
                 loss = loss + self._abriale_balance_weight * abriale_loss
+
+            # PseudoRAG distillation loss: Q4 teacher → Q6 student
+            if pseudo_rag_info is not None:
+                # Self-distillation: Q4 logits serve as teacher targets
+                q4_targets = pseudo_rag_info['q4_logits'].detach()
+                # Q6 logits from raw projection (before softmax)
+                q6_logits = self.pseudo_rag.proj_q4(hidden)  # reuse for Q4 part
+                # Full Q6 logits = coarse + fine
+                q6_logits_full = self.pseudo_rag.refine_proj(hidden)
+                q4_coarse = self.pseudo_rag.proj_q4(hidden)
+                q6_expanded = torch.matmul(
+                    F.softmax(q4_coarse, dim=-1),
+                    self.pseudo_rag.cluster_expand,
+                )
+                q6_logits_for_distill = q6_expanded + self.pseudo_rag.blend_scale * q6_logits_full
+                distill_loss = self.pseudo_rag_distill(q6_logits_for_distill, q4_targets)
+                loss = loss + self._pseudo_rag_distill_weight * distill_loss
+
+            # v17: Multi-Token Prediction auxiliary loss
+            if self.mtp_head is not None:
+                mtp_loss, _ = self.mtp_head.compute_loss(hidden, targets)
+                loss = loss + 0.1 * mtp_loss
 
         return logits, loss, new_kv_cache
 
@@ -1158,8 +1317,8 @@ class YiJingGPT(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
 
-            # Stop tokens
-            if stop_tokens is not None:
+            # Stop tokens (only for batch_size=1)
+            if stop_tokens is not None and idx_next.numel() == 1:
                 if idx_next.item() in stop_tokens:
                     break
 
@@ -1240,7 +1399,15 @@ class YiJingGPT(nn.Module):
     @classmethod
     def from_pretrained(cls, path, device='cpu'):
         """Загружает модель из файла."""
-        ckpt = torch.load(path, map_location=device, weights_only=False)
+        import sys, os as _os
+        _pkg = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        if _pkg not in sys.path:
+            sys.path.insert(0, _pkg)
+        from config.config import YiJingConfig  # short path = what pickle stored
+        # YiJingConfig — доверенный внутренний класс проекта; регистрируем его,
+        # чтобы weights_only=True мог его десериализовать без arbitrary code execution.
+        with torch.serialization.safe_globals([YiJingConfig]):
+            ckpt = torch.load(path, map_location=device, weights_only=True)
         cfg = ckpt['config']
         model = cls(cfg).to(device)
         model.load_state_dict(ckpt['model_state_dict'])

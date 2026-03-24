@@ -1,0 +1,75 @@
+{
+  "cycle_log": [
+    {
+      "cycle": 1,
+      "forward": {
+        "steps": 150,
+        "avg_loss": 4.721651016871134
+      },
+      "backward": {
+        "generated": 10,
+        "accepted_gen": 0,
+        "graph_updates": 10,
+        "new_gaps": 8,
+        "hypotheses_added": 0,
+        "avg_quality": 0.4912071108818054,
+        "corpus_size": 30
+      },
+      "converged": false
+    },
+    {
+      "cycle": 2,
+      "forward": {
+        "steps": 150,
+        "avg_loss": 4.094583652814229
+      },
+      "backward": {
+        "generated": 10,
+        "accepted_gen": 0,
+        "graph_updates": 10,
+        "new_gaps": 8,
+        "hypotheses_added": 8,
+        "avg_quality": 0.5028593182563782,
+        "corpus_size": 38
+      },
+      "converged": false
+    },
+    {
+      "cycle": 3,
+      "forward": {
+        "steps": 150,
+        "avg_loss": 3.702942016919454
+      },
+      "backward": {
+        "generated": 10,
+        "accepted_gen": 10,
+        "graph_updates": 10,
+        "new_gaps": 8,
+        "hypotheses_added": 8,
+        "avg_quality": 0.527573025226593,
+        "corpus_size": 46
+      },
+      "converged": false
+    },
+    {
+      "cycle": 4,
+      "forward": {
+        "steps": 150,
+        "avg_loss": 3.333863991101583
+      },
+      "backward": {
+        "generated": 10,
+        "accepted_gen": 10,
+        "graph_updates": 10,
+        "new_gaps": 8,
+        "hypotheses_added": 8,
+        "avg_quality": 0.5467371106147766,
+        "corpus_size": 54
+      },
+      "converged": false
+    }
+  ],
+  "final_corpus": 54,
+  "graph_nodes": 30,
+  "graph_edges": 133
+}

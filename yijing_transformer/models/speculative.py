@@ -132,11 +132,12 @@ def speculative_generate(
             p_target = target_prob.gather(1, token).squeeze(1)  # (B,)
             p_draft = draft_prob.gather(1, token).squeeze(1)  # (B,)
 
-            ratio = p_target / (p_draft + 1e-10)
-            accept_prob = torch.clamp(ratio, max=1.0)
+            ratio = p_target / p_draft.clamp(min=1e-10)
+            accept_prob = ratio.clamp(max=1.0)
             r = torch.rand_like(accept_prob)
+            accepted = r < accept_prob  # (B,) per-sample decision
 
-            if (r < accept_prob).all():
+            if accepted.all():
                 n_accepted += 1
                 idx = torch.cat([idx, token], dim=1)
                 generated += 1

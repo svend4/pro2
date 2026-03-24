@@ -1,4 +1,8 @@
 """
+Интегрирован в YiJingGPT:
+- PrefixTuning через prefix_len > 0 в YiJingConfig
+- MultiTokenPredictionHead через mtp_n_future > 0 в YiJingConfig
+
 Prefix Tuning, Logit Lens, Multi-Token Prediction.
 
 Prefix Tuning: обучаемые prefix-токены, prepended к каждому слою.

@@ -1,0 +1,130 @@
+[
+  {
+    "cycle": 1,
+    "lci_r0": 2.9779,
+    "lci_r_end": 2.9076,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.9037,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 13.04
+  },
+  {
+    "cycle": 2,
+    "lci_r0": 2.9076,
+    "lci_r_end": 2.9761,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.9259,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 12.09
+  },
+  {
+    "cycle": 3,
+    "lci_r0": 2.9761,
+    "lci_r_end": 2.9074,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.9395,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 11.89
+  },
+  {
+    "cycle": 4,
+    "lci_r0": 2.9074,
+    "lci_r_end": 3.0082,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.9523,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 11.97
+  },
+  {
+    "cycle": 5,
+    "lci_r0": 3.0082,
+    "lci_r_end": 3.0362,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.9748,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 12.19
+  },
+  {
+    "cycle": 6,
+    "lci_r0": 3.0362,
+    "lci_r_end": 3.0369,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 2.9975,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 11.86
+  },
+  {
+    "cycle": 7,
+    "lci_r0": 3.0369,
+    "lci_r_end": 3.1384,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 3.1156,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 12.2
+  },
+  {
+    "cycle": 8,
+    "lci_r0": 3.1384,
+    "lci_r_end": 3.067,
+    "n_laps": 1,
+    "exited_early": true,
+    "n_generated": 32,
+    "laps": [
+      {
+        "lap": 1,
+        "avg_lci_r": 3.1054,
+        "resonant": true
+      }
+    ],
+    "elapsed_s": 12.24
+  }
+]

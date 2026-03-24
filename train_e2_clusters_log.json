@@ -1,0 +1,43 @@
+[
+  {
+    "cycle": 1,
+    "cluster": "Self",
+    "domain": "METHOD",
+    "alpha": 0,
+    "e2_phase": 3,
+    "texts": 35,
+    "steps": 120,
+    "lr": 0.0002,
+    "ppl_before": 284.99,
+    "ppl_after": 69.49,
+    "ppl_delta": 75.62,
+    "final_loss": 4.1423,
+    "log": [
+      {
+        "step": 24,
+        "loss": 5.102908945083618,
+        "hex_idx": 41
+      },
+      {
+        "step": 48,
+        "loss": 4.608798146247864,
+        "hex_idx": 41
+      },
+      {
+        "step": 72,
+        "loss": 4.2911221265792845,
+        "hex_idx": 7
+      },
+      {
+        "step": 96,
+        "loss": 4.101383185386657,
+        "hex_idx": 49
+      },
+      {
+        "step": 120,
+        "loss": 4.142268764972687,
+        "hex_idx": 45
+      }
+    ]
+  }
+]

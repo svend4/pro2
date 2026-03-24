@@ -108,32 +108,34 @@ def create_model_card(model, save_path=None):
             'd_model': cfg.d_model,
             'n_layers': cfg.n_layers,
             'n_heads': cfg.n_heads,
-            'n_kv_heads': cfg.n_kv_heads,
+            'n_kv_heads': getattr(cfg, 'n_kv_heads', None),
             'block_size': cfg.block_size,
             'vocab_size': cfg.vocab_size,
-            'ffn_hidden': cfg.ffn_hidden,
+            'ffn_hidden': getattr(cfg, 'ffn_hidden', None),
         },
         'features': {
-            'rope': cfg.use_rope,
-            'swiglu': cfg.use_swiglu,
-            'bian_gua': cfg.use_bian_gua,
-            'gqa': cfg.n_kv_heads is not None and cfg.n_kv_heads != cfg.n_heads,
-            'sliding_window': cfg.sliding_window,
-            'quantizer_type': cfg.quantizer_type,
-            'adaptive_temp': cfg.adaptive_temp,
-            'rope_scaling': cfg.rope_scaling if hasattr(cfg, 'rope_scaling') else None,
+            'rope': getattr(cfg, 'use_rope', False),
+            'swiglu': getattr(cfg, 'use_swiglu', False),
+            'bian_gua': getattr(cfg, 'use_bian_gua', False),
+            'gqa': getattr(cfg, 'n_kv_heads', None) is not None
+                   and getattr(cfg, 'n_kv_heads', None) != cfg.n_heads,
+            'sliding_window': getattr(cfg, 'sliding_window', None),
+            'quantizer_type': getattr(cfg, 'quantizer_type', None),
+            'adaptive_temp': getattr(cfg, 'adaptive_temp', None),
+            'rope_scaling': getattr(cfg, 'rope_scaling', None),
         },
         'parameters': {
             'total': total_params,
             'hex_specific': hex_params,
             'hex_overhead_pct': round(100 * hex_params / max(1, total_params), 2),
         },
-        'flops': {
+    }
+    if hasattr(model, 'estimate_flops'):
+        card['flops'] = {
             'per_token': model.estimate_flops(1),
             'block_size': model.estimate_flops(),
             'human_readable': model.estimate_flops_str(),
-        },
-    }
+        }
 
     if save_path:
         with open(save_path, 'w') as f:

@@ -19,11 +19,11 @@ setup(
         "torch>=2.0.0",
     ],
     extras_require={
-        "data": ["datasets", "sentencepiece"],
-        "viz": ["matplotlib"],
-        "tracking": ["wandb", "tensorboard"],
+        "data": ["datasets>=2.14.0", "sentencepiece>=0.2.0"],
+        "viz": ["matplotlib>=3.7.0"],
+        "tracking": ["wandb>=0.16.0", "tensorboard>=2.13.0"],
         "dev": ["pytest"],
-        "all": ["datasets", "sentencepiece", "matplotlib", "wandb", "tensorboard", "pytest"],
+        "all": ["datasets>=2.14.0", "sentencepiece>=0.2.0", "matplotlib>=3.7.0", "wandb>=0.16.0", "tensorboard>=2.13.0", "pytest"],
     },
     entry_points={
         "console_scripts": [

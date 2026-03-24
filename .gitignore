@@ -5,3 +5,8 @@ runs/
 results/
 *.pt
 .pytest_cache/
+data/
+pipeline_runs/
+# Рабочие логи в корне (копии хранятся в experiments/)
+hmoe_*_log.json
+hmoe_*_v*.json

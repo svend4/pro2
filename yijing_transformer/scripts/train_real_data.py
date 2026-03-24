@@ -308,7 +308,7 @@ def train(args):
     # Resume from checkpoint?
     start_step = 0
     if args.resume and os.path.exists(args.resume):
-        ckpt = torch.load(args.resume, weights_only=False)
+        ckpt = torch.load(args.resume, weights_only=True)
         model.load_state_dict(ckpt['model'])
         start_step = ckpt['step']
         print(f"  Resumed from step {start_step}")

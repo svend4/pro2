@@ -185,10 +185,17 @@ class RegularizationSuite:
 
         return embeddings, targets
 
+    def set_model(self, model):
+        """Привязка к модели для проверки training mode."""
+        self._model = model
+
     @property
     def training_mode_active(self):
         """Проверка: активированы ли модификаторы (только в train mode)."""
-        return True  # контролируется внешним model.training
+        model = getattr(self, '_model', None)
+        if model is not None:
+            return model.training
+        return True  # fallback если модель не привязана
 
     def compute_spectral_loss(self, model):
         """Спектральный регуляризатор (отдельно, т.к. нужна модель).

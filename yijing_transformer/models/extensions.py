@@ -1,4 +1,7 @@
 """
+EXPERIMENTAL — не используется в production моделях.
+Все 9 классов используются только в scripts/run_all_extensions.py (benchmark harness).
+
 Расширения YiJing-Transformer: фазы A2–E14.
 
 A2: Multi-Head Geometric Attention (отдельный кодбук на голову)
@@ -279,6 +282,10 @@ class HexagramMoE(nn.Module):
         self.router_temp = nn.Parameter(torch.tensor(temp).log())
 
         ffn_hidden = int(d_model * ffn_mult)
+        # Ensure even division for non-factored experts
+        if not (use_factored and n_experts == 64):
+            expert_dim = ffn_hidden // n_experts
+            ffn_hidden = expert_dim * n_experts  # round down to exact multiple
 
         if use_factored and n_experts == 64:
             # Факторизованные эксперты: 8 верхних + 8 нижних триграммных FFN
@@ -364,7 +371,7 @@ class HexagramMoE(nn.Module):
         router_probs = F.softmax(router_logits, dim=-1).mean(0)  # (n_experts,)
         uniform = torch.ones_like(router_probs) / self.n_experts
         balance_loss = self.balance_coeff * F.kl_div(
-            router_probs.log(), uniform, reduction='batchmean'
+            router_probs.log(), uniform, reduction='sum'
         )
 
         return output, balance_loss

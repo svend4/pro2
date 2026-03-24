@@ -47,8 +47,14 @@ class LoRALinear(nn.Module):
 
         # Флаг merged — после merge_lora обновление вливается в base
         self.merged = False
+        # Кэш для weight property (инвалидируется при обучении)
+        self._weight_cache = None
+
+    def _invalidate_cache(self):
+        self._weight_cache = None
 
     def forward(self, x):
+        self._invalidate_cache()
         if self.merged:
             return self.base(x)
         base_out = self.base(x)
@@ -64,6 +70,7 @@ class LoRALinear(nn.Module):
             with torch.no_grad():
                 self.base.weight.data += self.scaling * (self.lora_B @ self.lora_A)
             self.merged = True
+            self._invalidate_cache()
 
     def unmerge(self):
         """Отменяет merge для продолжения обучения."""
@@ -71,13 +78,16 @@ class LoRALinear(nn.Module):
             with torch.no_grad():
                 self.base.weight.data -= self.scaling * (self.lora_B @ self.lora_A)
             self.merged = False
+            self._invalidate_cache()
 
     @property
     def weight(self):
         """Совместимость с weight tying."""
         if self.merged:
             return self.base.weight
-        return self.base.weight + self.scaling * (self.lora_B @ self.lora_A)
+        if self._weight_cache is None or self.training:
+            self._weight_cache = self.base.weight + self.scaling * (self.lora_B @ self.lora_A)
+        return self._weight_cache
 
 
 def apply_lora(model, cfg):

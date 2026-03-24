@@ -135,7 +135,7 @@ class DynamicTemperature:
     def compute_entropy(self, logits):
         """Вычисляет энтропию softmax распределения."""
         probs = F.softmax(logits / self.temperature, dim=-1)
-        entropy = -(probs * (probs + 1e-10).log()).sum(dim=-1).mean()
+        entropy = -(probs * probs.clamp(min=1e-10).log()).sum(dim=-1).mean()
         return entropy.item()
 
     def adapt(self, logits):

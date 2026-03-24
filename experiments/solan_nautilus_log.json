@@ -1,0 +1,711 @@
+{
+  "config": {
+    "vocab_size": 256,
+    "d_model": 128,
+    "n_layers": 4,
+    "n_heads": 4,
+    "block_size": 256,
+    "dropout": 0.0,
+    "steps": 3000,
+    "batch_size": 8,
+    "lr": 0.0003,
+    "warmup_steps": 200,
+    "grad_clip": 1.0,
+    "n_experts": 6,
+    "routing_temperature": 0.5,
+    "routing_loss_weight": 0.3,
+    "log_every": 100,
+    "xerox_every": 500,
+    "save_every": 1000,
+    "target_xerox_rate": 0.8,
+    "target_diversity": 0.16,
+    "baseline_ppl": 1.51
+  },
+  "baseline_ppl": 1.51,
+  "steps": [
+    1,
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900,
+    1000,
+    1100,
+    1200,
+    1300,
+    1400,
+    1500,
+    1600,
+    1700,
+    1800,
+    1900,
+    2000,
+    2100,
+    2200,
+    2300,
+    2400,
+    2500,
+    2600,
+    2700,
+    2800,
+    2900,
+    3000
+  ],
+  "losses": [
+    6.0779,
+    4.8582,
+    3.4227,
+    3.2585,
+    2.681,
+    2.4033,
+    2.3593,
+    2.389,
+    2.7493,
+    2.5588,
+    2.6366,
+    2.3033,
+    2.3743,
+    2.423,
+    2.6369,
+    1.9526,
+    2.2898,
+    2.7063,
+    2.602,
+    2.5836,
+    2.3438,
+    2.1332,
+    1.902,
+    2.6032,
+    2.2441,
+    2.5138,
+    2.294,
+    2.2424,
+    2.296,
+    2.1512,
+    2.3426
+  ],
+  "ppls": [
+    257.1095,
+    81.1965,
+    19.332,
+    16.9985,
+    9.4778,
+    7.2809,
+    6.8297,
+    7.1347,
+    10.2588,
+    8.4387,
+    9.1171,
+    6.561,
+    6.981,
+    7.4612,
+    9.1086,
+    4.6218,
+    6.4172,
+    9.75,
+    8.8505,
+    8.5057,
+    6.945,
+    5.5177,
+    4.4136,
+    8.8155,
+    6.2574,
+    8.1347,
+    6.5064,
+    6.195,
+    6.5335,
+    5.7001,
+    6.9256
+  ],
+  "routing_confidences": [
+    {
+      "step": 500,
+      "conf": 0.3133
+    },
+    {
+      "step": 1000,
+      "conf": 0.3298
+    },
+    {
+      "step": 1500,
+      "conf": 0.3214
+    },
+    {
+      "step": 2000,
+      "conf": 0.3277
+    },
+    {
+      "step": 2500,
+      "conf": 0.3286
+    },
+    {
+      "step": 3000,
+      "conf": 0.3299
+    }
+  ],
+  "xerox_results": [
+    {
+      "step": 500,
+      "passed": 0,
+      "total": 5,
+      "pass_rate": 0.0,
+      "details": [
+        {
+          "text": "def neural_network(x):",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 55.02,
+          "ppl_ok": false,
+          "weights": [
+            0.039,
+            0.33,
+            0.329,
+            0.034,
+            0.221,
+            0.048
+          ]
+        },
+        {
+          "text": "class GradientDescent:",
+          "expected": "CODE",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 20.05,
+          "ppl_ok": false,
+          "weights": [
+            0.036,
+            0.303,
+            0.36,
+            0.027,
+            0.233,
+            0.041
+          ]
+        },
+        {
+          "text": "SELECT * FROM experts",
+          "expected": "SYSTEM",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 47.76,
+          "ppl_ok": false,
+          "weights": [
+            0.027,
+            0.403,
+            0.279,
+            0.037,
+            0.193,
+            0.059
+          ]
+        },
+        {
+          "text": "Hexagram as archetype",
+          "expected": "HUMAN",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 20.46,
+          "ppl_ok": false,
+          "weights": [
+            0.044,
+            0.258,
+            0.391,
+            0.025,
+            0.241,
+            0.041
+          ]
+        },
+        {
+          "text": "knowledge concept theory",
+          "expected": "INFO",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 22.93,
+          "ppl_ok": false,
+          "weights": [
+            0.066,
+            0.199,
+            0.39,
+            0.025,
+            0.285,
+            0.034
+          ]
+        }
+      ]
+    },
+    {
+      "step": 1000,
+      "passed": 0,
+      "total": 5,
+      "pass_rate": 0.0,
+      "details": [
+        {
+          "text": "def neural_network(x):",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 51.62,
+          "ppl_ok": false,
+          "weights": [
+            0.027,
+            0.408,
+            0.301,
+            0.039,
+            0.122,
+            0.103
+          ]
+        },
+        {
+          "text": "class GradientDescent:",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 20.26,
+          "ppl_ok": false,
+          "weights": [
+            0.023,
+            0.438,
+            0.254,
+            0.041,
+            0.171,
+            0.074
+          ]
+        },
+        {
+          "text": "SELECT * FROM experts",
+          "expected": "SYSTEM",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 38.36,
+          "ppl_ok": false,
+          "weights": [
+            0.019,
+            0.487,
+            0.123,
+            0.111,
+            0.142,
+            0.118
+          ]
+        },
+        {
+          "text": "Hexagram as archetype",
+          "expected": "HUMAN",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 20.07,
+          "ppl_ok": false,
+          "weights": [
+            0.027,
+            0.351,
+            0.333,
+            0.034,
+            0.186,
+            0.069
+          ]
+        },
+        {
+          "text": "knowledge concept theory",
+          "expected": "INFO",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 22.03,
+          "ppl_ok": false,
+          "weights": [
+            0.035,
+            0.309,
+            0.367,
+            0.03,
+            0.207,
+            0.053
+          ]
+        }
+      ]
+    },
+    {
+      "step": 1500,
+      "passed": 0,
+      "total": 5,
+      "pass_rate": 0.0,
+      "details": [
+        {
+          "text": "def neural_network(x):",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 47.13,
+          "ppl_ok": false,
+          "weights": [
+            0.033,
+            0.353,
+            0.352,
+            0.031,
+            0.123,
+            0.108
+          ]
+        },
+        {
+          "text": "class GradientDescent:",
+          "expected": "CODE",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 21.2,
+          "ppl_ok": false,
+          "weights": [
+            0.03,
+            0.341,
+            0.349,
+            0.031,
+            0.136,
+            0.113
+          ]
+        },
+        {
+          "text": "SELECT * FROM experts",
+          "expected": "SYSTEM",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 32.58,
+          "ppl_ok": false,
+          "weights": [
+            0.025,
+            0.415,
+            0.106,
+            0.133,
+            0.209,
+            0.113
+          ]
+        },
+        {
+          "text": "Hexagram as archetype",
+          "expected": "HUMAN",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 15.92,
+          "ppl_ok": false,
+          "weights": [
+            0.048,
+            0.212,
+            0.445,
+            0.022,
+            0.213,
+            0.06
+          ]
+        },
+        {
+          "text": "knowledge concept theory",
+          "expected": "INFO",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 20.93,
+          "ppl_ok": false,
+          "weights": [
+            0.039,
+            0.263,
+            0.419,
+            0.023,
+            0.197,
+            0.06
+          ]
+        }
+      ]
+    },
+    {
+      "step": 2000,
+      "passed": 0,
+      "total": 5,
+      "pass_rate": 0.0,
+      "details": [
+        {
+          "text": "def neural_network(x):",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 49.27,
+          "ppl_ok": false,
+          "weights": [
+            0.032,
+            0.387,
+            0.289,
+            0.044,
+            0.131,
+            0.118
+          ]
+        },
+        {
+          "text": "class GradientDescent:",
+          "expected": "CODE",
+          "actual": "HUMAN",
+          "routing_correct": false,
+          "ppl": 19.15,
+          "ppl_ok": false,
+          "weights": [
+            0.062,
+            0.254,
+            0.281,
+            0.041,
+            0.287,
+            0.075
+          ]
+        },
+        {
+          "text": "SELECT * FROM experts",
+          "expected": "SYSTEM",
+          "actual": "HUMAN",
+          "routing_correct": false,
+          "ppl": 34.07,
+          "ppl_ok": false,
+          "weights": [
+            0.072,
+            0.26,
+            0.061,
+            0.216,
+            0.312,
+            0.08
+          ]
+        },
+        {
+          "text": "Hexagram as archetype",
+          "expected": "HUMAN",
+          "actual": "HUMAN",
+          "routing_correct": true,
+          "ppl": 15.16,
+          "ppl_ok": false,
+          "weights": [
+            0.063,
+            0.178,
+            0.33,
+            0.036,
+            0.359,
+            0.034
+          ]
+        },
+        {
+          "text": "knowledge concept theory",
+          "expected": "INFO",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 20.34,
+          "ppl_ok": false,
+          "weights": [
+            0.046,
+            0.23,
+            0.373,
+            0.028,
+            0.279,
+            0.044
+          ]
+        }
+      ]
+    },
+    {
+      "step": 2500,
+      "passed": 0,
+      "total": 5,
+      "pass_rate": 0.0,
+      "details": [
+        {
+          "text": "def neural_network(x):",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 51.03,
+          "ppl_ok": false,
+          "weights": [
+            0.026,
+            0.414,
+            0.27,
+            0.044,
+            0.093,
+            0.154
+          ]
+        },
+        {
+          "text": "class GradientDescent:",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 18.6,
+          "ppl_ok": false,
+          "weights": [
+            0.035,
+            0.325,
+            0.301,
+            0.039,
+            0.199,
+            0.101
+          ]
+        },
+        {
+          "text": "SELECT * FROM experts",
+          "expected": "SYSTEM",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 36.13,
+          "ppl_ok": false,
+          "weights": [
+            0.05,
+            0.364,
+            0.069,
+            0.188,
+            0.224,
+            0.105
+          ]
+        },
+        {
+          "text": "Hexagram as archetype",
+          "expected": "HUMAN",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 15.65,
+          "ppl_ok": false,
+          "weights": [
+            0.045,
+            0.251,
+            0.36,
+            0.033,
+            0.264,
+            0.046
+          ]
+        },
+        {
+          "text": "knowledge concept theory",
+          "expected": "INFO",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 19.58,
+          "ppl_ok": false,
+          "weights": [
+            0.036,
+            0.276,
+            0.383,
+            0.026,
+            0.219,
+            0.059
+          ]
+        }
+      ]
+    },
+    {
+      "step": 3000,
+      "passed": 0,
+      "total": 5,
+      "pass_rate": 0.0,
+      "details": [
+        {
+          "text": "def neural_network(x):",
+          "expected": "CODE",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 49.92,
+          "ppl_ok": false,
+          "weights": [
+            0.026,
+            0.409,
+            0.281,
+            0.042,
+            0.099,
+            0.143
+          ]
+        },
+        {
+          "text": "class GradientDescent:",
+          "expected": "CODE",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 18.78,
+          "ppl_ok": false,
+          "weights": [
+            0.041,
+            0.299,
+            0.32,
+            0.036,
+            0.211,
+            0.094
+          ]
+        },
+        {
+          "text": "SELECT * FROM experts",
+          "expected": "SYSTEM",
+          "actual": "RECON",
+          "routing_correct": false,
+          "ppl": 36.61,
+          "ppl_ok": false,
+          "weights": [
+            0.061,
+            0.327,
+            0.063,
+            0.207,
+            0.24,
+            0.102
+          ]
+        },
+        {
+          "text": "Hexagram as archetype",
+          "expected": "HUMAN",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 15.53,
+          "ppl_ok": false,
+          "weights": [
+            0.048,
+            0.226,
+            0.366,
+            0.032,
+            0.285,
+            0.043
+          ]
+        },
+        {
+          "text": "knowledge concept theory",
+          "expected": "INFO",
+          "actual": "SYSTEM",
+          "routing_correct": false,
+          "ppl": 19.52,
+          "ppl_ok": false,
+          "weights": [
+            0.041,
+            0.249,
+            0.402,
+            0.025,
+            0.229,
+            0.054
+          ]
+        }
+      ]
+    }
+  ],
+  "diversity_history": [
+    {
+      "step": 500,
+      "diversity": 0.0669
+    },
+    {
+      "step": 1000,
+      "diversity": 0.0568
+    },
+    {
+      "step": 1500,
+      "diversity": 0.0671
+    },
+    {
+      "step": 2000,
+      "diversity": 0.0747
+    },
+    {
+      "step": 2500,
+      "diversity": 0.0634
+    },
+    {
+      "step": 3000,
+      "diversity": 0.0675
+    }
+  ],
+  "final_ppl": 6.9256,
+  "xerox_pass_rate": 0.0,
+  "cross_domain_diversity": 0.0675,
+  "verdict": "disproven",
+  "total_time_s": 623.5
+}

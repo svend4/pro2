@@ -37,10 +37,16 @@ class CharTokenizer:
         return len(self.chars) + 2  # +PAD +UNK
 
     def bos_id(self) -> int:
+        """BOS не поддерживается в CharTokenizer."""
         return -1
 
     def eos_id(self) -> int:
+        """EOS не поддерживается в CharTokenizer."""
         return -1
+
+    def encode_with_special(self, text: str) -> list:
+        """Кодирует текст (без BOS/EOS — CharTokenizer их не поддерживает)."""
+        return self.encode(text)
 
     @classmethod
     def from_text(cls, text: str):
@@ -221,8 +227,8 @@ class BPETokenizer:
     def encode(self, text):
         """Кодирует текст в BPE токены."""
         tokens = [b + self.SPECIAL_OFFSET for b in text.encode('utf-8')]
-        for pair in self.merges:
-            new_id = 256 + self.SPECIAL_OFFSET + self.merges.index(pair)
+        for i, pair in enumerate(self.merges):
+            new_id = 256 + self.SPECIAL_OFFSET + i
             tokens = self._apply_merge(tokens, pair, new_id)
         return tokens
 
