@@ -444,8 +444,10 @@ pip install -e ".[viz]"   # Визуализация
 |------|-----------|
 | `docs/ARCHITECTURE.md` | Архитектурный справочник: Q6, HMoE, компоненты, конфигурации |
 | `docs/TRAINING.md` | Руководство по обучению: скрипты, pipeline, диагностика |
+| `docs/API.md` | Справочник API: модели, конфиг, inference, квантизаторы, LoRA, экспорт |
 | `docs/GEOMETRY.md` | Справочник модуля geometry/: квантизаторы, attention, routing, FFN |
 | `docs/TRAINING_UTILS.md` | Тренировочные утилиты: TrainingBridge, оптимизаторы, мониторинг |
+| `docs/IMPLEMENTATION_STATUS.md` | Аудит: что реализовано в коде, что только в теории, что не используется |
 
 ### Концептуальная
 
