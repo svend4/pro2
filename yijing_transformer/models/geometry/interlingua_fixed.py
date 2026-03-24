@@ -9,6 +9,7 @@ interlingua_fixed.py — Исправленная ArchetypalInterlingua.
     1. Per-source trit_proj: каждый источник имеет свой проектор
     2. Diversity loss: штраф за одинаковое голосование
     3. Gumbel-Softmax вместо STE (см. quantizer_fixed.py)
+    4. Cosine annealing температуры: start_temp → end_temp за warmup_steps
 """
 
 import math
@@ -36,12 +37,17 @@ class ArchetypalInterlinguaFixed(nn.Module):
         n_archetypes: int = 64,
         diversity_weight: float = 0.01,
         warmup_steps: int = 3000,
+        start_temp: float = 1.0,
+        end_temp: float = 0.05,
     ):
         super().__init__()
         self.d_model = d_model
         self.n_sources = n_sources
         self.n_archetypes = n_archetypes
         self.diversity_weight = diversity_weight
+        self.warmup_steps = warmup_steps
+        self.start_temp = start_temp
+        self.end_temp = end_temp
 
         # ── ИСПРАВЛЕНИЕ 1: Per-source проекторы ──────────────────
         # БЫЛО: self.trit_proj = nn.Linear(d_model, n_archetypes)
@@ -57,25 +63,22 @@ class ArchetypalInterlinguaFixed(nn.Module):
             nn.init.zeros_(proj.bias)
 
         # ── Архетипические якоря (фиксированные Q6-вершины) ───────
-        # Архетипные якоря: (n_archetypes, 6) — первые n_archetypes вершин Q6
         all_anchors = self._generate_q6_vertices()  # (64, 6)
         anchors = all_anchors[:n_archetypes]
         self.register_buffer('archetype_anchors', anchors)
 
         # Проектор: n_archetypes-мерный консенсус → d_model через Q6-якоря
-        # consensus (B, n_archetypes) @ anchors (n_archetypes, 6) → (B, 6) → d_model
         self.anchor_to_hidden = nn.Linear(6, d_model, bias=False)
 
-        # Readout: attention по архетипам
-        self.readout_query = nn.Linear(d_model, d_model)
-        self.readout_key = nn.Linear(d_model, d_model)
+        # Readout attention
+        self.readout_attn = nn.MultiheadAttention(
+            d_model, num_heads=4, batch_first=True, dropout=0.0
+        )
 
         # Gate: сколько брать из интерлингвы vs прямого пути
-        # Инициализировать в 0 → sigmoid(0) = 0.5 = честный старт
         self.gate = nn.Parameter(torch.zeros(1))
 
         # ── ИСПРАВЛЕНИЕ 2: Temperature annealing (Gumbel) ─────────
-        self.warmup_steps = warmup_steps
         self.register_buffer('_step', torch.tensor(0, dtype=torch.long))
 
     def _generate_q6_vertices(self) -> torch.Tensor:
@@ -84,10 +87,11 @@ class ArchetypalInterlinguaFixed(nn.Module):
         return torch.tensor(vertices, dtype=torch.float32)  # (64, 6)
 
     def _get_temperature(self) -> float:
-        """Косинусное расписание температуры: 1.0 → 0.05 за warmup_steps."""
+        """Косинусное расписание температуры: start_temp → end_temp за warmup_steps."""
         step = self._step.item()
         progress = min(step / max(self.warmup_steps, 1), 1.0)
-        return 1.0 - (1.0 - 0.05) * (1 - math.cos(math.pi * progress)) / 2
+        factor = (1 - math.cos(math.pi * progress)) / 2
+        return self.start_temp + (self.end_temp - self.start_temp) * factor
 
     def _compute_trits(
         self, source_outputs: List[torch.Tensor]
@@ -167,8 +171,9 @@ class ArchetypalInterlinguaFixed(nn.Module):
         consensus = trit_stack.mean(dim=0)  # (B, n_archetypes)
 
         # Преобразовать консенсус через архетипные якоря
-        archetype_emb = consensus @ self.archetype_anchors  # (B, 6)
-        interlingua_signal = self.anchor_to_hidden(archetype_emb)  # (B, d_model)
+        soft_q6 = F.softmax(consensus, dim=-1)          # (B, n_archetypes)
+        archetype_pos = soft_q6 @ self.archetype_anchors  # (B, 6)
+        interlingua_signal = self.anchor_to_hidden(archetype_pos)  # (B, d_model)
         interlingua_signal = interlingua_signal.unsqueeze(1).expand(B, T_seq, -1)
 
         # Gate: смешать с прямым путём
@@ -181,25 +186,64 @@ class ArchetypalInterlinguaFixed(nn.Module):
         aux_loss = self.diversity_weight * diversity_loss
         return output, aux_loss
 
-    def get_diagnostics(self, source_outputs: List[torch.Tensor]) -> dict:
+    def diagnostics(self, source_outputs: List[torch.Tensor]) -> dict:
         """
         Диагностика: проверить дифференциацию тритов.
         Вызывать каждые 200 шагов для мониторинга.
+        Здоровые значения: diversity_loss > 0.1, gate между 0.3 и 0.7.
         """
         with torch.no_grad():
             trit_stack, div_loss = self._compute_trits(source_outputs)
 
-        diagnostics = {
-            'temperature': self._get_temperature(),
-            'step': self._step.item(),
-            'gate_value': torch.sigmoid(self.gate).item(),
+        d = {
+            'step':           self._step.item(),
+            'temperature':    self._get_temperature(),
+            'gate':           torch.sigmoid(self.gate).item(),
             'diversity_loss': div_loss.item() if hasattr(div_loss, 'item') else float(div_loss),
         }
-
         for i in range(self.n_sources):
             trits = trit_stack[i]  # (B, n_archetypes)
-            diagnostics[f'source_{i}_trit_pos'] = (trits > 0.5).float().mean().item()
-            diagnostics[f'source_{i}_trit_neg'] = (trits < -0.5).float().mean().item()
-            diagnostics[f'source_{i}_trit_zero'] = (trits.abs() < 0.5).float().mean().item()
+            d[f'src{i}_pos']  = (trits > 0.5).float().mean().item()
+            d[f'src{i}_neg']  = (trits < -0.5).float().mean().item()
+            d[f'src{i}_zero'] = (trits.abs() < 0.5).float().mean().item()
+        return d
 
-        return diagnostics
+    # Alias for backward compat
+    get_diagnostics = diagnostics
+
+
+# ─── Быстрый тест модуля ─────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    print("Тест ArchetypalInterlinguaFixed...")
+
+    model = ArchetypalInterlinguaFixed(
+        d_model=64, n_sources=3, n_archetypes=16,
+        diversity_weight=0.1, warmup_steps=50,
+        start_temp=1.0, end_temp=0.05,
+    )
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    for step in range(30):
+        sources = [torch.randn(2, 8, 64) * (i + 1) * 0.3 for i in range(3)]
+        core = torch.randn(2, 8, 64)
+        out, aux = model(sources, core)
+        loss = out.pow(2).mean() + aux
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+    model.eval()
+    sources = [torch.randn(2, 8, 64) * (i + 1) for i in range(3)]
+    d = model.diagnostics(sources)
+
+    print(f"  Температура:      {d['temperature']:.3f}")
+    print(f"  Gate:             {d['gate']:.3f}")
+    print(f"  Diversity loss:   {d['diversity_loss']:.4f}")
+
+    pos_vals = [d[f'src{i}_pos'] for i in range(3)]
+    spread = max(pos_vals) - min(pos_vals)
+    print(f"  Разброс trit_pos: {spread:.3f}")
+
+    ok = spread > 0.03
+    print(f"\n{'✅ ТЕСТ ПРОЙДЕН' if ok else '⚠️  Малый разброс — увеличьте diversity_weight'}")

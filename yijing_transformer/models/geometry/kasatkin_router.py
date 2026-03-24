@@ -22,6 +22,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# Имена доменов (из CONCEPTUAL_STAGE.md)
+DOMAIN_NAMES = ["GEO", "HYDRO", "PYRO", "AERO", "COSMO", "NOOS"]
+DOMAIN_ALT   = ["CODE", "RECON", "SYSTEM", "MATH", "HUMAN", "INFO"]
+
+
 class KasatkinQ6Router(nn.Module):
     """Маршрутизация 6 экспертов через 3D-проекцию Касаткина.
 
@@ -38,10 +43,11 @@ class KasatkinQ6Router(nn.Module):
         d_model: размерность входных векторов
         n_experts: ДОЛЖНО быть 6 (= числу осей Q6-куба)
         routing_temperature: температура softmax (ниже → резче выбор)
+        use_learned_axes: разрешить обучение осей (по умолчанию фиксированы)
     """
 
     # Имена доменов для визуализации и ксерокс-теста
-    EXPERT_NAMES = ['CODE', 'RECON', 'SYSTEM', 'MATH', 'HUMAN', 'INFO']
+    EXPERT_NAMES = DOMAIN_ALT  # ['CODE', 'RECON', 'SYSTEM', 'MATH', 'HUMAN', 'INFO']
 
     # 6 осей куба: ±X, ±Y, ±Z
     _EXPERT_AXES = torch.tensor([
@@ -58,6 +64,7 @@ class KasatkinQ6Router(nn.Module):
         d_model: int = 128,
         n_experts: int = 6,
         routing_temperature: float = 0.5,
+        use_learned_axes: bool = False,
     ):
         super().__init__()
         if n_experts != 6:
@@ -72,8 +79,11 @@ class KasatkinQ6Router(nn.Module):
         # Проектор d_model → 3D (обучаемый)
         self.proj_3d = nn.Linear(d_model, 3, bias=False)
 
-        # 6 осей (не обучаются — фиксированная геометрия)
-        self.register_buffer('expert_axes', self._EXPERT_AXES)
+        if use_learned_axes:
+            self.expert_axes = nn.Parameter(self._EXPERT_AXES.clone())
+        else:
+            # 6 осей (не обучаются — фиксированная геометрия)
+            self.register_buffer('expert_axes', self._EXPERT_AXES)
 
         # Инициализация: ортогональная проекция
         nn.init.orthogonal_(self.proj_3d.weight)
@@ -94,10 +104,10 @@ class KasatkinQ6Router(nn.Module):
         coords_norm = F.normalize(coords_3d, dim=-1)  # (B, T, 3)
 
         # Сходство с каждой из 6 осей
-        # expert_axes: (6, 3) → unsqueeze → (1, 1, 6, 3)
-        axes = self.expert_axes.view(1, 1, 6, 3)
+        axes = F.normalize(self.expert_axes, dim=-1)  # (6, 3)
+        axes_exp = axes.view(1, 1, 6, 3)
         coords_exp = coords_norm.unsqueeze(2)  # (B, T, 1, 3)
-        similarities = (coords_exp * axes).sum(dim=-1)  # (B, T, 6)
+        similarities = (coords_exp * axes_exp).sum(dim=-1)  # (B, T, 6)
 
         # Мягкие routing weights
         routing_weights = F.softmax(
@@ -116,7 +126,7 @@ class KasatkinQ6Router(nn.Module):
 
         Args:
             x: (B, T, d_model)
-            expert_modules: список из 6 nn.Module (каждый: (B, T, d_model) → (B, T, d_model))
+            expert_modules: список из 6 nn.Module
 
         Returns:
             output: (B, T, d_model) — взвешенная смесь экспертов
@@ -125,13 +135,11 @@ class KasatkinQ6Router(nn.Module):
 
         routing_weights = self.forward(x)  # (B, T, 6)
 
-        # Вычисляем вывод каждого эксперта
         expert_outputs = torch.stack(
             [expert(x) for expert in expert_modules],
             dim=-1,
         )  # (B, T, d_model, 6)
 
-        # Взвешенная сумма
         output = (
             expert_outputs * routing_weights.unsqueeze(2)
         ).sum(dim=-1)  # (B, T, d_model)
@@ -141,8 +149,7 @@ class KasatkinQ6Router(nn.Module):
     def get_routing_confidence(self, x: torch.Tensor) -> float:
         """Метрика уверенности роутера.
 
-        Высокая уверенность = одна ось доминирует → хорошая специализация.
-        Цель: > 15% (т.е. max weight > 1/6 + 0.15 = ~0.32).
+        Цель: > 15% (т.е. max weight > 1/6 + 0.15 ≈ 0.32).
 
         Args:
             x: (B, T, d_model)
@@ -166,7 +173,6 @@ class KasatkinQ6Router(nn.Module):
         Args:
             text: входная строка
             embed_fn: функция text → (1, T, d_model) tensor
-            device: устройство
 
         Returns:
             {domain_name: weight} — нормализованные веса по доменам
@@ -181,13 +187,36 @@ class KasatkinQ6Router(nn.Module):
             for i, name in enumerate(self.EXPERT_NAMES)
         }
 
-    def visualize_routing(
-        self,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
-        """Возвращает 3D-координаты для визуализации потоков в кубе.
+    def hex_label(self, x: torch.Tensor) -> list:
+        """
+        Вернуть читаемую метку домена для каждого токена.
+        Используется для интерпретации и ксерокс-теста.
 
-        Именно та «визуализируемость» о которой писал Касаткин.
+        Args:
+            x: (T, d_model) или (1, T, d_model)
+        """
+        if x.dim() == 2:
+            x = x.unsqueeze(0)
+
+        with torch.no_grad():
+            routing = self.forward(x)  # (1, T, 6)
+            active = routing.argmax(dim=-1)  # (1, T)
+
+        labels = []
+        for t in range(active.shape[-1]):
+            idx = active[0, t].item()
+            coords = self.proj_3d(x[0, t]).tolist()
+            labels.append({
+                'token_pos': t,
+                'expert':    idx,
+                'domain':    DOMAIN_NAMES[idx],
+                'alt_name':  DOMAIN_ALT[idx],
+                'coord_3d':  [round(c, 3) for c in coords],
+            })
+        return labels
+
+    def visualize_routing(self, x: torch.Tensor):
+        """Возвращает 3D-координаты для визуализации потоков в кубе.
 
         Args:
             x: (B, T, d_model)
@@ -200,13 +229,63 @@ class KasatkinQ6Router(nn.Module):
         return coords.cpu().numpy()
 
 
+class Q6ExpertBank(nn.Module):
+    """
+    Банк из 6 экспертов с Q6-маршрутизацией.
+    Заменяет стандартный MoE с softmax-routing.
+    """
+
+    def __init__(self, d_model: int, d_ffn: int, n_experts: int = 6):
+        super().__init__()
+        self.router = KasatkinQ6Router(d_model, n_experts=n_experts)
+
+        # 6 FFN-экспертов (по одному на домен)
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(d_model, d_ffn),
+                nn.GELU(),
+                nn.Linear(d_ffn, d_model),
+            )
+            for _ in range(n_experts)
+        ])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (B, T, d_model)
+        Returns:
+            out: (B, T, d_model) — взвешенная смесь выходов экспертов
+        """
+        routing = self.router(x)  # (B, T, 6)
+
+        expert_outputs = torch.stack(
+            [expert(x) for expert in self.experts], dim=-1
+        )  # (B, T, d_model, 6)
+
+        routing_expanded = routing.unsqueeze(-2)  # (B, T, 1, 6)
+        out = (expert_outputs * routing_expanded).sum(dim=-1)
+        return out
+
+
 if __name__ == '__main__':
-    router = KasatkinQ6Router(d_model=128)
-    x = torch.randn(2, 16, 128)
+    print("Тест KasatkinQ6Router...")
+    d = 64
+    router = KasatkinQ6Router(d_model=d, routing_temperature=0.3)
+
+    x = torch.randn(2, 16, d)
     weights = router.forward(x)
-    print(f"Routing weights shape: {weights.shape}")  # (2, 16, 6)
-    print(f"Weights sum: {weights.sum(dim=-1).mean():.4f}")  # ~1.0
+    print(f"  Routing weights shape: {weights.shape}")   # (2, 16, 6)
+    print(f"  Weights sum (must~1):  {weights.sum(dim=-1).mean():.4f}")
+
     conf = router.get_routing_confidence(x)
-    print(f"Routing confidence: {conf:.4f}")
-    coords = router.visualize_routing(x)
-    print(f"3D coords shape: {coords.shape}")  # (16, 3)
+    print(f"  Routing confidence:   {conf:.4f}  (цель > 0.15)")
+
+    labels = router.hex_label(x[0])
+    print(f"  Hex-label t=0: {labels[0]['domain']}/{labels[0]['alt_name']} {labels[0]['coord_3d']}")
+
+    print("\nТест Q6ExpertBank...")
+    bank = Q6ExpertBank(d_model=d, d_ffn=d * 4)
+    out = bank(x)
+    print(f"  Output shape: {out.shape}")   # (2, 16, 64)
+
+    print("\n✅ Тест завершён")
