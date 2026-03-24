@@ -340,6 +340,38 @@ tesseracts = q4_tesseracts()  # 15 × 16 вершин = 60 из 64 Q6-верши
 
 Сравнивает символьный подход meta (K3-категории, CA-правила) с нейросетевым про2 (TextQualityFilter, Q6-эмбеддинги). Визуализирует расхождение в Q6-координатах для одних и тех же концептов.
 
+### AbrialeBridgeMediator — лучший медиатор (v59, PPL=1.24)
+
+**Файл:** `yijing_transformer/models/geometry/routing.py:577`
+**Результат:** PPL = **1.24** (лучший в серии v57–v61)
+
+Используется как медиатор между геометрическими источниками в Portal-режиме. Объединяет иерархический bridge-tree (v58) с событийно-управляемыми N-местными связями Абриаля (v57):
+
+```python
+from yijing_transformer.models.geometry.routing import AbrialeBridgeMediator
+
+# n_sources = число геометрических источников Portal (обычно 3–5)
+mediator = AbrialeBridgeMediator(
+    d_model=128,
+    n_sources=3,          # число источников (MetaAdapter + pro2 + Info1)
+    bridge_mode='lightweight',
+    d_event=64,
+    n_rules=64,           # 64 = гексаграммы
+)
+
+# forward: x = query, source_outputs = список тензоров от каждого адаптера
+enriched = mediator(x, source_outputs=[meta_out, pro2_out, info1_out])
+```
+
+**Диагностика после forward:**
+
+```python
+stats = mediator.get_bridge_stats()
+# {'global_gate': 0.47, 'abriale_commit_rate': 0.62, 'n_levels': 2, ...}
+```
+
+> Подробнее: [GEOMETRY.md — AbrialeBridgeMediator](GEOMETRY.md) · [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
+
 ---
 
 ## 8. Nautilus Inference

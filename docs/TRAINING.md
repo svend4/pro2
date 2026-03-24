@@ -257,7 +257,7 @@ python pipeline.py --checkpoint hmoe_self_trained_v4.pt --no-adaptive-lr
 | `nautilus_cycles` | 8 | циклов за один проход |
 | `nautilus_step_scale` | 0.4 | масштаб шагов |
 | `turbine_cycles` | 8 | циклов в фазе 2 |
-| `turbine_spe` | 8 | шагов на эксперта в турбине |
+| `turbine_spe` | 8 | шагов на эксперта в турбине (`--turbine-spe` в pipeline.py → передаётся как `--steps_per_expert` в figure8_turbine.py) |
 | `turbine_lci_loss` | 0.1 | вес LCI-loss в турбине |
 | `adaptive_lr` | True | снижать lr до 5e-6 при LCI > 2.8 |
 | `reset_rag_pass` | 3 | с какого прохода использовать bent seeds |
@@ -540,9 +540,23 @@ print(log[-1])  # последний цикл
 # {'cycle': 12, 'avg_lci_r': 3.21, 'avg_lci_emb': 3.08, 'resonance_rate': 0.67, ...}
 ```
 
-Поддерживаемые форматы лога (читает `pipeline.read_avg_lci()`):
-- `avg_lci_all` — nautilus_4agent
-- `avg_lci_r` — figure8_turbine
-- `avg_LCI_r` — устаревший формат
-- `lci_r_final` — nautilus_clover
-- `avg_lci` — multi_salesman, bidir
+### Таблица соответствия log-ключей
+
+| Ключ в JSON | Скрипт | Описание |
+|------------|--------|---------|
+| `avg_lci_all` | `nautilus_4agent.py`, `nautilus_15agent.py` | Среднее LCI по всем агентам (Formula A) |
+| `avg_lci_r` | `figure8_turbine.py`, `roundabout.py` | Routing LCI финального цикла |
+| `avg_LCI_r` | legacy (`self_train_hmoe.py` v1-v3) | Устаревший формат, то же что `avg_lci_r` |
+| `lci_r_final` | `nautilus_clover.py` | LCI в конце прогона (не среднее) |
+| `avg_lci` | `multi_salesman.py`, `bidir_turbine.py` | Среднее LCI всех агентов/потоков |
+| `cycle` | все скрипты | Номер цикла (0-based) |
+| `resonance_rate` | `figure8_turbine.py`, `roundabout.py` | Доля циклов с LCI ∈ [π−0.3, π+0.3] |
+| `kirchhoff_ok` | `figure8_turbine.py` | True если max_group_weight ≤ balance_threshold |
+| `n_resonant` | `nautilus_15agent.py` | Число агентов в резонансе (из 15) |
+| `load_balance` | `nautilus_15agent.py` | Равномерность покрытия Q4 (0..1, цель ≥ 0.8) |
+| `lci_r_end` | `roundabout.py` | LCI в конце кольца (после всех оборотов) |
+| `n_laps` | `roundabout.py` | Число оборотов (≤ max_laps) |
+| `exited_early` | `roundabout.py` | True если резонанс достигнут до max_laps |
+| `ppl_val` | `self_train*.py` | Perplexity на валидационной выборке |
+
+Используется в `pipeline.py::read_avg_lci()` для выбора правильного ключа:
