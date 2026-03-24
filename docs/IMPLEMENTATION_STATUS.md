@@ -156,7 +156,7 @@
 | ~~PseudoRAG как реализованный класс~~ | ~~Средний~~ | ~~Средняя~~ | ✅ Реализовано: models/pseudo_rag.py |
 | ~~Полные формулировки 19 теорем~~ | ~~Низкий~~ | ~~Низкая~~ | ✅ Задокументировано: docs/THEOREMS.md |
 | ~~SOLAN как attention mechanism~~ | ~~Низкий~~ | ~~Средняя~~ | ✅ SOLANAttention в geometry/attention.py (use_solan_attention=True) |
-| 7-портовая архитектура (сейчас 3–5) | Низкий | Средняя |
+| ~~7-портовая архитектура~~ | ~~Низкий~~ | ~~Средняя~~ | ✅ 7 адаптеров: info1, pro2, meta, data2, data7, infosystems, ai_agents |
 
 ---
 
@@ -164,7 +164,7 @@
 
 **Реализовано в коде:** 6 моделей, 64 геометрических модуля, 4 тренировочных пайплайна, 5 стратегий генерации, 12 квантизаторов, LoRA, speculative decoding, ONNX export — всё с working forward() и 1731 тестом.
 
-**Только теория:** 7-портовая архитектура (сейчас 3–5 адаптеров).
+**Все заявленные компоненты реализованы.** Открытые задачи: масштабирование бенчмарков на WikiText-103+ и production deployment.
 
 **Закрыто в этом обновлении:** PseudoRAG (models/pseudo_rag.py), DDP (training/ddp.py), ExpertChoice MoE (интеграция в model.py), 19 теорем (docs/THEOREMS.md), масштабные тесты d=256 (test_integration_scale.py), тесты всех 12 attention паттернов (test_conditional_attention.py), исправлен баг batch broadcast в attention bias (model.py:655).
 

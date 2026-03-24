@@ -9,7 +9,10 @@ import argparse
 from dataclasses import dataclass
 from typing import Optional
 
-from adapters import Info1Adapter, Pro2Adapter, MetaAdapter, Data2Adapter, Data7Adapter
+from adapters import (
+    Info1Adapter, Pro2Adapter, MetaAdapter, Data2Adapter, Data7Adapter,
+    InfoSystemsAdapter, AIAgentsAdapter,
+)
 from adapters.base import PortalEntry
 
 
@@ -24,11 +27,13 @@ class PortalResult:
 class NautilusPortal:
     def __init__(self):
         self.adapters = {
-            "info1": Info1Adapter(),
-            "pro2":  Pro2Adapter(),
-            "meta":  MetaAdapter(),
-            "data2": Data2Adapter(),
-            "data7": Data7Adapter(),
+            "info1":       Info1Adapter(),
+            "pro2":        Pro2Adapter(),
+            "meta":        MetaAdapter(),
+            "data2":       Data2Adapter(),
+            "data7":       Data7Adapter(),
+            "infosystems": InfoSystemsAdapter(),
+            "ai_agents":   AIAgentsAdapter(),
         }
 
     def query(self, concept: str) -> PortalResult:
