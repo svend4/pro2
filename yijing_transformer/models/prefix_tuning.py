@@ -1,4 +1,7 @@
 """
+EXPERIMENTAL — не используется в production моделях (YiJingGPT, LeanYiJingGPT, Variant3GPT).
+Импортируется только в test_model_pytest.py. Оставлен для будущих экспериментов.
+
 Prefix Tuning, Logit Lens, Multi-Token Prediction.
 
 Prefix Tuning: обучаемые prefix-токены, prepended к каждому слою.

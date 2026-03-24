@@ -1,4 +1,7 @@
 """
+EXPERIMENTAL — не используется в training pipeline.
+Импортируется только в test_model_pytest.py. Оставлен для будущих экспериментов.
+
 EMA (Exponential Moving Average) и Early Stopping для YiJing-Transformer.
 
 EMA поддерживает скользящее среднее весов модели для более стабильного инференса.

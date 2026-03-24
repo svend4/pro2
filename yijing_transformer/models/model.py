@@ -83,6 +83,10 @@ from .geometry import (
 )
 # v60-fixed: ArchetypalInterlinguaFixed — per-source trit_proj, diversity loss, cosine annealing
 from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInterlinguaFixed
+# Expert Choice MoE routing (Zhou et al., 2022)
+from yijing_transformer.models.expert_choice import ExpertChoiceRouter
+# PseudoRAG: Q4 (16 архетипов) → Q6 (64 гексаграмм) bridge
+from yijing_transformer.models.pseudo_rag import PseudoRAGProjection, PseudoRAGDistillationLoss
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 from yijing_transformer.tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
@@ -596,9 +600,18 @@ class YiJingTransformerLayer(nn.Module):
         # FFN или MoE
         self.use_moe = cfg.use_hex_moe
         self.use_domain_moe = getattr(cfg, 'use_domain_moe', False)
+        self.use_expert_choice = getattr(cfg, 'use_expert_choice', False)
         self.ln_ffn = nn.LayerNorm(cfg.d_model)
 
-        if self.use_domain_moe:
+        if self.use_expert_choice:
+            self.ffn = ExpertChoiceRouter(
+                d_model=cfg.d_model,
+                n_experts=cfg.n_experts,
+                capacity_factor=getattr(cfg, 'expert_choice_capacity', 1.0),
+                ffn_hidden=cfg.ffn_hidden,
+                dropout=cfg.dropout,
+            )
+        elif self.use_domain_moe:
             self.ffn = DomainMoE(
                 d_model=cfg.d_model,
                 n_experts=getattr(cfg, 'domain_moe_n_experts', 6),
@@ -656,7 +669,8 @@ class YiJingTransformerLayer(nn.Module):
             attn_out = self.attn(h)
             # For alternative attentions: compose bias post-hoc
             if extra_bias is not None:
-                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
+                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (?,T,T)
+                bias_w = bias_w.expand(B, -1, -1)  # (B,T,T)
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
         # v54/v58/v59: Geometric source mixing (replaces fixed coefficients)
@@ -771,7 +785,11 @@ class YiJingTransformerLayer(nn.Module):
 
         # 5. FFN или MoE
         h_ffn = self.ln_ffn(x)
-        if self.use_domain_moe:
+        if self.use_expert_choice:
+            ffn_out, aux_info = self.ffn(h_ffn)
+            x = x + ffn_out
+            self._aux_loss = 0.0  # Expert Choice has perfect load balance, no aux loss
+        elif self.use_domain_moe:
             ffn_out, aux_loss = self.ffn(h_ffn, domain_ids=domain_ids)
             x = x + ffn_out
             self._aux_loss = aux_loss
@@ -1001,6 +1019,15 @@ class YiJingGPT(nn.Module):
                 enabled_chambers=enabled,
             )
 
+        # PseudoRAG: Q4→Q6 bridge (формальное вложение 16 архетипов → 64 гексаграммы)
+        self.use_pseudo_rag = getattr(cfg, 'use_pseudo_rag', False)
+        if self.use_pseudo_rag:
+            self.pseudo_rag = PseudoRAGProjection(d_model=cfg.d_model)
+            self.pseudo_rag_distill = PseudoRAGDistillationLoss(
+                temperature=getattr(cfg, 'distill_temp', 2.0),
+            )
+            self._pseudo_rag_distill_weight = getattr(cfg, 'pseudo_rag_distill_weight', 0.1)
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -1106,6 +1133,26 @@ class YiJingGPT(nn.Module):
             x, nautilus_info = self.nautilus(x)
 
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache, domain_ids=domain_ids)
+
+        # PseudoRAG: blend Q4→Q6 projection with quantizer-enriched hidden states
+        pseudo_rag_info = None
+        if self.use_pseudo_rag:
+            # Q6 weights from PseudoRAG bridge: (B, T, 64)
+            q6_weights = self.pseudo_rag(hidden)
+            # Full Q6 embedding: (64, 6) → project back to d_model via from_qd of first layer
+            q6_embed = self.pseudo_rag.get_full_q6_embedding()  # (64, 6)
+            # Мягкая реконструкция: weighted sum of Q6 vertices → (B, T, 6)
+            q6_soft = torch.matmul(q6_weights, q6_embed)  # (B, T, 6)
+            # Проецируем 6D → d_model через первый слой from_qd (shared geom)
+            first_layer = self.core.layers[0]
+            q6_contribution = first_layer.from_qd(q6_soft)  # (B, T, D)
+            # Blend: масштабируем как hex_scale первого слоя
+            hidden = hidden + first_layer.hex_scale * 0.5 * q6_contribution
+            pseudo_rag_info = {
+                'q6_weights': q6_weights,
+                'q4_logits': self.pseudo_rag.get_q4_logits(hidden),
+            }
+
         logits = self.head(hidden)
 
         loss = None
@@ -1133,6 +1180,23 @@ class YiJingGPT(nn.Module):
                     abriale_info['hit_weights']
                 )
                 loss = loss + self._abriale_balance_weight * abriale_loss
+
+            # PseudoRAG distillation loss: Q4 teacher → Q6 student
+            if pseudo_rag_info is not None:
+                # Self-distillation: Q4 logits serve as teacher targets
+                q4_targets = pseudo_rag_info['q4_logits'].detach()
+                # Q6 logits from raw projection (before softmax)
+                q6_logits = self.pseudo_rag.proj_q4(hidden)  # reuse for Q4 part
+                # Full Q6 logits = coarse + fine
+                q6_logits_full = self.pseudo_rag.refine_proj(hidden)
+                q4_coarse = self.pseudo_rag.proj_q4(hidden)
+                q6_expanded = torch.matmul(
+                    F.softmax(q4_coarse, dim=-1),
+                    self.pseudo_rag.cluster_expand,
+                )
+                q6_logits_for_distill = q6_expanded + self.pseudo_rag.blend_scale * q6_logits_full
+                distill_loss = self.pseudo_rag_distill(q6_logits_for_distill, q4_targets)
+                loss = loss + self._pseudo_rag_distill_weight * distill_loss
 
         return logits, loss, new_kv_cache
 

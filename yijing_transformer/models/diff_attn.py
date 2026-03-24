@@ -1,4 +1,7 @@
 """
+EXPERIMENTAL — не используется в production моделях (YiJingGPT, LeanYiJingGPT, Variant3GPT).
+Импортируется только в test_model_pytest.py. Оставлен для будущих экспериментов.
+
 Differential Attention и KV-cache quantization.
 
 Differential Attention вычисляет attention как разность двух softmax карт,

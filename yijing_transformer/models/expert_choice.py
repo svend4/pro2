@@ -1,4 +1,7 @@
 """
+Интегрирован в YiJingGPT через use_expert_choice=True в YiJingConfig.
+Также используется в knowledge_system.py.
+
 Expert Choice MoE routing и Cross-Layer Parameter Sharing.
 
 Expert Choice: вместо token→expert routing (top-k),

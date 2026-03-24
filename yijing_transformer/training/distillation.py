@@ -1,4 +1,7 @@
 """
+EXPERIMENTAL — не используется в training pipeline.
+Импортируется только в test_model_pytest.py. Оставлен для будущих экспериментов.
+
 Knowledge Distillation для YiJing-Transformer.
 
 Обучает student модель на soft targets от teacher модели.
