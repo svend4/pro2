@@ -56,6 +56,7 @@ from .geometry import (
     MobiusAttentionPattern,
     PrivilegedAxisAttention,
     HeisenbergAttention,
+    SOLANAttention,
     FlowerOfLifeGAT,
     StructuralDefectLayer,
     HexagramAttentionPattern,
@@ -72,6 +73,8 @@ from .geometry import (
     ArchetypalInterlingua,
     # v61: BridgedInterlingua (двойная прослойка)
     BridgedInterlingua,
+    # v51-unified: Six Sources integration
+    SixSourceLayer,
     # v54: Kasatkin 3D embedding
     CubicAttentionBias,
     CubicPositionalEncoding,
@@ -87,6 +90,8 @@ from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInter
 from yijing_transformer.models.expert_choice import ExpertChoiceRouter
 # PseudoRAG: Q4 (16 архетипов) → Q6 (64 гексаграмм) bridge
 from yijing_transformer.models.pseudo_rag import PseudoRAGProjection, PseudoRAGDistillationLoss
+# Единый модуль 6 источников (Склярова+Фомюк+Андреев+Касаткин+Герман+Беляев)
+from yijing_transformer.models.geometry.six_sources import SixSourceLayer
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 from yijing_transformer.tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
@@ -413,6 +418,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_heisenberg and not (self.use_quadrant_attention or self.use_recursive_cube or self.use_weaving_loom):
             self.heisenberg_attn = HeisenbergAttention(cfg.d_model)
 
+        # v71: SOLAN-76 Q6 attention — additive enrichment
+        self.use_solan_attn = getattr(cfg, 'use_solan_attention', False)
+        if self.use_solan_attn:
+            self.solan_attn = SOLANAttention(cfg.d_model, n_heads=cfg.n_heads, block_size=cfg.block_size)
+
         # v53: Hexagram attention pattern (64 fixed patterns)
         self.use_hex_attn_pattern = getattr(cfg, 'use_hex_attn_pattern', False)
         if self.use_hex_attn_pattern:
@@ -451,6 +461,8 @@ class YiJingTransformerLayer(nn.Module):
             self._enrichment_sources = []
             if self.use_heisenberg:
                 self._enrichment_sources.append('heisenberg')
+            if self.use_solan_attn:
+                self._enrichment_sources.append('solan')
             if self.use_palace_attention:
                 self._enrichment_sources.append('palace')
             if self.use_privileged_axis:
@@ -592,6 +604,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_d4_equivariant:
             self.d4_layer = D4EquivariantLayer(cfg.d_model)
 
+        # v51-unified: Six Sources integration (после квантизатора)
+        self.use_six_sources = getattr(cfg, 'use_six_sources', False)
+        if self.use_six_sources:
+            self.six_sources = SixSourceLayer(cfg.d_model)
+
         # v51: Dual Embedding (Касаткин 4.4)
         self.use_dual_embedding = getattr(cfg, 'use_dual_embedding', False)
         if self.use_dual_embedding:
@@ -681,6 +698,8 @@ class YiJingTransformerLayer(nn.Module):
             enrichments = []
             if self.use_heisenberg:
                 enrichments.append(self.heisenberg_attn(h))
+            if self.use_solan_attn:
+                enrichments.append(self.solan_attn(h))
             if self.use_palace_attention:
                 enrichments.append(self.palace_attn(h))
             if self.use_privileged_axis:
@@ -731,6 +750,10 @@ class YiJingTransformerLayer(nn.Module):
             if self.use_heisenberg:
                 attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
 
+            # v71: SOLAN-76 Q6 attention enrichment (additive)
+            if self.use_solan_attn:
+                attn_out = attn_out + 0.1 * self.solan_attn(h)
+
             # v51: compose additional attention biases (additive post-processing)
             if self.use_palace_attention:
                 palace_out = self.palace_attn(h)
@@ -764,6 +787,10 @@ class YiJingTransformerLayer(nn.Module):
             self._antipodal_loss = self.antipodal.antipodal_loss(zq_out)
         else:
             self._antipodal_loss = 0.0
+
+        # v51-unified: Six Sources integration
+        if self.use_six_sources:
+            x, _six_aux = self.six_sources(x)
 
         # 3. 变卦 трансформация
         if self.bian_gua is not None:

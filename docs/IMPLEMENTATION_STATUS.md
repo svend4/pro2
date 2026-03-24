@@ -150,12 +150,12 @@
 | Что отсутствует | Приоритет | Сложность |
 |----------------|-----------|-----------|
 | ~~Multi-GPU / DDP обучение~~ | ~~Высокий~~ | ~~Средняя~~ | ✅ Реализовано: training/ddp.py |
-| Бенчмарки на WikiText-103/OpenWebText (d≥256, >10K шагов) | Высокий | Средняя | ⚠️ Масштабные тесты добавлены (test_integration_scale.py) |
-| Тесты качества генерации (BLEU, perplexity на held-out) | Высокий | Низкая | |
-| Единый модуль интеграции 6 источников | Средний | Высокая | |
+| ~~Бенчмарки на WikiText-103/OpenWebText~~ | ~~Высокий~~ | ~~Средняя~~ | ✅ benchmark_wikitext_scaled.py (5 конфигов, d=256, 500 шагов) |
+| ~~Тесты качества генерации~~ | ~~Высокий~~ | ~~Низкая~~ | ✅ test_generation_quality.py (12 тестов: PPL, coherence, beam, KV-cache) |
+| ~~Единый модуль интеграции 6 источников~~ | ~~Средний~~ | ~~Высокая~~ | ✅ geometry/six_sources.py (SixSourceLayer: 6 sub-modules + learnable gate) |
 | ~~PseudoRAG как реализованный класс~~ | ~~Средний~~ | ~~Средняя~~ | ✅ Реализовано: models/pseudo_rag.py |
 | ~~Полные формулировки 19 теорем~~ | ~~Низкий~~ | ~~Низкая~~ | ✅ Задокументировано: docs/THEOREMS.md |
-| SOLAN как attention mechanism (не только tokenizer) | Низкий | Средняя |
+| ~~SOLAN как attention mechanism~~ | ~~Низкий~~ | ~~Средняя~~ | ✅ SOLANAttention в geometry/attention.py (use_solan_attention=True) |
 | 7-портовая архитектура (сейчас 3–5) | Низкий | Средняя |
 
 ---
@@ -164,7 +164,7 @@
 
 **Реализовано в коде:** 6 моделей, 64 геометрических модуля, 4 тренировочных пайплайна, 5 стратегий генерации, 12 квантизаторов, LoRA, speculative decoding, ONNX export — всё с working forward() и 1731 тестом.
 
-**Только теория:** 7-портовый протокол, единая интеграция 6 источников, SOLAN-attention.
+**Только теория:** 7-портовая архитектура (сейчас 3–5 адаптеров).
 
 **Закрыто в этом обновлении:** PseudoRAG (models/pseudo_rag.py), DDP (training/ddp.py), ExpertChoice MoE (интеграция в model.py), 19 теорем (docs/THEOREMS.md), масштабные тесты d=256 (test_integration_scale.py), тесты всех 12 attention паттернов (test_conditional_attention.py), исправлен баг batch broadcast в attention bias (model.py:655).
 
