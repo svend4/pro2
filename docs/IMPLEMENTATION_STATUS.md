@@ -75,9 +75,11 @@
 | PrefixTuning, LogitLens | models/prefix_tuning.py | ✅ 15 тестов | ❌ только в тестах |
 | DistillationTrainer | training/distillation.py | ✅ 4 теста | ❌ только в тестах |
 | EMA (Exponential Moving Average) | training/ema.py | ✅ 1 тест | ❌ только в тестах |
-| ExpertChoice routing | models/expert_choice.py | — | ❌ не импортируется никем |
-| Extensions A2–E14 | models/extensions.py | ✅ через run_all_extensions.py | ❌ не в основных моделях |
-| ~40 из 52 utils_v*.py | training/utils_v*.py | — | ⚠️ только top-10 через bridge |
+| ExpertChoice routing | models/expert_choice.py | — | ❌ только в knowledge_system.py |
+| Extensions A2–E14 (9 классов) | models/extensions.py | ✅ через run_all_extensions.py | ❌ не в основных моделях |
+| 8 из 16 attention паттернов | geometry/attention.py | ✅ тесты | ⚠️ условно через конфиг, не по умолчанию |
+
+> **Примечание:** все 43 файла `utils_v*.py` импортируются через bridge-модули (`bridge_schedulers.py`, `bridge_optimizers.py`, `bridge_regularization.py` и др.) — мёртвого кода среди них нет.
 
 ---
 
