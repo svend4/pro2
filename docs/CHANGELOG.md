@@ -64,6 +64,22 @@
 ```
 88ddec5  impl: 7 tasks — experiments, merged geometry modules, monitoring tools
 67fd389  chore: add experiment result JSONs from smoke-tests
+374566e  docs: add EXPERIMENTS, IMPLEMENTATION_STATUS, CHANGELOG; update INDEX + FUTURE_TASKS
+```
+
+### Документация (вторая часть — аудит кодовой базы)
+
+Аудитом выявлены и задокументированы ранее не охваченные компоненты:
+
+| Новый/обновлённый документ | Что добавлено |
+|---------------------------|--------------|
+| `docs/PORTAL.md` (новый) | NautilusPortal + 5 адаптеров + corpus_loader + repo_corpus_loader + graph_health + q6_graph_updater + e2_concept_evolution + federated_round + meta_bridge + meta_q6 + nautilus_inference |
+| `docs/TRAINING.md` (обновлён) | §3: bidir_train, roundabout, multi_salesman, nautilus_15agent, nautilus_clover, train_e2* (3 варианта), train_hmoe_staged, train_hmoe_curriculum; §9: токенизаторы; §10: bench_moe/stability, eval_hmoe, scripts/ |
+| `docs/IMPLEMENTATION_STATUS.md` (обновлён) | Сводная таблица расширена до ~40 компонентов, разбита по 4 категориям |
+| `docs/INDEX.md` (обновлён) | +PORTAL.md в навигации, +8 quick-search вопросов |
+
+```
+374566e -> (текущий коммит с PORTAL.md и обновлёнными docs)
 ```
 
 ---

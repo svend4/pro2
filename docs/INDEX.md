@@ -18,6 +18,7 @@
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Контрибьюторы | Тесты, стиль кода, добавление архитектур |
 | **[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)** | **Все** | **Что реализовано и где искать — первый документ при code review** |
 | **[EXPERIMENTS.md](EXPERIMENTS.md)** | **Исследователи** | **Все эксперименты: запуск, критерии, результаты** |
+| **[PORTAL.md](PORTAL.md)** | **Разработчики** | **Portal-система, адаптеры репо, федеративное обучение, граф знаний** |
 | **[CHANGELOG.md](CHANGELOG.md)** | **Все** | **Хронология изменений по сессиям** |
 
 ---
@@ -95,3 +96,30 @@ LCI (Loop Closure Index)
 **Хочу добавить Q6-routing вместо softmax:**
 → [IMPLEMENTATION_STATUS.md — KasatkinRouter](IMPLEMENTATION_STATUS.md#3-kasatkinq6router)
 → `yijing_transformer/models/geometry/kasatkin_router.py`
+
+**Хочу понять систему Portal и адаптеров:**
+→ [PORTAL.md](PORTAL.md)
+
+**Хочу загрузить данные из других репозиториев:**
+→ [PORTAL.md — Корпус-лоадеры](PORTAL.md#3-корпус-лоадеры)
+→ `corpus_loader.py`, `repo_corpus_loader.py`
+
+**Хочу проверить здоровье графа знаний:**
+→ [PORTAL.md — Граф знаний](PORTAL.md#4-граф-знаний-и-метрики)
+→ `graph_health.py` (метрики CD, VT, CR, DB)
+
+**Хочу синхронизировать модель с другими репо:**
+→ [PORTAL.md — Федеративное обучение](PORTAL.md#6-федеративное-обучение)
+→ `federated_round.py`
+
+**Хочу понять как устроен токенизатор:**
+→ [TRAINING.md §9](TRAINING.md#9-токенизаторы)
+→ `tokenizer/char_tokenizer.py` (CharTokenizer, ByteTokenizer, BPETokenizer)
+
+**Хочу запустить двунаправленное обучение:**
+→ [TRAINING.md §3 — bidir_train](TRAINING.md#3-скрипты-обучения)
+→ `bidir_train.py` / `bidir_train_v2.py`
+
+**Хочу обучить E2-модель по фазам:**
+→ [TRAINING.md §3 — train_e2](TRAINING.md#3-скрипты-обучения)
+→ `train_e2.py` / `train_e2_clusters.py` / `train_e2_joint.py`

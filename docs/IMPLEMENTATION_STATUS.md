@@ -8,26 +8,85 @@
 
 ---
 
-## Сводная таблица: теория → код
+## Сводная таблица: всё реализованное
 
-| Идея / концепция | Статус | Файл | Дата |
-|------------------|--------|------|------|
-| Q6 = {-1,+1}^6 гиперкуб | ✅ реализовано | `models/variant3.py`, `geometry/quantizers.py` | до 2026-03 |
-| 64 гексаграммы = якоря | ✅ реализовано | `geometry/interlingua_fixed.py` | 2026-03-24 |
-| HierarchicalMoE (4 уровня) | ✅ реализовано | `models/hierarchical_moe.py` | до 2026-03 |
-| AbrialeBridgeMediator (v59, PPL 1.24) | ✅ реализовано | `geometry/routing.py` | до 2026-03 |
-| ArchetypalInterlingua **БАГ** | ✅ ИСПРАВЛЕНО | `geometry/interlingua_fixed.py` | 2026-03-24 |
-| KasatkinQ6Router (3D routing) | ✅ реализовано | `geometry/kasatkin_router.py` | 2026-03-24 |
-| Diversity loss для trit_proj | ✅ реализовано | `geometry/interlingua_fixed.py` | 2026-03-24 |
-| Q6ExpertBank | ✅ реализовано | `geometry/kasatkin_router.py` | 2026-03-24 |
-| Gumbel-Softmax вместо STE | ✅ реализовано | `geometry/interlingua_fixed.py`, `geometry/quantizer_fixed.py` | 2026-03-24 |
-| Q4⊂Q6 верификация | ✅ реализовано | `experiments/validate_q4_q6.py` | 2026-03-24 |
-| Ксерокс-тест (само-осознание) | ✅ реализовано | `experiments/xerox_test.py` | 2026-03-24 |
-| GlyphTokenizer сравнение | ✅ реализовано | `experiments/train_with_glyph.py` | 2026-03-24 |
-| e2_self_improve мониторинг | ✅ реализовано | `monitor_improve.py` | 2026-03-24 |
-| Полный пайплайн проверок | ✅ реализовано | `run_all_checks.sh` | 2026-03-24 |
-| Walsh-Hadamard применение | ⏳ теория | `theoretical-foundations.md` | — |
-| PseudoRAG как учитель YiJing | ⏳ теория | `PSEUDORAG_YIJING_BRIDGE.md` | — |
+### Модели и архитектура
+
+| Компонент | Статус | Файл | Документ |
+|-----------|--------|------|---------|
+| Q6 = {-1,+1}^6 гиперкуб | ✅ | `models/variant3.py` | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| HierarchicalMoE (4 уровня) | ✅ | `models/hierarchical_moe.py` | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| AbrialeBridgeMediator v59 (PPL 1.24) | ✅ | `geometry/routing.py` | [GEOMETRY.md](GEOMETRY.md) |
+| ArchetypalInterlinguaFixed (баг исправлен) | ✅ | `geometry/interlingua_fixed.py` | [IMPLEMENTATION_STATUS.md — §2](#2-archetypalinterlinguafixed) |
+| KasatkinQ6Router + Q6ExpertBank | ✅ | `geometry/kasatkin_router.py` | [IMPLEMENTATION_STATUS.md — §3](#3-kasatkinq6router) |
+| NautilusHierarchy (7 камер) | ✅ | `geometry/nautilus.py` | [GEOMETRY.md §9](GEOMETRY.md) |
+| ConvergenceBridge + MatrixGrammar | ✅ | `geometry/convergence.py` | [GEOMETRY.md §8](GEOMETRY.md) |
+| AbrialeLayer (событийные связи) | ✅ | `geometry/abriale.py` | [GEOMETRY.md §10](GEOMETRY.md) |
+| E8Quantizer + 9 квантизаторов | ✅ | `geometry/quantizers.py` | [GEOMETRY.md §2](GEOMETRY.md) |
+| GlyphTokenizer (SOLAN) | ✅ | `tokenizer/glyph_tokenizer.py` | [TRAINING.md §9](TRAINING.md) |
+| CharTokenizer / ByteTokenizer / BPETokenizer | ✅ | `tokenizer/char_tokenizer.py` | [TRAINING.md §9](TRAINING.md) |
+
+### Скрипты обучения
+
+| Скрипт | Метод | Файл | Документ |
+|--------|-------|------|---------|
+| self_train*.py (v1/v2/v3) | 3-стадийное + figure-8 | `self_train*.py` | [TRAINING.md §3](TRAINING.md) |
+| self_train_hmoe*.py | Алгоритм Скарабея | `self_train_hmoe*.py` | [TRAINING.md §3](TRAINING.md) |
+| figure8_turbine.py | Турбина + TSP | `figure8_turbine.py` | [TRAINING.md §3](TRAINING.md) |
+| nautilus_4agent.py | 4 агента по кольцам | `nautilus_4agent.py` | [TRAINING.md §3](TRAINING.md) |
+| nautilus_15agent.py | 15 агентов (Q4-тессеракты) | `nautilus_15agent.py` | [TRAINING.md §3](TRAINING.md) |
+| nautilus_clover.py | 4-листный клевер | `nautilus_clover.py` | [TRAINING.md §3](TRAINING.md) |
+| roundabout.py | Кольцо с адаптивными оборотами | `roundabout.py` | [TRAINING.md §3](TRAINING.md) |
+| multi_salesman.py | K агентов + общий RAG | `multi_salesman.py` | [TRAINING.md §3](TRAINING.md) |
+| bidir_train.py / v2 | Двунаправленный цикл | `bidir_train*.py` | [TRAINING.md §3](TRAINING.md) |
+| train_e2*.py (3 варианта) | E2 5-фазовое | `train_e2*.py` | [TRAINING.md §3](TRAINING.md) |
+| train_hmoe_staged.py | 5-этапное HMoE | `train_hmoe_staged.py` | [TRAINING.md §3](TRAINING.md) |
+| train_hmoe_curriculum.py | Curriculum α-уровни | `train_hmoe_curriculum.py` | [TRAINING.md §3](TRAINING.md) |
+| federated_round.py | Синхронизация между репо | `federated_round.py` | [PORTAL.md §6](PORTAL.md) |
+| pipeline.py | Полный curriculum | `pipeline.py` | [TRAINING.md §4](TRAINING.md) |
+
+### Эксперименты и диагностика
+
+| Инструмент | Файл | Документ |
+|-----------|------|---------|
+| validate_q4_q6.py | `experiments/validate_q4_q6.py` | [EXPERIMENTS.md §1](EXPERIMENTS.md) |
+| xerox_test.py | `experiments/xerox_test.py` | [EXPERIMENTS.md §4](EXPERIMENTS.md) |
+| train_with_glyph.py | `experiments/train_with_glyph.py` | [EXPERIMENTS.md §5](EXPERIMENTS.md) |
+| monitor_improve.py | `monitor_improve.py` | [EXPERIMENTS.md §6](EXPERIMENTS.md) |
+| run_all_checks.sh | `run_all_checks.sh` | [EXPERIMENTS.md](EXPERIMENTS.md) |
+| bench_all.py | `bench_all.py` | [TRAINING.md §7](TRAINING.md) |
+| bench_moe.py | `bench_moe.py` | [TRAINING.md §10](TRAINING.md) |
+| bench_stability.py | `bench_stability.py` | [TRAINING.md §10](TRAINING.md) |
+| eval_hmoe.py | `eval_hmoe.py` | [TRAINING.md §10](TRAINING.md) |
+| e2_self_improve.py | `e2_self_improve.py` | [EXPERIMENTS.md §6](EXPERIMENTS.md) |
+| e2_concept_evolution.py | `e2_concept_evolution.py` | [PORTAL.md §5](PORTAL.md) |
+| graph_health.py | `graph_health.py` | [PORTAL.md §4](PORTAL.md) |
+| q6_graph_updater.py | `q6_graph_updater.py` | [PORTAL.md §4](PORTAL.md) |
+| multi_domain_benchmark.py | `scripts/` | [TRAINING.md §10](TRAINING.md) |
+| experiment_matrix.py | `experiments/` | (эксп. матрица) |
+
+### Portal и интеграция
+
+| Компонент | Файл | Документ |
+|-----------|------|---------|
+| NautilusPortal (движок) | `nautilus/portal.py` | [PORTAL.md §1](PORTAL.md) |
+| MetaAdapter | `nautilus/adapters/meta.py` | [PORTAL.md §2](PORTAL.md) |
+| Pro2Adapter | `nautilus/adapters/pro2.py` | [PORTAL.md §2](PORTAL.md) |
+| Info1Adapter | `nautilus/adapters/info1.py` | [PORTAL.md §2](PORTAL.md) |
+| Data2Adapter / Data7Adapter | `nautilus/adapters/` | [PORTAL.md §2](PORTAL.md) |
+| corpus_loader.py (8 источников) | `corpus_loader.py` | [PORTAL.md §3](PORTAL.md) |
+| repo_corpus_loader.py (7 кластеров) | `repo_corpus_loader.py` | [PORTAL.md §3](PORTAL.md) |
+| meta_bridge.py | `meta_bridge.py` | [PORTAL.md §7](PORTAL.md) |
+| meta_q6.py (bent, annealing, Q4) | `meta_q6.py` | [PORTAL.md §7](PORTAL.md) |
+| nautilus_inference.py | `nautilus_inference.py` | [PORTAL.md §8](PORTAL.md) |
+
+### Теория (ещё не в коде)
+
+| Концепция | Документ | Статус |
+|-----------|----------|--------|
+| Walsh-Hadamard применение | `theoretical-foundations.md` | ⏳ теория |
+| PseudoRAG → учитель YiJing | `PSEUDORAG_YIJING_BRIDGE.md` | ⏳ частично (avg_hamming=2.56) |
+| 19 формальных теорем | `theoretical-foundations.md` | ⏳ теория |
 
 ---
 
