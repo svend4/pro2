@@ -129,7 +129,7 @@ def run_pipeline(
     print(f"  Nautilus проходов : {n_nautilus_passes}  (по {nautilus_cycles} цикл × {nautilus_step_scale:.2f}×)")
     print(f"  Turbine финал     : {turbine_cycles} цикл, {turbine_spe} шагов, LCI-loss={turbine_lci_loss}")
     print(f"  Fast-mode         : {fast}")
-    print(f"  Адаптивный LR     : {adaptive_lr}  (снижает lr при LCI>3.0)")
+    print(f"  Адаптивный LR     : {adaptive_lr}  (снижает lr при LCI>{lr_threshold})")
     print(f"  RAG reset pass    : {reset_rag_pass}  (bent seeds с прохода {reset_rag_pass})")
     print(f"  Сохранение в      : {output_dir}/")
 
