@@ -152,46 +152,50 @@ CONCEPTUAL_PLAN = {
         "effort": "1-2 дня",
         "impact": "Средний",
 
-        "1a_domain_lock": {
+        "1a_organic_coherence": {
             "problem": "Генерация смешивает домены после 15 токенов",
             "solution": """
-                Domain-Locked Generation:
-                1. Определить доминирующего эксперта на первых 5 токенах
-                2. Усилить его вес при последующей генерации (× 1.5-2.0)
-                3. Подавить конкурирующие домены (× 0.3-0.5)
-                4. Позволить переключение только при высокой энтропии (> 0.6)
+                Organic Coherence Generation (заменяет Domain-Lock):
+                1. Наблюдаем routing profile промпта (НЕ модифицируя модель)
+                2. Строим routing momentum через EMA (α=0.2) — как инерция реки
+                3. Температура адаптируется к когерентности (не к "доминантности")
+                4. Модель сама решает, когда переключать эксперта
+
+                Принцип: модель знает лучше, какой эксперт нужен.
+                Мы только сглаживаем шум, не переопределяем решения.
             """,
             "implementation": """
-                def generate_domain_locked(model, sp, prompt, ...):
-                    # Phase 1: Determine dominant domain
-                    routing = get_routing_for_text(model, sp, prompt)
-                    dominant = max(routing, key=routing.get)
+                def organic_generate(model, sp, prompt, ...):
+                    # Phase 1: Observe (don't lock!) routing from prompt
+                    momentum = observe_routing_profile(model, sp, prompt)
 
-                    # Phase 2: Generate with domain bias
+                    # Phase 2: Generate with organic momentum
                     for step in range(max_tokens):
                         logits, _, info = model(context)
                         routing = info['routing'][0][-1]
 
-                        # Amplify dominant expert
-                        routing[dominant_idx] *= 1.5
-                        # Suppress others
-                        routing[other_idxs] *= 0.4
+                        # Update momentum (EMA — like a river's inertia)
+                        momentum = α * routing + (1-α) * momentum
 
-                        # Allow switch only on high entropy
-                        entropy = -(routing * routing.log()).sum()
-                        if entropy > 0.6:
-                            routing = original_routing  # allow natural switch
+                        # Measure coherence naturally
+                        coherence = cosine_similarity(routing, recent_avg)
+
+                        # Adapt temperature gently (not force)
+                        if coherence < 0.9:
+                            temperature *= (0.6 + 0.4 * coherence)
             """,
         },
 
-        "1b_coherence_penalty": {
-            "problem": "Нет штрафа за резкое переключение домена",
+        "1b_routing_momentum": {
+            "problem": "Нет механизма плавного перехода между доменами",
             "solution": """
-                Coherence Penalty в генерации:
-                - Отслеживать routing history (последние 10 шагов)
-                - Штрафовать токены, которые вызывают резкий routing shift
-                - shift = KL(routing_now, routing_avg_last_10)
-                - Если shift > threshold: logits[token] -= penalty
+                Routing Momentum через EMA:
+                - momentum = α × current + (1-α) × momentum
+                - α = 0.2 → сильная инерция, плавные переходы
+                - α = 0.5 → умеренная инерция
+                - α = 0.8 → почти без инерции (быстрые переключения)
+                - Энтропия routing отслеживается для диагностики
+                - НИКОГДА не модифицируем gate_scale модели
             """,
         },
 
@@ -400,8 +404,8 @@ PRIORITY_ROADMAP = """
 ║                                                                 ║
 ║  ЭТАП A (Сейчас, 1-2 дня):                                     ║
 ║  ─────────────────────────                                      ║
-║  A1. Domain-Locked Generation      ← сразу улучшит когерентность║
-║  A2. Coherence Penalty в sampling  ← простой, высокий эффект    ║
+║  A1. Organic Coherence Generation  ← мягкая когерентность (EMA) ║
+║  A2. Routing Momentum в sampling   ← естественная инерция       ║
 ║  A3. Eval Suite                    ← чтобы измерять прогресс    ║
 ║                                                                 ║
 ║  ЭТАП B (Следующая неделя):                                     ║
@@ -501,12 +505,12 @@ STAGE_A_IMPLEMENTATION = """
 
 Файлы для создания/изменения:
 
-1. inference/domain_locked_generate.py     ← Domain-Locked Generation
+1. inference/domain_locked_generate.py     ← Organic Coherence Generation (EMA momentum)
 2. inference/mirostat_sampling.py          ← Mirostat adaptive sampling
 3. evaluation/eval_suite.py               ← Automated evaluation
 4. evaluation/eval_prompts.json           ← Standardized test prompts
-5. scripts/train_nautilus_mome.py          ← Phase 11 + Phase 12
-6. inference/generate.py                   ← Update with coherence penalty
+5. scripts/train_nautilus_mome.py          ← Organic domain detection + Phase 11-12
+6. inference/generate.py                   ← Update with routing momentum
 
 Ключевые метрики для tracking:
 

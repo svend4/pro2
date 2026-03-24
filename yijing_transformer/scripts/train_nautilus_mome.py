@@ -68,36 +68,86 @@ import sentencepiece as spm
 
 # ==================== Configuration ====================
 
+# ── Organic Expert Domains ──
+# Experts are defined by CONTENT SIGNALS, not by repository origin.
+# The router learns to recognize these patterns from the data itself.
+# Repo hints are soft suggestions for initial data grouping only —
+# the router is free to override them based on actual content.
+#
+# Four-level alignment (info3):
+#   Level 1 (Formula):    MATH — abstract mathematical structures
+#   Level 2 (Archetype):  CODE, SYSTEM — structural patterns & architecture
+#   Level 3 (Algorithm):  RECON, INFO — procedural processes & management
+#   Level 4 (Theorem):    HUMAN — practical wisdom, ethics, meaning
+#
+# The router discovers these levels organically through training.
+# No domain is "locked" — content flows to whichever expert resonates.
+
 EXPERT_DOMAINS = {
     'MATH': {
         'name': 'Mathematical Structures',
-        'repos': ['meta', 'data2', 'pro2'],
+        'content_signals': [
+            'formulas', 'equations', 'proofs', 'theorems',
+            'hexagrams', 'trigrams', 'hypercube', 'geometry',
+            'tensor', 'matrix', 'eigenvalue', 'gradient',
+        ],
+        'repo_hints': ['meta', 'data2', 'pro2'],
         'description': 'Math, formulas, algorithms, hexagrams, transformers',
+        'four_level': 'formula',
     },
     'CODE': {
         'name': 'Software Engineering',
-        'repos': ['daten3', 'daten2', 'data20'],
+        'content_signals': [
+            'def ', 'class ', 'import ', 'function ',
+            'return ', 'const ', 'interface ', 'async ',
+            '.tsx', '.py', '.ts', '.js',
+        ],
+        'repo_hints': ['daten3', 'daten2', 'data20'],
         'description': 'TypeScript, Flask, React, full-stack, KMS',
+        'four_level': 'archetype',
     },
     'HUMAN': {
         'name': 'Humanitarian Knowledge',
-        'repos': ['info3', 'daten22', 'info'],
+        'content_signals': [
+            'этика', 'архетип', 'поведени', 'мудрость',
+            'психолог', 'смысл', 'ценност', 'человек',
+            'ethics', 'wisdom', 'meaning', 'archetype',
+        ],
+        'repo_hints': ['info3', 'daten22', 'info'],
         'description': 'Ethics, archetypes, MBTI, behavioral formulas',
+        'four_level': 'theorem',
     },
     'SYSTEM': {
         'name': 'System Architecture',
-        'repos': ['info7', 'daten', 'universal-file-storage-mcp'],
+        'content_signals': [
+            'docker', 'kubernetes', 'nginx', 'deploy',
+            'pipeline', 'orchestrat', 'container', 'mcp',
+            'SELECT ', 'CREATE TABLE', 'API', 'endpoint',
+        ],
+        'repo_hints': ['info7', 'daten', 'universal-file-storage-mcp'],
         'description': 'AI orchestration, DevOps, MCP, containers',
+        'four_level': 'archetype',
     },
     'RECON': {
         'name': 'Pattern Recognition',
-        'repos': ['meta2'],
+        'content_signals': [
+            'распозна', 'реконструкц', 'OCR', 'паттерн',
+            'восстановл', 'сканир', 'документ', 'puzzle',
+        ],
+        'repo_hints': ['meta2'],
         'description': 'Document reconstruction, OCR, puzzle algorithms',
+        'four_level': 'algorithm',
     },
     'INFO': {
         'name': 'Information Management',
-        'repos': ['info1', 'info4', 'info5', 'daten11', 'data30', 'in4'],
+        'content_signals': [
+            'catalog', 'search', 'index', 'metadata',
+            'knowledge base', 'автоматизац', 'каталог',
+            'README', 'documentation', 'config',
+        ],
+        'repo_hints': ['info1', 'info4', 'info5', 'daten11', 'data30', 'in4'],
         'description': 'Knowledge bases, catalogs, search, automation',
+        'four_level': 'algorithm',
     },
 }
 
@@ -194,28 +244,81 @@ def collect_text_from_repos(repo_dirs=None):
     return all_text
 
 
+def _score_content_signals(text, domain_key):
+    """Score how well a text matches a domain's content signals.
+
+    Returns a float [0, 1] indicating signal density.
+    This is a soft, organic measure — not a hard label.
+    """
+    signals = EXPERT_DOMAINS[domain_key].get('content_signals', [])
+    if not signals:
+        return 0.0
+    text_lower = text[:5000].lower()  # sample first 5K chars for speed
+    matches = sum(1 for s in signals if s.lower() in text_lower)
+    return matches / len(signals)
+
+
+def _detect_domain_organic(text, repo_name):
+    """Detect domain organically: content signals first, repo hint as fallback.
+
+    Priority:
+      1. Content signal scoring (organic — based on what's IN the text)
+      2. Repo hint (soft fallback — based on where text came FROM)
+      3. 'INFO' default (catch-all for uncategorized content)
+
+    If multiple domains score equally, the text goes to ALL matching domains
+    (soft boundaries — a file can belong to multiple experts).
+    """
+    # Score all domains by content signals
+    scores = {dk: _score_content_signals(text, dk) for dk in EXPERT_DOMAINS}
+    max_score = max(scores.values())
+
+    # If any domain has strong content match (>= 0.15), use it
+    if max_score >= 0.15:
+        return [dk for dk, s in scores.items() if s >= max_score * 0.7]
+
+    # Soft fallback: repo hint
+    repo_to_domain = {}
+    for dk, info in EXPERT_DOMAINS.items():
+        for repo in info.get('repo_hints', []):
+            repo_to_domain[repo] = dk
+    if repo_name in repo_to_domain:
+        return [repo_to_domain[repo_name]]
+
+    return ['INFO']  # catch-all
+
+
 def prepare_domain_data():
-    """Split collected text into domain-specific files for expert training."""
+    """Split collected text into domain-specific files using organic content detection.
+
+    Instead of hard repo→domain mapping, each file is scored against
+    all domains' content signals. Files with strong signals go to the
+    matching domain(s). Files without clear signals fall back to repo
+    hints, then to INFO as catch-all.
+
+    This allows the same file to contribute to multiple experts if it
+    contains cross-domain content (e.g., Russian code comments → RECON + CODE).
+    """
     os.makedirs(DOMAIN_DIR, exist_ok=True)
 
-    # Map repo → domain
-    repo_to_domain = {}
-    for domain_key, domain_info in EXPERT_DOMAINS.items():
-        for repo in domain_info['repos']:
-            repo_to_domain[repo] = domain_key
-
     domain_texts = defaultdict(list)
+    cross_domain_count = 0
 
     for repo_dir in ALL_REPO_DIRS:
         if not os.path.isdir(repo_dir):
             continue
         repo_name = os.path.basename(repo_dir)
-        domain = repo_to_domain.get(repo_name, 'INFO')  # default to INFO
 
         texts = collect_text_from_repos([repo_dir])
-        domain_texts[domain].extend(texts)
+        for text in texts:
+            domains = _detect_domain_organic(text, repo_name)
+            if len(domains) > 1:
+                cross_domain_count += 1
+            for domain in domains:
+                domain_texts[domain].append(text)
 
-    print("\n  Domain data distribution:")
+    print(f"\n  Organic domain detection: {cross_domain_count} cross-domain files")
+    print("  Domain data distribution:")
     for domain, texts in domain_texts.items():
         text_blob = '\n'.join(texts)
         domain_path = os.path.join(DOMAIN_DIR, f'{domain}.txt')
