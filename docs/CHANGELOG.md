@@ -99,12 +99,13 @@
 
 Добавлен `docs/THEORY_VS_PRACTICE.md` с оценками (теория 8.5/10, реализация 5.5/10, интеграция 3.5/10) и дорожной картой gap→fix (6 задач ПРИОРИТЕТ 0).
 
-### Задачи 0.1–0.5 (gap→fix, продолжение сессии)
+### Задачи 0.1–0.6 (все gap→fix закрыты)
 
 #### `yijing_transformer/models/model.py`
 - Импортирован `ArchetypalInterlinguaFixed` из `geometry.interlingua_fixed`
 - При `interlingua_use_fixed=True` (по умолчанию) используется исправленная версия
 - Сохранена совместимость: `interlingua_use_fixed=False` → оригинал (для ablation)
+- `_build_quantizer('ternary')`: передаёт `warmup_steps/start_temp/end_temp` из конфига
 
 #### `yijing_transformer/models/geometry/quantizers.py`
 - `TernaryQuantizer`: добавлены `warmup_steps=5000`, `start_temp=1.0`, `end_temp=0.01`
@@ -117,21 +118,37 @@
 #### `self_train_hmoe.py`
 - `_CDA_ALL_PAIRS` — 36 направленных пар 6×6 (все направления включая B→A реверсы)
 - `cross_domain_signal()` — сэмплирование из 36 пар вместо random orbit
+- `_init_glyph_tokenizer()` + `_USE_GLYPH` + `--glyph` флаг (задача 0.3)
+- `_encode()`: если `--glyph`, SOLAN символы → Q6 vertex index вместо UTF-8 bytes
+- `_step_all_quantizers()` + вызов из `micro_train()`: step_temp() для всех TernaryQuantizer
+
+#### `experiments/train_with_glyph.py`
+- Переработан: cosine similarity → triplet loss (anchor/positive/negative)
+- Результат: char margin=+0.45, glyph margin=+0.78, delta=+0.33 >> 0.02 → integrate=True
+- Вывод: `experiments/glyph_comparison.json`
+
+#### `e2_self_improve.py`
+- `load_q4_q6_hamming()`: читает `experiments/q4_q6_result.json`
+- `q4_cluster_init()`: 16 Q4-архетипов × keyword-based text clustering
+- `SelfDiagnostics._load_data()`: Q4⊂Q6 init при avg_hamming < 2.5
+- Текущий статус: avg_hamming=2.56 → реализовано, не активировано (порог не достигнут)
 
 ```
 7257221  fix(priority-0): close 3 theory→code gaps (tasks 0.1, 0.2, 0.4, 0.5)
+c1b4d6b  fix(priority-0): tasks 0.3, 0.6 + priority-1 integrations
 ```
 
-### Итог сессии 2026-03-24
+### Итог сессии 2026-03-24 — все PRIORITY 0 задачи закрыты
 
 | Задача | Файл | Результат |
 |--------|------|-----------|
 | 0.1: interlingua_fixed в model.py | `models/model.py` | ✅ |
 | 0.2: TernaryQuantizer cosine annealing | `geometry/quantizers.py` | ✅ |
+| 0.3: GlyphTokenizer интеграция | `train_with_glyph.py` + `self_train_hmoe.py` | ✅ margin+0.33 |
 | 0.4: WHT_Quantizer | `geometry/quantizers.py` | ✅ |
 | 0.5: CDA 36 пар | `self_train_hmoe.py` | ✅ |
-| 0.3: train_with_glyph интеграция | ещё не запущен | 🔴 |
-| 0.6: Q4⊂Q6 RAG init | `e2_self_improve.py` | 🔴 |
+| 0.6: Q4⊂Q6 RAG init | `e2_self_improve.py` | ✅ реализовано |
+| Priority 1: step_temp() в цикле | `self_train_hmoe.py` | ✅ |
 
 ---
 

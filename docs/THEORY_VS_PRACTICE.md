@@ -12,8 +12,10 @@
 | Область | Оценка | Комментарий |
 |---------|--------|-------------|
 | Теория (19 теорем, 7 источников) | **8.5 / 10** | Сильная, строгая математика |
-| Реализация компонентов | **5.5 / 10** | Компоненты есть, синтез не работает |
-| Интеграция теория→код | **3.5 / 10** | WHT, SOLAN, Q4⊂Q6, T→0 — не применяются |
+| Реализация компонентов | **7.0 / 10** | WHT/SOLAN/ArchetypalFixed теперь реализованы и подключены |
+| Интеграция теория→код | **6.5 / 10** | *(было 3.5)* 6/6 PRIORITY 0 gap→fix закрыты (2026-03-24) |
+
+> **Прогресс 2026-03-24**: Интеграция поднята с 3.5→6.5 после закрытия всех 6 PRIORITY 0 задач.
 
 ---
 
@@ -35,25 +37,27 @@
 | α-уровни (-4..+4) | `KNOWLEDGE_FRAMEWORK.md` | 5 фаз E2 (GlyphLevel→PhiloLevel) | `train_e2.py` |
 | Matryoshka Q2→Q3→Q6 | `yijing-transformer-concept.md` | `MultiScaleGlobalRouter` | `models/hierarchical_moe.py` |
 
-### Что реализовано частично (есть код, но не интегрировано в обучение)
+### Что реализовано частично (есть код, не полностью интегрировано)
 
-| Концепция | Что сделано | Чего не хватает | Файлы |
-|-----------|------------|-----------------|-------|
-| SOLAN-76 глифов (Теорема 15) | `GlyphTokenizer` полностью реализован | Не используется в основном обучении — остался standalone | `tokenizer/glyph_tokenizer.py` |
-| ArchetypalInterlingua (тернарный посредник) | `interlingua_fixed.py` исправляет баг с общим `trit_proj` | Не подключён в основную модель `model.py` | `geometry/interlingua_fixed.py` |
-| Q4⊂Q6 вложение | `validate_q4_q6.py` верифицирует (avg_hamming=2.56) | Нет инициализации из Q4 при обучении, нет регуляризации | `experiments/validate_q4_q6.py` |
-| CrossDomainAnalogy | 15 пар реализованы (self_train_hmoe.py) | Полная матрица 6×6 = 36 пар (meta/hexsym) использована только в meta | `self_train_hmoe.py` |
-| E8-квантизатор | `E8Quantizer` полностью реализован | Гиперкуб выбран как default без явного сравнения в конфиге | `geometry/quantizers.py` |
-| Temperature annealing | `TernaryQuantizer` и `interlingua_fixed.py` имеют расписание | T не достигает целевого 0.1 за 800 шагов (реальное T≈0.689) | `geometry/quantizers.py` |
+> **Обновлено 2026-03-24**: большинство строк переведены в "реализовано точно" после gap→fix задач
+
+| Концепция | Статус | Что осталось | Файлы |
+|-----------|--------|--------------|-------|
+| SOLAN-76 глифов (Теорема 15) | ✅ **Интегрирован** (2026-03-24) | `--glyph` флаг в `self_train_hmoe.py`; delta_margin=+0.33 >> 0.02 | `tokenizer/glyph_tokenizer.py`, `self_train_hmoe.py` |
+| ArchetypalInterlingua | ✅ **Подключён** (2026-03-24) | `interlingua_use_fixed=True` по умолчанию в `model.py` | `geometry/interlingua_fixed.py`, `models/model.py` |
+| Q4⊂Q6 вложение | 🟡 **Реализовано, не активно** | avg_hamming=2.56 > 2.5 → Q4 init не активирован | `e2_self_improve.py` |
+| CrossDomainAnalogy | ✅ **36 пар** (2026-03-24) | Полная матрица 6×6, B→A реверсы добавлены | `self_train_hmoe.py` |
+| E8-квантизатор | 🟡 Реализован, не подключён | Гиперкуб выбран как default без явного сравнения | `geometry/quantizers.py` |
+| Temperature annealing | ✅ **Подключён** (2026-03-24) | `step_temp()` вызывается из `micro_train()`; T:1.0→0.01 за 5000 шагов | `geometry/quantizers.py`, `self_train_hmoe.py` |
 
 ### Что только в теории (кода нет)
 
-| Концепция | Документ | Почему не реализовано |
-|-----------|----------|----------------------|
-| **Walsh-Hadamard Transform** | Теорема 5, `e8-yijing-deep-analysis.md` | Есть только в `scripts/theoretical_analysis.py` — не встроена в квантизатор |
-| **Модулярная арифметика Q6** | Теорема 3, `TURNING_POINT_ANALYSIS.md` | Упоминается, кода нет |
-| **Polarity reversal (YiJing) как операция** | `GERMES_NOTATION.md` | GERMES-нотация существует только как документ |
-| **Bent-функции как seed (математически оптимальный)** | `e8-yijing-deep-analysis.md` | Реализовано в `meta_q6.py`, но только через meta-мост |
+| Концепция | Документ | Статус |
+|-----------|----------|--------|
+| **Walsh-Hadamard Transform** | Теорема 5, `e8-yijing-deep-analysis.md` | ✅ **Реализован** (2026-03-24): `WHT_Quantizer` в `quantizers.py` |
+| **Модулярная арифметика Q6** | Теорема 3, `TURNING_POINT_ANALYSIS.md` | 🔴 Только теория, кода нет |
+| **Polarity reversal (YiJing) как операция** | `GERMES_NOTATION.md` | 🔴 GERMES-нотация только документ |
+| **Bent-функции как seed** | `e8-yijing-deep-analysis.md` | 🟡 Только в `meta_q6.py` (meta-мост) |
 
 ---
 
