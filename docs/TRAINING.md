@@ -129,6 +129,80 @@ Greedy/2-opt TSP → оптимальный порядок обхода эксп
 Каждый эксперт обучает свою петлю figure-8
 ```
 
+#### `bidir_train.py` / `bidir_train_v2.py` — Двунаправленное обучение
+
+Замкнутый цикл: модель обучается из графа знаний и одновременно пополняет его.
+
+```
+ВПЕРЁД: Корпус → PageRank-центры → Q6-якоря → micro_train()
+НАЗАД:  модель → генерация → QualityFilter → граф → identify_gaps()
+```
+
+`v2` закрывает конкретные пробелы (текстов с низким CD/VT из `graph_health.py`). Лог: `bidir_train_log.json`, `bidir_train_v2_log.json`.
+
+#### `roundabout.py` — Кольцо с адаптивными оборотами
+
+Агент движется по кольцу экспертов, число оборотов определяется LCI-прогрессом — не фиксированное, а до достижения порога.
+
+```bash
+python roundabout.py --checkpoint model.pt --max-laps 5 --lci-threshold 3.0
+```
+
+#### `multi_salesman.py` — K агентов с общим RAG
+
+2–3 агента, каждый обслуживает свой кластер доменов, все делят один RAG-буфер. Встреча происходит в узле DYNAMIC.
+
+```bash
+python multi_salesman.py --n-agents 2 --checkpoint model.pt
+```
+
+#### `nautilus_15agent.py` — 15-агентный Наутилус
+
+Каждый агент обрабатывает один Q4-тессеракт (C(6,4)=15 копий Q4 в Q6). Все 15×16=240 вершинных маршрутов покрывают 60/64 Q6-вершин.
+
+```bash
+python nautilus_15agent.py --checkpoint model.pt --cycles 3
+```
+
+#### `nautilus_clover.py` — 4-листный клевер
+
+Специальная топология для синтеза между экспертами: 4 листа (ABSTRACT, DYNAMIC, CONCRETE, META) встречаются в центральном узле. Акцент на cross-leaf аналогии.
+
+Лог-ключ: `lci_r_final`.
+
+#### `train_e2.py` / `train_e2_clusters.py` / `train_e2_joint.py` — E2-обучение
+
+Обучение `HierarchicalE2` по 5 фазам снизу вверх:
+
+| Фаза | α | Уровень | Что обучается |
+|------|---|---------|--------------|
+| 1 | -4 | GlyphLevel | Q6-проекция, кластеризация |
+| 2 | -2 | CoreLevel | Variant3 блоки |
+| 3 | 0 | MethodLevel | ArchetypalInterlingua |
+| 4 | +2 | TheoryLevel | NautilusHierarchy |
+| 5 | +4 | PhiloLevel | ConvergenceBridge + MatrixGrammar |
+
+```bash
+# Базовое E2-обучение
+python train_e2.py --checkpoint model.pt --phases 1,2,3
+
+# По кластерам репо (7 кластеров поочерёдно)
+python train_e2_clusters.py --checkpoint model.pt
+
+# Joint: 40% внешний + 60% внутренний корпус
+python train_e2_joint.py --checkpoint model.pt --external-ratio 0.4
+```
+
+Логи: `train_e2_log.json`, `train_e2_clusters_log.json`, `train_e2_joint_log.json`.
+
+#### `train_hmoe_staged.py` — 5-этапное HMoE-обучение
+
+Последовательное размораживание: MicroExperts → GroupRouters → GlobalRouter → BridgeExperts → JointFinetune. Каждый этап сохраняет чекпоинт.
+
+#### `train_hmoe_curriculum.py` — Curriculum по α-уровням
+
+6 стадий curriculum в HMoE от α=-4 до α=+4. Соответствует `set_moe_stage()` из `hierarchical_moe.py`. Лог: `train_hmoe_log.json`.
+
 ---
 
 ## 4. Curriculum Pipeline
@@ -361,6 +435,90 @@ python pipeline.py --checkpoint hmoe_self_trained_v4.pt
 ```bash
 OMP_NUM_THREADS=1 python self_train_hmoe.py
 ```
+
+## 9. Токенизаторы
+
+**Файл:** `yijing_transformer/tokenizer/char_tokenizer.py`
+
+| Класс | Описание | Vocab | Использование |
+|-------|---------|-------|--------------|
+| `CharTokenizer` | character-level (ASCII + Unicode) | динамический | общий случай |
+| `ByteTokenizer` | byte-level (256 байт) | 259 (+ PAD/BOS/EOS) | языко-независимый |
+| `BPETokenizer` | Byte-Pair Encoding, без зависимостей | обучаемый | домен-специфичный |
+
+```python
+from yijing_transformer.tokenizer.char_tokenizer import CharTokenizer, ByteTokenizer, BPETokenizer
+
+# ByteTokenizer — рекомендуется для большинства случаев
+tok = ByteTokenizer()
+ids = tok.encode("Hello Q6")                    # [72, 101, 108, ...]
+text = tok.decode(ids)                           # "Hello Q6"
+ids_special = tok.encode_with_special("Hello")  # [BOS, 72, 101, ..., EOS]
+
+# BPETokenizer
+bpe = BPETokenizer()
+bpe.train(texts, vocab_size=512)
+bpe.save('my_bpe.json')
+bpe2 = BPETokenizer.load('my_bpe.json')
+```
+
+**GlyphTokenizer** (`tokenizer/glyph_tokenizer.py`) — геометрическая токенизация через SOLAN (76 глифов). Сравнение с CharTokenizer: `experiments/train_with_glyph.py`.
+
+---
+
+## 10. Бенчмарки и диагностика
+
+### bench_moe.py — сравнение FFN-архитектур
+
+Сравнивает 3 FFN-реализации: `SwiGLU`, `HierarchicalMoEFFN`, `Q6ExpertBank`.
+
+```bash
+python bench_moe.py --steps 200
+```
+
+Выводит: параметры, время forward/backward, PPL, routing diversity (entropy).
+
+### bench_stability.py — воспроизводимость
+
+Запускает `bench_all.py` N раз, проверяет std score.
+
+```bash
+python bench_stability.py --n-runs 5
+```
+
+Успех: std < 0.005.
+
+### eval_hmoe.py — диагностика HMoE
+
+Детальная диагностика `HierarchicalMoEFFN` с рекомендациями по устранению проблем.
+
+```bash
+python eval_hmoe.py --checkpoint hmoe_self_trained_v4.pt
+```
+
+Проверяет:
+- Баланс загрузки экспертов (восьмёрка симметрична?)
+- Точка пересечения figure-8 (DYNAMIC активен?)
+- Routing entropy (не коллапсирует ли маршрутизация?)
+
+### scripts/multi_domain_benchmark.py — 39-доменный бенчмарк
+
+Универсальность Q6: проверяет PPL на 39 доменах (код, математика, история, ...).
+
+```bash
+python scripts/multi_domain_benchmark.py --checkpoint model.pt
+```
+
+### scripts/fetch_svend4_corpus.py — загрузка корпусов
+
+Клонирует все svend4-репозитории для обучения.
+
+```bash
+python scripts/fetch_svend4_corpus.py --target ..
+# Клонирует: meta, info1, data2, data7, infosystems, ai_agents, knowledge
+```
+
+---
 
 ### Мониторинг через JSON-логи
 

@@ -448,6 +448,17 @@ pip install -e ".[viz]"   # Визуализация
 | `docs/GEOMETRY.md` | Справочник модуля geometry/: квантизаторы, attention, routing, FFN |
 | `docs/TRAINING_UTILS.md` | Тренировочные утилиты: TrainingBridge, оптимизаторы, мониторинг |
 | `docs/IMPLEMENTATION_STATUS.md` | Аудит: что реализовано в коде, что только в теории, что не используется |
+Полный указатель: [`docs/INDEX.md`](docs/INDEX.md)
+
+| Файл | Аудитория | Содержание |
+|------|-----------|-----------|
+| `docs/ARCHITECTURE.md` | Разработчики | Q6, HMoE, компоненты, LCI |
+| `docs/MODELS.md` | Разработчики | Все модели: когда использовать, примеры |
+| `docs/TRAINING.md` | ML-инженеры | Pipeline, скрипты обучения, Алгоритм Скарабея |
+| `docs/TRAINING_UTILS.md` | ML-инженеры | TrainingBridge, оптимизаторы, мониторинг |
+| `docs/GEOMETRY.md` | Исследователи | geometry/: квантизаторы, attention, routing, FFN |
+| `docs/INFERENCE.md` | Пользователи | E2Inference, генерация, Q6-эмбеддинг, экспорт |
+| `docs/CONTRIBUTING.md` | Контрибьюторы | Тесты, стиль кода, добавление архитектур |
 
 ### Концептуальная
 
