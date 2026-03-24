@@ -1,0 +1,72 @@
+{
+  "global_avg_hamming": 2.56,
+  "hypothesis_confirmed": false,
+  "neural_model_used": false,
+  "archetypes": {
+    "MSEO": {
+      "name": "Кристалл (Матер+Стат+Элем+Упор)",
+      "hex_indices": [
+        31,
+        39,
+        31,
+        63,
+        23
+      ],
+      "avg_hamming": 1.6,
+      "max_hamming": 3,
+      "clustered": true
+    },
+    "MSCO": {
+      "name": "Здание (Матер+Стат+Компл+Упор)",
+      "hex_indices": [
+        49,
+        42,
+        56,
+        3,
+        13
+      ],
+      "avg_hamming": 3.4,
+      "max_hamming": 5,
+      "clustered": false
+    },
+    "MDCO": {
+      "name": "Машина (Матер+Дин+Компл+Упор)",
+      "hex_indices": [
+        45,
+        32,
+        50,
+        56,
+        59
+      ],
+      "avg_hamming": 2.8,
+      "max_hamming": 5,
+      "clustered": false
+    },
+    "ADEO": {
+      "name": "Алгоритм (Абст+Дин+Элем+Упор)",
+      "hex_indices": [
+        60,
+        37,
+        4,
+        36,
+        63
+      ],
+      "avg_hamming": 2.6,
+      "max_hamming": 5,
+      "clustered": false
+    },
+    "ASCF": {
+      "name": "Культура (Абст+Стат+Компл+Текуч)",
+      "hex_indices": [
+        32,
+        2,
+        6,
+        38,
+        15
+      ],
+      "avg_hamming": 2.4,
+      "max_hamming": 5,
+      "clustered": true
+    }
+  }
+}
