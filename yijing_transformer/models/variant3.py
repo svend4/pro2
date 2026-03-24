@@ -442,15 +442,14 @@ class Variant3Block(nn.Module):
         self.biangua_attn = BianGuaAttention(d_model, n_heads, hamming_lambda)
         self.ternary_gate = TernaryGate(d_model, uncertainty_budget)
 
-        # ArchetypalInterlingua: 2 sources (attn_out, ternary_out)
+        # ArchetypalInterlinguaFixed: 2 sources (attn_out, ternary_out)
+        # Заменяет багованный ArchetypalInterlingua (один общий trit_proj → PPL=vanilla)
         # Imported here to avoid circular import at module level
-        from yijing_transformer.models.geometry.routing import ArchetypalInterlingua
-        self.interlingua = ArchetypalInterlingua(
+        from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInterlinguaFixed
+        self.interlingua = ArchetypalInterlinguaFixed(
             d_model=d_model,
             n_sources=2,
             n_archetypes=64,
-            use_ternary=True,
-            uncertainty_budget=uncertainty_budget,
         )
 
         self.analogy = CrossHexagramAnalogy(d_model)
@@ -486,9 +485,9 @@ class Variant3Block(nn.Module):
         ternary_out = self.ternary_gate(attn_out)
 
         # 4. Архетипальная интерлингва — хаб для двух источников
-        # Сигнатура: forward(x, source_outputs)
-        inter_out = self.interlingua(attn_out, [attn_out, ternary_out])
-        self._interlingua_loss = self.interlingua.get_interlingua_loss()
+        # Сигнатура: forward(source_outputs, core_hidden) → (output, aux_loss)
+        inter_out, _il_aux = self.interlingua([attn_out, ternary_out], attn_out)
+        self._interlingua_loss = _il_aux
 
         # 5. Кросс-архетипная аналогия — 変爻 механизм
         analogy_out = self.analogy(inter_out, hex_weights)
