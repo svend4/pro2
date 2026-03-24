@@ -27,6 +27,8 @@ from yijing_transformer.models.geometry import (
 9. [nautilus.py — Иерархия Наутилуса](#9-nautiluspy--иерархия-наутилуса)
 10. [abriale.py — Абриале-слой](#10-abrijalepy--абриале-слой)
 11. [kasatkin_router.py — Маршрутизатор Касаткина](#11-kasatkin_routerpy--маршрутизатор-касаткина)
+12. [q6_algebra.py — Алгебра Z₂^6 и операции И-Цзин](#12-q6_algebrapy--алгебра-z26-и-операции-и-цзин)
+13. [interlingua_fixed.py — Исправленная Интерлингва](#interlingua_fixedpy--исправленная-интерлингва)
 
 ---
 
@@ -94,6 +96,7 @@ e8 = generate_e8_roots()      # (240, 8), float32
 | `TernaryQuantizer` | 415 | {-1, 0, +1}⁶ | 729 тернарных вершин, ключ для BitNet-style |
 | `PairedBitQuantizer` | 598 | 64 пары | Квантизует в 2 разные гексаграммы одновременно |
 | `MatryoshkaQuantizer` | 750 | Q2→Q3→Q6 | Трёхуровневая иерархическая квантизация |
+| `WHT_Quantizer` | 1068 | {-1,+1}^n | Walsh-Hadamard спектр → квантизация (Теорема 5); `use_spectral_loss` для регуляризации bent-подобия |
 
 ### Пример: TernaryQuantizer
 
@@ -183,9 +186,27 @@ y = attn(x)  # Block-sparse по 8 дворцам Q6
 | Класс | Строка | Описание |
 |-------|--------|---------|
 | `SourceSpecializer` | 859 | Специализация по источнику через Q6-сигнатуру |
-| `ArchetypalInterlingua` | 946 | 64 архетипа-посредника (hub-and-spoke) |
+| `ArchetypalInterlingua` | 946 | 64 архетипа-посредника (hub-and-spoke) ⚠️ **баг**: единый `trit_proj` |
 | `BridgedInterlingua` | 1388 | Двойная прослойка: Bridge + Interlingua |
 | `DynamicCurriculumController` | 1822 | Адаптивный curriculum scheduler |
+
+> ⚠️ **`ArchetypalInterlingua` имеет баг:** все N источников используют один `trit_proj`,
+> что приводит к PPL ≈ 2.93 вместо 2.75. Для новых экспериментов используйте
+> `ArchetypalInterlinguaFixed` из `geometry/interlingua_fixed.py` (активируется флагом
+> `interlingua_use_fixed=True` в `model.py`).
+
+### `interlingua_fixed.py` — Исправленная Интерлингва
+
+| Класс | Описание |
+|-------|---------|
+| `ArchetypalInterlinguaFixed` | Per-source `trit_proj[i]` — исправление бага. Активируется флагом `interlingua_use_fixed=True` в конфиге модели. |
+
+```python
+from yijing_transformer.models.geometry import ArchetypalInterlinguaFixed
+model = ArchetypalInterlinguaFixed(d_model=128, n_sources=3, n_archetypes=64)
+output, aux_loss = model([src1, src2, src3])  # list of (B, T, d)
+diag = model.diagnostics()  # keys: gate, diversity_loss, spread, src{i}_pos
+```
 
 ### `AbrialeBridgeMediator` — лучший результат (PPL 1.24)
 
@@ -364,3 +385,43 @@ out, routing_weights = router(x, expert_outputs)
 ```
 
 **Протокол валидации:** минимум 3 000 шагов на реальных данных. Успех: `routing_confidence > 15%` при PPL ≤ baseline.
+
+---
+
+## 12. `q6_algebra.py` — Алгебра Z₂^6 и операции И-Цзин
+
+**~690 строк.** Закрывает все теоретические пробелы из THEORY_VS_PRACTICE.md.
+
+### Классы
+
+| Класс / Функция | Описание |
+|----------------|---------|
+| `Q6Arithmetic` | Группа Z₂^6: `add`, `identity`, `hamming_from_dot` (Теорема 3), `hamming_matrix`, `subgroup_from_generators`, `coset`, `partition_into_cosets` |
+| `YiJingOps` | V₄ операции: `heng` 恒, `cuo_gua` 错, `zong_gua` 综, `hu_gua` 互, `cuo_zong` 错综, `v4_orbit` |
+| `BentFunctions` | Bent-функции f: GF(2)^6→GF(2): `truth_tables`, `wht_spectra`, `is_bent`, `support_vectors`, `prototype_codebook` |
+| `YiJingV4Layer` | `nn.Module`: обучаемая взвешенная комбинация 4 V₄-операций |
+| `Q6ArithmeticLayer` | `nn.Module`: routing по Хэммингу (Теорема 3); `use_bent_init=True` — инициализация из bent seeds |
+| `BentPrototypeQuantizer` | Квантизатор на bent support set (28 вершин) |
+| `verify_theorem3` / `verify_v4_group` / `verify_bent_functions` / `verify_all` | Верификационные функции (all_ok=True) |
+
+### Теорема 3 — Хэмминг через скалярное произведение
+
+```python
+from yijing_transformer.models.geometry import Q6Arithmetic
+# d_H(a,b) = (6 - dot(a,b)) / 2  в {-1,+1}^6
+dist = Q6Arithmetic.hamming_from_dot(a, b)  # (N,) расстояния
+H    = Q6Arithmetic.hamming_matrix(codebook) # (K,K) матрица
+```
+
+### Bent-функции как prototype seeds
+
+```python
+from yijing_transformer.models.geometry import BentFunctions, Q6ArithmeticLayer
+# 8 прототипов из bent support (furthest-point sampling)
+proto = BentFunctions.prototype_codebook(k=8)  # (8, 6) в {-1,+1}^6
+# Routing layer с bent-инициализацией
+layer = Q6ArithmeticLayer(d_model=128, n_prototypes=8, use_bent_init=True)
+```
+
+> **Примечание:** bent-функции на GF(2)^6 несбалансированы: |support| = 28 или 36
+> (Ŵ(0) = ±8). Плоский WHT-спектр: все |Ŵ(u)| = 8 — 20/20 проверено.
