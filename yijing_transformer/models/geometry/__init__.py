@@ -62,6 +62,7 @@ from .quantizers import (
     TernaryQuantizer,
     PairedBitQuantizer,
     MatryoshkaQuantizer,
+    WHT_Quantizer,
 )
 
 # Attention patterns & modules
@@ -103,6 +104,14 @@ from .equivariant import (
     D4EquivariantLayer,
     DualEmbedding,
 )
+
+# ArchetypalInterlinguaFixed — исправленная версия (раздельные trit_proj на источник)
+# Примечание: оригинальный ArchetypalInterlingua в routing.py содержит баг
+# (единый trit_proj делит веса между источниками → PPL ≈ 2.93 вместо 2.75)
+from .interlingua_fixed import ArchetypalInterlinguaFixed
+
+# Kasatkin Q6 routing — WHT-based routing с hex-метками доменов
+from .kasatkin_router import KasatkinQ6Router, Q6ExpertBank
 
 # Routing, gating, curriculum
 from .routing import (
