@@ -1,0 +1,22 @@
+[
+  {
+    "cycle": 1,
+    "avg_lci_all": 2.9992,
+    "load_balance": 0.8993,
+    "n_resonant": 15,
+    "kirchhoff": true,
+    "resonant": true,
+    "n_generated": 45,
+    "temperature": 1.4
+  },
+  {
+    "cycle": 2,
+    "avg_lci_all": 3.0268,
+    "load_balance": 0.933,
+    "n_resonant": 15,
+    "kirchhoff": true,
+    "resonant": true,
+    "n_generated": 45,
+    "temperature": 1.19
+  }
+]
