@@ -432,28 +432,62 @@ class StructuralDefectLayer(nn.Module):
 
 
 class HexagramAttentionPattern(nn.Module):
-    """Гексаграммный паттерн attention: 64 фиксированных паттерна."""
+    """Hexagram attention with learnable distance thresholds.
+
+    Instead of hardcoded distance thresholds (2, 8, 32) and modular
+    patterns (mod 2, mod 4), uses learnable parameters that the model
+    can adjust during training to find optimal receptive fields.
+    """
     def __init__(self, d_model: int, block_size: int):
         super().__init__()
         self.proj_to_6d = nn.Linear(d_model, 6, bias=False)
         self.scale = nn.Parameter(torch.tensor(0.0))
-        patterns = torch.zeros(6, block_size, block_size)
+        self.block_size = block_size
+
+        # Learnable distance thresholds (initialized to original values)
+        # tanh(scale * (threshold - dist)) gives smooth transition
+        self.dist_thresholds = nn.Parameter(torch.tensor([2.0, 8.0, 32.0]))
+        self.dist_sharpness = nn.Parameter(torch.tensor([2.0, 0.5, 0.15]))
+        # Learnable modular periods
+        self.mod_periods = nn.Parameter(torch.tensor([2.0, 4.0]))
+        # Learnable position threshold
+        self.pos_threshold = nn.Parameter(torch.tensor(4.0))
+
+        # Pre-compute distance matrix (fixed)
+        dist = torch.zeros(block_size, block_size)
+        pos_j = torch.zeros(block_size, block_size)
         for i in range(block_size):
             for j in range(i + 1):
-                dist = i - j
-                patterns[0, i, j] = 1.0 if dist <= 2 else -1.0
-                patterns[1, i, j] = 1.0 if dist <= 8 else -1.0
-                patterns[2, i, j] = 1.0 if dist <= 32 else -1.0
-                patterns[3, i, j] = 1.0 if dist % 2 == 0 else -1.0
-                patterns[4, i, j] = 1.0 if dist % 4 == 0 else -1.0
-                patterns[5, i, j] = 1.0 if j <= 4 else -1.0
-        self.register_buffer('patterns', patterns)
+                dist[i, j] = float(i - j)
+                pos_j[i, j] = float(j)
+        self.register_buffer('_dist', dist)
+        self.register_buffer('_pos_j', pos_j)
+
+    def _build_patterns(self, T: int) -> torch.Tensor:
+        """Build patterns dynamically from learnable parameters."""
+        dist = self._dist[:T, :T]
+        pos_j = self._pos_j[:T, :T]
+
+        # Distance-based patterns: smooth tanh instead of hard if/else
+        p0 = torch.tanh(self.dist_sharpness[0] * (self.dist_thresholds[0] - dist))
+        p1 = torch.tanh(self.dist_sharpness[1] * (self.dist_thresholds[1] - dist))
+        p2 = torch.tanh(self.dist_sharpness[2] * (self.dist_thresholds[2] - dist))
+
+        # Modular patterns: cos(2π·dist/period) → smooth periodic
+        p3 = torch.cos(2.0 * 3.14159 * dist / self.mod_periods[0].clamp(min=1.0))
+        p4 = torch.cos(2.0 * 3.14159 * dist / self.mod_periods[1].clamp(min=1.0))
+
+        # Position pattern: smooth threshold
+        p5 = torch.tanh(1.0 * (self.pos_threshold - pos_j))
+
+        return torch.stack([p0, p1, p2, p3, p4, p5], dim=0)
 
     def forward(self, x, T):
         x_mean = x.mean(dim=1)
         z6 = self.proj_to_6d(x_mean)
         hex_weights = torch.tanh(z6)
-        patterns = self.patterns[:, :T, :T]
+        # Build patterns dynamically from learnable thresholds
+        patterns = self._build_patterns(T)
         bias = torch.einsum('bk,kij->bij', hex_weights, patterns)
         return self.scale * bias.unsqueeze(1)
 

@@ -452,21 +452,32 @@ class TernaryQuantizer(nn.Module):
             torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
         )
 
-        if mode == 'full':
-            codebook = generate_ternary_hypercube(total_dim)  # (3^n, n)
-            self.register_buffer('codebook', codebook)
-            self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
-        elif mode == 'factored':
-            assert total_dim % 3 == 0, f"factored mode needs total_dim divisible by 3, got {total_dim}"
+        # All modes are initialized — the model can blend between them
+        # via soft gating, instead of hard enum dispatch.
+        # Factored mode (always available for factored quantization)
+        if total_dim % 3 == 0:
             trigrams = generate_ternary_trigrams()  # (27, 3)
             self.register_buffer('trigrams', trigrams)
             self.register_buffer('trigrams_norm_sq', (trigrams ** 2).sum(dim=1))
-        elif mode == 'sparse':
-            codebook = self._generate_sparse_codebook(total_dim, max_zeros)
-            self.register_buffer('codebook', codebook)
-            self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
+            self._has_factored = True
         else:
-            raise ValueError(f"Unknown TernaryQuantizer mode: {mode}")
+            self._has_factored = False
+
+        # Full/sparse codebook
+        if mode == 'sparse':
+            codebook = self._generate_sparse_codebook(total_dim, max_zeros)
+        else:
+            codebook = generate_ternary_hypercube(total_dim)  # (3^n, n)
+        self.register_buffer('codebook', codebook)
+        self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
+
+        # Soft mode gate: learns to blend factored vs full when both available
+        if self._has_factored:
+            self.mode_gate_logit = nn.Parameter(torch.tensor(
+                1.5 if mode == 'factored' else -1.5  # initialize toward preferred mode
+            ))
+        else:
+            self.mode_gate_logit = None
 
         # Penalty weight for uncertainty usage
         self._uncertainty_loss = torch.tensor(0.0)
@@ -528,35 +539,41 @@ class TernaryQuantizer(nn.Module):
         Returns:
             quantized: (..., total_dim) — квантизованные к {-1, 0, +1}
         """
-        if self.mode == 'factored':
+        # Organic mode blending: when both factored and full are available,
+        # the model softly blends between them via a learned gate.
+        if self._has_factored and self.mode_gate_logit is not None:
+            gate = torch.sigmoid(self.mode_gate_logit)  # scalar in [0, 1]
+            q_factored = self._soft_quantize_factored(x)
+            q_full = self._soft_quantize_full(x)
+            quantized = gate * q_factored + (1 - gate) * q_full
+        elif self._has_factored and self.mode == 'factored':
             quantized = self._soft_quantize_factored(x)
         else:
             quantized = self._soft_quantize_full(x)
 
-        # Uncertainty penalty: штраф за слишком много 0-компонент
-        # |quantized| близок к 0 → это "变爻" (неопределённость)
+        # Uncertainty penalty
         zero_fraction = (1.0 - quantized.abs()).clamp(min=0).mean()
         target_fraction = self.uncertainty_budget
         self._uncertainty_loss = ((zero_fraction - target_fraction) ** 2) * 0.1
 
+        # Smooth STE: temperature-controlled instead of hard .detach()
         if self.adaptive_temp:
             return quantized
-        return x + (quantized - x).detach()
+        # Soft residual: blend toward quantized proportional to temperature
+        temp = self.current_temp
+        blend = 1.0 / (1.0 + temp)  # low temp → blend≈1 (more quantized)
+        return x + blend * (quantized - x)
 
     def hard_quantize(self, x: torch.Tensor) -> torch.Tensor:
-        """Жёсткая квантизация: каждый компонент → ближайший из {-1, 0, +1}.
+        """Ternary quantization via smooth tanh (no hard threshold).
 
-        Правило:
-        - |x| < threshold → 0 (变爻)
-        - x ≥ threshold → +1 (ян)
-        - x ≤ -threshold → -1 (инь)
-
-        threshold адаптируется через uncertainty_budget.
+        Uses steep tanh to approximate {-1, 0, +1} while preserving
+        gradient flow. The uncertainty_budget controls the width of
+        the zero-zone through the steepness parameter.
         """
-        threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1  # [0.1, 0.6]
-        result = torch.zeros_like(x)
-        result[x > threshold] = 1.0
-        result[x < -threshold] = -1.0
+        # Steepness from uncertainty budget: more budget → wider zero zone → lower steepness
+        steepness = 5.0 / (self.uncertainty_budget + 0.1)
+        result = torch.tanh(x * steepness)
         return result
 
     def get_uncertainty_loss(self) -> torch.Tensor:
