@@ -281,6 +281,22 @@ def train(args):
 
     print(f"Bridge components: {bridge.summary()}")
 
+    # EMA (Exponential Moving Average) — сглаженные веса для инференса
+    ema = None
+    if getattr(cfg, 'use_ema', False):
+        from training.ema import EMA
+        ema = EMA(model, decay=getattr(cfg, 'ema_decay', 0.999))
+        print(f"EMA enabled: decay={ema.decay}")
+
+    # Early Stopping — прекращение обучения при отсутствии улучшений
+    early_stopper = None
+    if getattr(cfg, 'early_stop_patience', 0) > 0:
+        from training.ema import EarlyStopping
+        early_stopper = EarlyStopping(
+            patience=cfg.early_stop_patience, min_delta=0.001
+        )
+        print(f"Early stopping: patience={cfg.early_stop_patience}")
+
     start_step = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=True)
@@ -418,6 +434,10 @@ def train(args):
             scaler.update()
             optimizer.zero_grad()
 
+            # EMA: обновляем скользящее среднее весов
+            if ema is not None:
+                ema.update()
+
             # Bridge: мониторинг после шага (Loss Spike, Grokking, etc.)
             alerts = bridge.after_step(
                 step, loss.item() * cfg.grad_accum_steps,
@@ -478,7 +498,19 @@ def train(args):
                     if 'active_archetypes' in il_stats:
                         metrics['interlingua/active_archetypes'] = il_stats['active_archetypes']
                         metrics['interlingua/usage_mean'] = il_stats['archetype_usage_mean']
+            # EMA: оценка с усреднёнными весами
+            if ema is not None:
+                with ema.average_parameters():
+                    ema_val = estimate_val_loss(model, cfg, device, data_fn=data_fn)
+                    metrics['val_loss_ema'] = ema_val
+
             logger.log(metrics, step)
+
+            # Early Stopping: проверяем val_loss
+            if early_stopper is not None:
+                if early_stopper(val_loss):
+                    print(f"Early stopping at step {step}: val_loss={val_loss:.4f}")
+                    break
 
         if step % cfg.save_every == 0:
             os.makedirs(args.checkpoint_dir, exist_ok=True)

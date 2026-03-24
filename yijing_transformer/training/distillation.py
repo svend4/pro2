@@ -1,6 +1,7 @@
 """
-EXPERIMENTAL — не используется в training pipeline.
-Импортируется только в test_model_pytest.py. Оставлен для будущих экспериментов.
+Готов к использованию: DistillationTrainer(teacher, student, optimizer, cfg).
+Вызов: trainer.step(x, y) → {total_loss, hard_loss}.
+Также: distillation_loss() и feature_distillation_loss() как standalone функции.
 
 Knowledge Distillation для YiJing-Transformer.
 

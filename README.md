@@ -336,7 +336,7 @@ pip install -e .
 # С дополнительными зависимостями
 pip install -e ".[all]"
 
-# Тесты (1688 тестов)
+# Тесты (1987+ тестов)
 pytest yijing_transformer/tests/ -x -q
 ```
 
@@ -606,7 +606,7 @@ pro2/
     │   ├── downstream_finetune.py # Файнтюнинг
     │   └── ...                    # Эксперименты, визуализация
     │
-    └── tests/                     # 1688 тестов
+    └── tests/                     # 1987+ тестов
         ├── test_model_pytest.py           # Основная модель
         ├── test_variant3.py               # Variant3
         ├── test_variant3_extended.py      # Variant3 расширенные
@@ -615,7 +615,19 @@ pro2/
         ├── test_nautilus_yijing.py        # NautilusYiJing
         ├── test_abriale.py               # AbrialeLayer
         ├── test_multigpu_precision.py     # Multi-GPU + fp16/bf16
-        └── ...                            # 18 файлов тестов
+        ├── test_variant3_extensions.py       # Variant3 расширения
+        ├── test_matryoshka_pytest.py         # Matryoshka-квантизация
+        ├── test_matryoshka_nautilus_pytest.py # MatryoshkaNautilus
+        ├── test_ternary_matrix_pytest.py     # Тернарная матрица
+        ├── test_conditional_attention.py     # Условное внимание
+        ├── test_convergence_pytest.py        # Convergence модули
+        ├── test_bridge_of_modules_pytest.py  # BridgeOfModules
+        ├── test_archetypal_interlingua_pytest.py # ArchetypalInterlingua
+        ├── test_integration_scale.py         # Интеграционные тесты
+        ├── test_generation_quality.py        # Качество генерации
+        ├── test_training_utils.py            # Тренировочные утилиты
+        ├── test_hierarchical_e2.py           # E2-иерархия
+        └── test_nautilus_pytest.py           # Nautilus-модули
 ```
 
 ---
@@ -699,7 +711,7 @@ pytest yijing_transformer/tests/ -v --tb=short
 pytest yijing_transformer/tests/test_multigpu_precision.py -x -q
 ```
 
-**Покрытие:** 1688 тестов, 18 файлов. Покрыты все основные архитектуры, геометрические модули, тренировочные утилиты, edge cases (batch=1, seq=1), mixed precision (fp16/bf16), device transfer.
+**Покрытие:** 1987+ тестов, 25 файлов. Покрыты все основные архитектуры, геометрические модули, тренировочные утилиты, edge cases (batch=1, seq=1), mixed precision (fp16/bf16), device transfer.
 
 ---
 
