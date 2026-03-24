@@ -1,6 +1,6 @@
 # CHANGELOG — Хронология изменений
 
-> Связанные документы: [INDEX.md](INDEX.md) · [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) · [EXPERIMENTS.md](EXPERIMENTS.md)
+> Связанные документы: [INDEX.md](INDEX.md) · [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) · [EXPERIMENTS.md](EXPERIMENTS.md) · [THEORY_VS_PRACTICE.md](THEORY_VS_PRACTICE.md)
 
 ---
 
@@ -79,8 +79,25 @@
 | `docs/INDEX.md` (обновлён) | +PORTAL.md в навигации, +8 quick-search вопросов |
 
 ```
-374566e -> (текущий коммит с PORTAL.md и обновлёнными docs)
+374566e  docs: EXPERIMENTS, IMPLEMENTATION_STATUS, CHANGELOG; update INDEX + FUTURE_TASKS
+9c1aa33  docs: full codebase audit — portal, training scripts, tokenizers, benchmarks
+(текущий)  docs: THEORY_VS_PRACTICE — theory vs code deep analysis
 ```
+
+### Документация (третья часть — теория vs практика)
+
+Глубокий аудит 12 теоретических документов vs 50+ файлов кода. Ключевые находки:
+
+| Находка | Теория | Код | Критичность |
+|---------|--------|-----|-------------|
+| Walsh-Hadamard (Теорема 5) | есть | только в `theoretical_analysis.py` | 🟡 |
+| Temperature T→0 | T=0.1 за 800 шагов | T≈0.689 (не достигает) | 🔴 |
+| ArchetypalInterlingua | N тrit_proj | исправлено, но не подключено | 🔴 |
+| SOLAN-76 глифов | основной токенизатор | standalone, не интегрирован | 🔴 |
+| Turning Point v59 | 7 источников синтез | 1 работает (Беляев), 5 удалены | документировано |
+| Q4⊂Q6 в обучении | инициализация RAG | только верификация | 🟡 |
+
+Добавлен `docs/THEORY_VS_PRACTICE.md` с оценками (теория 8.5/10, реализация 5.5/10, интеграция 3.5/10) и дорожной картой gap→fix (6 задач ПРИОРИТЕТ 0).
 
 ---
 

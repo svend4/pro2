@@ -4,6 +4,28 @@
 # Документация по сессиям: docs/CHANGELOG.md
 # Полный статус реализации: docs/IMPLEMENTATION_STATUS.md
 # Все эксперименты: docs/EXPERIMENTS.md
+# Теория vs код: docs/THEORY_VS_PRACTICE.md  ← НОВЫЙ
+
+---
+
+## 🔴 ПРИОРИТЕТ 0 — закрыть разрывы теория→код (из аудита 2026-03-24)
+
+Полная дорожная карта: [docs/THEORY_VS_PRACTICE.md — Часть 5](docs/THEORY_VS_PRACTICE.md)
+
+| # | Задача | Сложность | Файл |
+|---|--------|-----------|------|
+| 0.1 | Подключить `interlingua_fixed.py` в `model.py` | 30 мин | `models/model.py` |
+| 0.2 | Temperature `end_temp=0.01`, `warmup_steps=5000` | 15 мин | `geometry/quantizers.py` |
+| 0.3 | Запустить `train_with_glyph.py --steps 1000`, интегрировать | 2 ч | `experiments/train_with_glyph.py` |
+| 0.4 | Реализовать `WHT_Quantizer` (Walsh-Hadamard, O(6 log 6)) | 3 ч | `geometry/quantizers.py` |
+| 0.5 | CrossDomainAnalogy 15→36 пар (добавить B→A реверсы) | 1 ч | `self_train_hmoe.py` |
+| 0.6 | Q4⊂Q6 инициализация RAG из Q4-кластеров (если hamming<2.5) | 2 ч | `e2_self_improve.py` |
+
+**Критические находки аудита:**
+- ArchetypalInterlingua исправлена, но **не подключена** (задача 0.1)
+- Temperature за 800 шагов достигает T≈0.689, цель T=0.1 (задача 0.2)
+- SOLAN-76 реализован, но основной цикл использует CharTokenizer (задача 0.3)
+- Walsh-Hadamard (Теорема 5) — только в theoretical_analysis.py, не в квантизаторе (задача 0.4)
 
 ---
 

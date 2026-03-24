@@ -17,6 +17,7 @@
 | [INFERENCE.md](INFERENCE.md) | Пользователи | E2Inference, генерация, Q6-эмбеддинг, экспорт |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Контрибьюторы | Тесты, стиль кода, добавление архитектур |
 | **[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)** | **Все** | **Что реализовано и где искать — первый документ при code review** |
+| **[THEORY_VS_PRACTICE.md](THEORY_VS_PRACTICE.md)** | **Исследователи** | **Теория vs код: 19 теорем, расхождения, что работает, дорожная карта gap→fix** |
 | **[EXPERIMENTS.md](EXPERIMENTS.md)** | **Исследователи** | **Все эксперименты: запуск, критерии, результаты** |
 | **[PORTAL.md](PORTAL.md)** | **Разработчики** | **Portal-система, адаптеры репо, федеративное обучение, граф знаний** |
 | **[CHANGELOG.md](CHANGELOG.md)** | **Все** | **Хронология изменений по сессиям** |
@@ -56,6 +57,19 @@ LCI (Loop Closure Index)
 ---
 
 ## Быстрый поиск
+
+**Хочу понять, что из теории реализовано в коде:**
+→ [THEORY_VS_PRACTICE.md](THEORY_VS_PRACTICE.md)
+
+**Хочу знать, почему 5 из 7 источников объявлены «вредными»:**
+→ [THEORY_VS_PRACTICE.md — TURNING POINT v59](THEORY_VS_PRACTICE.md#3-turning-point-v59--синтез-превратился-в-одноточечное-решение)
+→ `TURNING_POINT_ANALYSIS.md`
+
+**Хочу знать, что именно работает (верифицированные результаты):**
+→ [THEORY_VS_PRACTICE.md — Часть 4](THEORY_VS_PRACTICE.md#часть-4-что-точно-работает-верифицированные-результаты)
+
+**Хочу закрыть разрыв теория→код (дорожная карта):**
+→ [THEORY_VS_PRACTICE.md — Часть 5](THEORY_VS_PRACTICE.md#часть-5-дорожная-карта-gapfix)
 
 **Хочу обучить модель с нуля:**
 → [TRAINING.md — Быстрый старт](TRAINING.md#2-быстрый-старт)
