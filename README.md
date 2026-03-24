@@ -43,7 +43,8 @@
 | `GatedPathSelector` | `geometry/routing.py:11` | Выбор геометрического vs стандартного пути |
 | `AdaptiveGatedPathSelector` | `geometry/routing.py:37` | Контентно-зависимый гейт с температурой |
 | `AbrialeBridgeMediator` | `geometry/routing.py:573` | Лучший результат PPL 1.24 (v59) |
-| `ArchetypalInterlingua` | `geometry/routing.py:944` | 64-экспертный банк (hub-and-spoke) |
+| `ArchetypalInterlingua` | `geometry/routing.py:946` | 64-экспертный банк (⚠️ баг: единый trit_proj) |
+| `ArchetypalInterlinguaFixed` | `geometry/interlingua_fixed.py` | Исправленная версия (per-source proj) |
 | `DynamicCurriculumController` | `geometry/routing.py:1818` | Адаптирует силу геометрии при обучении |
 
 ### 6 доменов Q6
@@ -108,6 +109,7 @@ python bench_all.py --checkpoint hmoe_self_trained_v4.pt
 | `self_train_v3.py` | v2 + Stage0 = figure-8 обход Q6 | Алгоритм Скарабея |
 | `figure8_turbine.py` | 4 эксперта, TSP-маршрут | Greedy/2-opt TSP |
 | `nautilus_4agent.py` | 4 агента по кольцам META/ABSTRACT/DYNAMIC/CONCRETE | Наутилус-4 |
+| `nautilus_15agent.py` | 15 агентов (Q4⊂Q6, 60/64 вершин) | Полное Q6-покрытие |
 | `roundabout.py` | Кольцо с адаптивным числом оборотов | Адаптивный LCI |
 | `bidir_turbine.py` | Два встречных потока, встреча в DYNAMIC | Bidirectional |
 | `multi_salesman.py` | 2–3 агента с общим RAG | Multi-agent |
@@ -179,8 +181,9 @@ pro2/
 ├── self_train*.py           # Самообучение (v1/v2/v3)
 ├── self_train_hmoe*.py      # HMoE-специфическое самообучение
 ├── figure8_turbine.py       # Figure-8 + TSP routing
-├── nautilus_4agent.py       # 4-агентный Наутилус
-├── roundabout.py            # Кольцевой маршрут
+├── nautilus_4agent.py       # 4-агентный Наутилус (META/ABSTRACT/DYNAMIC/CONCRETE)
+├── nautilus_15agent.py      # 15-агентный Наутилус (15 Q4-тессерактов ⊂ Q6)
+├── roundabout.py            # Кольцевой маршрут (адаптивные обороты до LCI≈π)
 ├── bidir_turbine.py         # Двунаправленная турбина
 ├── multi_salesman.py        # Multi-agent торговые представители
 ├── e2_inference.py          # Inference API: embed/similar/generate/map
@@ -194,9 +197,12 @@ pro2/
     │   ├── hierarchical_moe.py         # HierarchicalMoEFFN (Q2→Q3→Q6)
     │   ├── hierarchical_e2.py          # HierarchicalE2 (E2 архитектура)
     │   └── geometry/
-    │       ├── routing.py              # Гейты, маршрутизаторы, curriculum (1844 LOC)
-    │       ├── core.py                 # Q6-гиперкуб, кодбук
-    │       └── quantizers.py          # TernaryQuantizer, FactoredQuantizer
+    │       ├── core.py                 # Q6-гиперкуб, 64 гексаграммы, кодбуки
+    │       ├── quantizers.py           # 13 квантизаторов (TernaryQ, WHT_Q, E8Q ...)
+    │       ├── routing.py              # Гейты, маршрутизаторы, curriculum
+    │       ├── q6_algebra.py           # Z₂^6: Теорема 3, V₄ (И-Цзин), BentFunctions
+    │       ├── kasatkin_router.py      # KasatkinQ6Router (3D-куб), Q6ExpertBank
+    │       └── interlingua_fixed.py    # ArchetypalInterlinguaFixed (per-source)
     ├── scripts/                        # Утилиты и эксперименты
     └── training/                       # Тренировочные утилиты
 ```

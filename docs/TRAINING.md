@@ -72,8 +72,8 @@ python self_train_v3.py    # + Stage0 = figure-8 обход Q6
 | `figure8_turbine.py` | 4 агента, TSP-маршрут | A | `--lci-loss`, `--cycles`, `--steps_per_expert` |
 | `nautilus_4agent.py` | 4 агента по кольцам | A + B | `--cycles`, `--step-scale`, `--bent-seeds` |
 | `nautilus_clover.py` | Клеверный маршрут | A | — |
-| `nautilus_15agent.py` | 15 агентов | A | — |
-| `roundabout.py` | Кольцо с адаптивными оборотами | A | `--max-laps` |
+| `nautilus_15agent.py` | 15 агентов (Q4⊂Q6) | A | `--cycles`, `--steps`, `--fast`, `--no-bent` |
+| `roundabout.py` | Кольцо с адаптивными оборотами | A | `--cycles`, `--lap-steps`, `--max-laps`, `--fast` |
 | `bidir_turbine.py` | Два встречных потока | A | — |
 | `bidir_train.py` / `bidir_train_v2.py` | Bidirectional обучение | B | — |
 | `multi_salesman.py` | 2–3 агента с общим RAG | A | `--n-agents` |
@@ -145,8 +145,12 @@ Greedy/2-opt TSP → оптимальный порядок обхода эксп
 Агент движется по кольцу экспертов, число оборотов определяется LCI-прогрессом — не фиксированное, а до достижения порога.
 
 ```bash
-python roundabout.py --checkpoint model.pt --max-laps 5 --lci-threshold 3.0
+python roundabout.py --checkpoint model.pt --cycles 4 --max-laps 5 --lap-steps 20
+python roundabout.py --fast                   # smoke test без checkpoint
 ```
+
+Аргументы: `--cycles` (дефолт 2), `--lap-steps` (шагов за оборот, дефолт 8), `--max-laps` (дефолт 2), `--temperature`, `--lr`, `--fast`, `--no-train`.
+
 
 #### `multi_salesman.py` — K агентов с общим RAG
 
@@ -161,8 +165,12 @@ python multi_salesman.py --n-agents 2 --checkpoint model.pt
 Каждый агент обрабатывает один Q4-тессеракт (C(6,4)=15 копий Q4 в Q6). Все 15×16=240 вершинных маршрутов покрывают 60/64 Q6-вершин.
 
 ```bash
-python nautilus_15agent.py --checkpoint model.pt --cycles 3
+python nautilus_15agent.py --checkpoint model.pt --cycles 4 --steps 15
+python nautilus_15agent.py --fast               # smoke test без checkpoint
 ```
+
+Аргументы: `--cycles` (дефолт 2), `--steps` (шагов/агент/цикл, дефолт 3 в fast), `--temperature`, `--temp-decay`, `--lr`, `--fast`, `--no-bent` (отключить bent seeds), `--no-train`, `--save`.
+
 
 #### `nautilus_clover.py` — 4-листный клевер
 

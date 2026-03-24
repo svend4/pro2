@@ -66,10 +66,10 @@ def test_diversity_after_training():
         if isinstance(v, float):
             print(f"  {k}: {v:.4f}")
 
-    pos_vals = [diag[f'source_{i}_trit_pos'] for i in range(n_sources)]
+    pos_vals = [diag[f'src{i}_pos'] for i in range(n_sources)]
     diversity_ok = max(pos_vals) - min(pos_vals) > 0.05
 
-    print(f"\n  trit_pos по источникам: {[f'{v:.3f}' for v in pos_vals]}")
+    print(f"\n  src_pos по источникам: {[f'{v:.3f}' for v in pos_vals]}")
     print(f"  Разброс: {max(pos_vals) - min(pos_vals):.3f}")
 
     if diversity_ok:
@@ -77,7 +77,7 @@ def test_diversity_after_training():
     else:
         print("\nТЕСТ: дифференциация слабая, нужно больше шагов или выше diversity_weight")
 
-    gate_val = diag['gate_value']
+    gate_val = diag['gate']
     assert 0 < gate_val < 1, f"Gate застрял: {gate_val}"
     print(f"Gate в допустимом диапазоне: {gate_val:.3f}")
 
