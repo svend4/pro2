@@ -99,6 +99,40 @@
 
 Добавлен `docs/THEORY_VS_PRACTICE.md` с оценками (теория 8.5/10, реализация 5.5/10, интеграция 3.5/10) и дорожной картой gap→fix (6 задач ПРИОРИТЕТ 0).
 
+### Задачи 0.1–0.5 (gap→fix, продолжение сессии)
+
+#### `yijing_transformer/models/model.py`
+- Импортирован `ArchetypalInterlinguaFixed` из `geometry.interlingua_fixed`
+- При `interlingua_use_fixed=True` (по умолчанию) используется исправленная версия
+- Сохранена совместимость: `interlingua_use_fixed=False` → оригинал (для ablation)
+
+#### `yijing_transformer/models/geometry/quantizers.py`
+- `TernaryQuantizer`: добавлены `warmup_steps=5000`, `start_temp=1.0`, `end_temp=0.01`
+- `TernaryQuantizer.step_temp()`: косинусное расписание T: 1.0→0.01 за warmup_steps
+- Новый класс `WHT_Quantizer` (Теорема 5, Walsh-Hadamard):
+  - O(n log n) через butterfly матрицу Адамара-Уолша
+  - `hard_bits()` → {-1,+1}^n для RAG/routing
+  - `use_spectral_loss` — штраф за неравномерность спектра (bent-функции)
+
+#### `self_train_hmoe.py`
+- `_CDA_ALL_PAIRS` — 36 направленных пар 6×6 (все направления включая B→A реверсы)
+- `cross_domain_signal()` — сэмплирование из 36 пар вместо random orbit
+
+```
+7257221  fix(priority-0): close 3 theory→code gaps (tasks 0.1, 0.2, 0.4, 0.5)
+```
+
+### Итог сессии 2026-03-24
+
+| Задача | Файл | Результат |
+|--------|------|-----------|
+| 0.1: interlingua_fixed в model.py | `models/model.py` | ✅ |
+| 0.2: TernaryQuantizer cosine annealing | `geometry/quantizers.py` | ✅ |
+| 0.4: WHT_Quantizer | `geometry/quantizers.py` | ✅ |
+| 0.5: CDA 36 пар | `self_train_hmoe.py` | ✅ |
+| 0.3: train_with_glyph интеграция | ещё не запущен | 🔴 |
+| 0.6: Q4⊂Q6 RAG init | `e2_self_improve.py` | 🔴 |
+
 ---
 
 ## 2026-03-22 — Session: meta-интеграция
