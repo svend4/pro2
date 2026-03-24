@@ -16,6 +16,9 @@
 | [GEOMETRY.md](GEOMETRY.md) | Исследователи | Модуль geometry/: квантизаторы, attention, routing |
 | [INFERENCE.md](INFERENCE.md) | Пользователи | E2Inference, генерация, Q6-эмбеддинг, экспорт |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Контрибьюторы | Тесты, стиль кода, добавление архитектур |
+| **[IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)** | **Все** | **Что реализовано и где искать — первый документ при code review** |
+| **[EXPERIMENTS.md](EXPERIMENTS.md)** | **Исследователи** | **Все эксперименты: запуск, критерии, результаты** |
+| **[CHANGELOG.md](CHANGELOG.md)** | **Все** | **Хронология изменений по сессиям** |
 
 ---
 
@@ -74,3 +77,21 @@ LCI (Loop Closure Index)
 
 **Хочу добавить свой оптимизатор:**
 → [TRAINING_UTILS.md — utils_v* таблица](TRAINING_UTILS.md#12-таблица-источников)
+
+**Хочу понять что уже реализовано (code review):**
+→ [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)
+
+**Хочу запустить эксперимент / проверку:**
+→ [EXPERIMENTS.md](EXPERIMENTS.md)
+→ `./run_all_checks.sh`
+
+**Хочу узнать что изменилось в последней сессии:**
+→ [CHANGELOG.md](CHANGELOG.md)
+
+**Хочу исправить баг ArchetypalInterlingua (PPL=vanilla):**
+→ [IMPLEMENTATION_STATUS.md — interlingua_fixed](IMPLEMENTATION_STATUS.md#2-archetypalinterlinguafixed)
+→ `yijing_transformer/models/geometry/interlingua_fixed.py`
+
+**Хочу добавить Q6-routing вместо softmax:**
+→ [IMPLEMENTATION_STATUS.md — KasatkinRouter](IMPLEMENTATION_STATUS.md#3-kasatkinq6router)
+→ `yijing_transformer/models/geometry/kasatkin_router.py`

@@ -1,5 +1,28 @@
 # Задачи на будущее / Future Tasks
 # Обновляется по мере работы — не удалять
+#
+# Документация по сессиям: docs/CHANGELOG.md
+# Полный статус реализации: docs/IMPLEMENTATION_STATUS.md
+# Все эксперименты: docs/EXPERIMENTS.md
+
+---
+
+## ✅ ВЫПОЛНЕНО 2026-03-24 — experiments + geometry modules
+
+Ветка: `claude/repository-audit-fvlEG` | Коммиты: `88ddec5`, `67fd389`
+
+| Задача | Файл | Результат |
+|--------|------|-----------|
+| validate_q4_q6.py | `experiments/validate_q4_q6.py` | avg_hamming=2.56 (PARTIAL) |
+| interlingua_fixed: start_temp/end_temp, readout_attn, self-test | `geometry/interlingua_fixed.py` | spread=0.25 → PASS |
+| kasatkin_router: hex_label, Q6ExpertBank, DOMAIN_ALT | `geometry/kasatkin_router.py` | confidence=0.44 → PASS |
+| xerox_test: 11→14 кейсов, multi-arch loader | `experiments/xerox_test.py` | 6/14 mock |
+| run_all_checks.sh: 4→5 проверок, $CHECKPOINT | `run_all_checks.sh` | — |
+| monitor_improve.py | `monitor_improve.py` | создан |
+| train_with_glyph.py | `experiments/train_with_glyph.py` | создан |
+| Документация: EXPERIMENTS.md, IMPLEMENTATION_STATUS.md, CHANGELOG.md | `docs/` | создана |
+
+Детали: [docs/CHANGELOG.md](docs/CHANGELOG.md) · [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
 
 ---
 
