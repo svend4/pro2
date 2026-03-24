@@ -103,7 +103,9 @@ class GlyphAwareEmbedding(nn.Module):
 def run_comparison(steps: int = 200, fast: bool = False):
     """
     Сравнить обучение с CharTokenizer vs GlyphTokenizer.
-    Метрика: косинусная близость между семантически близкими концептами.
+    Метрика: triplet accuracy (anchor близко к positive, далеко от negative).
+
+    Triplet loss = max(0, sim(a, neg) - sim(a, pos) + margin) — не насыщается до 1.0.
     """
     print("\n" + "=" * 60)
     print("СРАВНЕНИЕ: CharTokenizer vs GlyphTokenizer")
@@ -111,16 +113,22 @@ def run_comparison(steps: int = 200, fast: bool = False):
 
     tok = load_glyph_tokenizer()
 
-    # Тестовые пары (должны быть близкими)
-    concept_pairs = [
-        ("crystal structure", "lattice symmetry"),
-        ("gradient descent",  "backpropagation"),
-        ("hexagram pattern",  "binary sequence"),
+    # Триплеты: (anchor, positive, negative) — positive похож, negative нет
+    triplets = [
+        ("crystal structure",   "lattice symmetry",    "gradient descent"),
+        ("gradient descent",    "backpropagation",     "hexagram pattern"),
+        ("hexagram pattern",    "binary sequence",     "crystal structure"),
+        ("yin yang balance",    "complementary forces", "matrix algebra"),
+        ("neural network",      "deep learning",       "ancient philosophy"),
+        ("recursion pattern",   "self-similar loop",   "cooking recipe"),
     ]
 
     d_model   = 64
     vocab_size = 256
-    results = {}
+    margin    = 0.3
+    results   = {}
+
+    n_steps = steps // 2 if fast else steps
 
     for mode in ['char', 'glyph']:
         use_glyph = (mode == 'glyph' and tok is not None)
@@ -133,69 +141,84 @@ def run_comparison(steps: int = 200, fast: bool = False):
             list(embed.parameters()) + list(proj.parameters()), lr=1e-3
         )
 
-        n_steps = steps // 2 if fast else steps
+        def encode(text):
+            ids = torch.tensor(
+                [[min(ord(c), 255) for c in text[:16]]], dtype=torch.long
+            )
+            emb, _ = embed(ids, text if use_glyph else None)
+            return proj(emb.mean(dim=1))  # (1, d_model)
+
         for step in range(n_steps):
-            a_text, b_text = random.choice(concept_pairs)
-            a_ids = torch.tensor(
-                [[min(ord(c), 255) for c in a_text[:16]]], dtype=torch.long
-            )
-            b_ids = torch.tensor(
-                [[min(ord(c), 255) for c in b_text[:16]]], dtype=torch.long
-            )
+            anc_text, pos_text, neg_text = random.choice(triplets)
 
-            a_emb, _ = embed(a_ids, a_text if use_glyph else None)
-            b_emb, _ = embed(b_ids, b_text if use_glyph else None)
+            a = encode(anc_text)
+            p = encode(pos_text)
+            n = encode(neg_text)
 
-            a_h = proj(a_emb.mean(dim=1))
-            b_h = proj(b_emb.mean(dim=1))
-
-            # Contrastive: близкие → высокое cosine
-            sim  = F.cosine_similarity(a_h, b_h)
-            loss = 1 - sim.mean()
+            sim_pos = F.cosine_similarity(a, p)
+            sim_neg = F.cosine_similarity(a, n)
+            loss = F.relu(sim_neg - sim_pos + margin).mean()
 
             opt.zero_grad()
             loss.backward()
             opt.step()
 
             if step % max(n_steps // 5, 1) == 0:
-                print(f"    Step {step:4d}: loss={loss.item():.4f} sim={sim.item():.4f}")
+                acc = (sim_pos > sim_neg).float().mean().item()
+                print(f"    Step {step:4d}: loss={loss.item():.4f}  "
+                      f"sim_pos={sim_pos.item():.3f}  sim_neg={sim_neg.item():.3f}  "
+                      f"acc={acc:.1f}")
 
-        # Финальная оценка
+        # Финальная оценка: triplet accuracy на всех парах
         embed.eval()
-        sims = []
-        for a_text, b_text in concept_pairs:
-            a_ids = torch.tensor(
-                [[min(ord(c), 255) for c in a_text[:16]]], dtype=torch.long
-            )
-            b_ids = torch.tensor(
-                [[min(ord(c), 255) for c in b_text[:16]]], dtype=torch.long
-            )
+        correct = 0
+        pos_sims = []
+        neg_sims = []
+        for anc_text, pos_text, neg_text in triplets:
             with torch.no_grad():
-                a_emb, _ = embed(a_ids, a_text if use_glyph else None)
-                b_emb, _ = embed(b_ids, b_text if use_glyph else None)
-                a_h = proj(a_emb.mean(1))
-                b_h = proj(b_emb.mean(1))
-                sims.append(F.cosine_similarity(a_h, b_h).item())
+                a = encode(anc_text)
+                p = encode(pos_text)
+                n = encode(neg_text)
+                sp = F.cosine_similarity(a, p).item()
+                sn = F.cosine_similarity(a, n).item()
+                pos_sims.append(sp)
+                neg_sims.append(sn)
+                if sp > sn:
+                    correct += 1
 
-        avg_sim = sum(sims) / len(sims)
-        results[mode] = avg_sim
-        print(f"  Средняя cosine similarity: {avg_sim:.4f}")
+        acc_final  = correct / len(triplets)
+        margin_avg = sum(p - n for p, n in zip(pos_sims, neg_sims)) / len(triplets)
+        results[mode] = {
+            'accuracy': acc_final,
+            'avg_pos_sim': sum(pos_sims) / len(pos_sims),
+            'avg_neg_sim': sum(neg_sims) / len(neg_sims),
+            'margin': margin_avg,
+        }
+        print(f"  Accuracy: {acc_final:.1%}  margin: {margin_avg:+.4f}")
 
     # Итог
     print("\n" + "=" * 60)
-    char_score  = results.get('char', 0)
-    glyph_score = results.get('glyph', 0)
-    improvement = glyph_score - char_score
-    print(f"  char:  {char_score:.4f}")
-    print(f"  glyph: {glyph_score:.4f}")
-    print(f"  delta: {improvement:+.4f}")
+    char_acc   = results.get('char',  {}).get('accuracy', 0)
+    glyph_acc  = results.get('glyph', {}).get('accuracy', 0)
+    char_marg  = results.get('char',  {}).get('margin', 0)
+    glyph_marg = results.get('glyph', {}).get('margin', 0)
+    delta_acc  = glyph_acc - char_acc
+    delta_marg = glyph_marg - char_marg
 
-    if improvement > 0.02:
-        print("  [OK] GlyphTokenizer улучшает семантические представления")
-    elif improvement > -0.02:
-        print("  [~]  Разница незначительна — нужно больше шагов")
+    print(f"  char:  accuracy={char_acc:.1%}  margin={char_marg:+.4f}")
+    print(f"  glyph: accuracy={glyph_acc:.1%}  margin={glyph_marg:+.4f}")
+    print(f"  delta: accuracy={delta_acc:+.1%}  margin={delta_marg:+.4f}")
+
+    # Решение по интеграции: accuracy delta > 5% или margin delta > 0.02
+    if delta_acc > 0.05 or delta_marg > 0.02:
+        print("  [OK] GlyphTokenizer улучшает семантические представления → интегрировать")
+        results['integrate'] = True
+    elif delta_acc > -0.05 and delta_marg > -0.02:
+        print("  [~]  Разница незначительна — нейтральный результат")
+        results['integrate'] = None
     else:
-        print("  [!!] GlyphTokenizer ухудшает результат на этих данных")
+        print("  [!!] GlyphTokenizer ухудшает результат — не интегрировать")
+        results['integrate'] = False
 
     return results
 

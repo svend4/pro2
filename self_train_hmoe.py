@@ -42,6 +42,25 @@ import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# ── GlyphTokenizer (задача 0.3 — интеграция SOLAN в основной цикл) ────────────
+# Загружается при --glyph; если недоступен — автоматически fallback на UTF-8 bytes
+_USE_GLYPH: bool = False
+_GLYPH_TOK = None
+
+def _init_glyph_tokenizer() -> bool:
+    """Загрузить GlyphTokenizer. Возвращает True если успешно."""
+    global _GLYPH_TOK, _USE_GLYPH
+    try:
+        from yijing_transformer.tokenizer.glyph_tokenizer import GlyphTokenizer, _SOLAN_MAP
+        _GLYPH_TOK = GlyphTokenizer()
+        _GLYPH_TOK._solan_map = _SOLAN_MAP  # char → vertex_bits (int)
+        _USE_GLYPH = True
+        print(f"  [glyph] GlyphTokenizer загружен ({_GLYPH_TOK.vocab_size} символов SOLAN)")
+        return True
+    except Exception as e:
+        print(f"  [glyph] недоступен ({e}) — используется UTF-8 bytes")
+        return False
+
 from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
 from yijing_transformer.models.hierarchical_moe import (
     HMoEConfig,
@@ -251,6 +270,14 @@ class RagBuffer:
 
 # ── Micro-train ───────────────────────────────────────────────────────────────
 
+def _step_all_quantizers(model: torch.nn.Module) -> None:
+    """Вызывает step_temp() у всех TernaryQuantizer в модели (Priority 1 — task 0.2)."""
+    from yijing_transformer.models.geometry.quantizers import TernaryQuantizer
+    for module in model.modules():
+        if isinstance(module, TernaryQuantizer):
+            module.step_temp()
+
+
 def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
                 n_steps: int = 3) -> float:
     """Мини-дообучение на одном тексте (in-place)."""
@@ -274,6 +301,7 @@ def micro_train(model: Variant3GPT, ids: torch.Tensor, lr: float = 1e-5,
         full.backward()
         torch.nn.utils.clip_grad_norm_(trainable, 1.0)
         opt.step()
+        _step_all_quantizers(model)  # cosine annealing T: 1.0→0.01 (задача 0.2)
         total_loss += loss.item()
         completed_steps += 1
     return total_loss / max(completed_steps, 1)
@@ -497,7 +525,28 @@ def figure8_hmoe(
 # ── Вспомогательные функции ──────────────────────────────────────────────────
 
 def _encode(text: str, block_size: int = MODEL_CFG["block_size"] - 1) -> torch.Tensor:
-    ids = [min(b, MODEL_CFG["vocab_size"] - 1) for b in text.encode("utf-8")][:block_size]
+    """Кодирует текст в token IDs.
+
+    Если _USE_GLYPH=True: SOLAN символы → их Q6 vertex index (0-63),
+    остальные → UTF-8 byte % 64 (чтобы остаться в vocab 256).
+    Это добавляет геометрическую консистентность: два SOLAN-токена
+    с малым Hamming distance имеют близкие индексы.
+
+    Иначе: стандартное UTF-8 byte encoding.
+    """
+    if _USE_GLYPH and _GLYPH_TOK is not None:
+        solan = getattr(_GLYPH_TOK, '_solan_map', {})
+        ids = []
+        for ch in text:
+            if ch in solan:
+                # SOLAN char → Q6 vertex bits (6-bit int, range 0-63)
+                ids.append(solan[ch] & 63)
+            else:
+                # Fallback: UTF-8 byte, offset by 64 to avoid collision
+                ids.append(min(ord(ch) & 0xFF, MODEL_CFG["vocab_size"] - 1))
+        ids = ids[:block_size]
+    else:
+        ids = [min(b, MODEL_CFG["vocab_size"] - 1) for b in text.encode("utf-8")][:block_size]
     if not ids:
         ids = [32]
     return torch.tensor(ids, dtype=torch.long).unsqueeze(0)
@@ -680,7 +729,12 @@ def main():
                         help="Не загружать RepoCorpusLoader")
     parser.add_argument("--save",           type=str, default="hmoe_self_trained.pt",
                         help="Куда сохранить результат (default: hmoe_self_trained.pt)")
+    parser.add_argument("--glyph",          action="store_true",
+                        help="Использовать GlyphTokenizer (SOLAN-76) вместо UTF-8 bytes (задача 0.3)")
     args = parser.parse_args()
+
+    if args.glyph:
+        _init_glyph_tokenizer()
 
     n_cycles       = 2  if args.fast else args.cycles
     steps_per_loop = 5  if args.fast else args.steps_per_loop

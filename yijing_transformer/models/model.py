@@ -155,6 +155,10 @@ def build_quantizer(cfg):
             adaptive_temp=cfg.adaptive_temp,
             uncertainty_budget=getattr(cfg, 'ternary_uncertainty', 0.3),
             max_zeros=getattr(cfg, 'ternary_max_zeros', 2),
+            # Cosine annealing schedule (задача 0.2): step_temp() вызывается в тренировочном цикле
+            warmup_steps=getattr(cfg, 'ternary_warmup_steps', 5000),
+            start_temp=getattr(cfg, 'ternary_start_temp', 1.0),
+            end_temp=getattr(cfg, 'ternary_end_temp', 0.01),
         )
     else:
         raise ValueError(f"Unknown quantizer_type: {cfg.quantizer_type}")
