@@ -81,6 +81,8 @@ from .geometry import (
     # v56: Ternary Quantizer
     TernaryQuantizer,
 )
+# v60-fixed: ArchetypalInterlinguaFixed — per-source trit_proj, diversity loss, cosine annealing
+from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInterlinguaFixed
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 from yijing_transformer.tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
@@ -470,16 +472,29 @@ class YiJingTransformerLayer(nn.Module):
                     )
                     self.use_archetypal_interlingua = True  # reuse forward path
                 elif self.use_archetypal_interlingua:
-                    # v60: Archetypal Interlingua — hub-and-spoke посредник
-                    self.archetypal_interlingua = ArchetypalInterlingua(
-                        cfg.d_model, n_sources,
-                        n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
-                        d_bottleneck=getattr(cfg, 'interlingua_d_bottleneck', 0),
-                        use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
-                        uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
-                        n_heads=getattr(cfg, 'interlingua_n_heads', 4),
-                        use_paired_bit=getattr(cfg, 'interlingua_use_paired_bit', False),
-                    )
+                    # v60-fixed: ArchetypalInterlinguaFixed — per-source trit_proj
+                    # Заменяет багованный ArchetypalInterlingua (один общий trit_proj)
+                    use_fixed = getattr(cfg, 'interlingua_use_fixed', True)
+                    if use_fixed:
+                        self.archetypal_interlingua = ArchetypalInterlinguaFixed(
+                            cfg.d_model, n_sources,
+                            n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
+                            diversity_weight=getattr(cfg, 'interlingua_diversity_weight', 0.01),
+                            warmup_steps=getattr(cfg, 'interlingua_warmup_steps', 3000),
+                            start_temp=getattr(cfg, 'interlingua_start_temp', 1.0),
+                            end_temp=getattr(cfg, 'interlingua_end_temp', 0.05),
+                        )
+                    else:
+                        # Оригинал (для сравнения/ablation)
+                        self.archetypal_interlingua = ArchetypalInterlingua(
+                            cfg.d_model, n_sources,
+                            n_archetypes=getattr(cfg, 'interlingua_n_archetypes', 64),
+                            d_bottleneck=getattr(cfg, 'interlingua_d_bottleneck', 0),
+                            use_ternary=getattr(cfg, 'interlingua_use_ternary', True),
+                            uncertainty_budget=getattr(cfg, 'interlingua_uncertainty', 0.3),
+                            n_heads=getattr(cfg, 'interlingua_n_heads', 4),
+                            use_paired_bit=getattr(cfg, 'interlingua_use_paired_bit', False),
+                        )
                 elif self.use_abriale_bridge:
                     # v59: AbrialeBridge — гибрид Abriale + Bridge
                     self.bridge_of_modules = AbrialeBridgeMediator(

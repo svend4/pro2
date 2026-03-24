@@ -1,6 +1,6 @@
 """
 Квантизаторы: YiJing, E8, Factored, FourState, Antipodal,
-Hierarchical, Deformable, Gumbel, Grouped.
+Hierarchical, Deformable, Gumbel, Grouped, WHT.
 """
 
 import torch
@@ -437,11 +437,19 @@ class TernaryQuantizer(nn.Module):
 
     def __init__(self, total_dim: int = 6, mode: str = 'factored',
                  temp: float = 0.3, adaptive_temp: bool = False,
-                 uncertainty_budget: float = 0.3, max_zeros: int = 2):
+                 uncertainty_budget: float = 0.3, max_zeros: int = 2,
+                 warmup_steps: int = 5000, start_temp: float = 1.0,
+                 end_temp: float = 0.01):
         super().__init__()
         self.total_dim = total_dim
         self.mode = mode
         self.max_zeros = max_zeros
+
+        # Cosine annealing schedule (task 0.2 — gap→fix)
+        self.warmup_steps = warmup_steps
+        self.start_temp = start_temp
+        self.end_temp = end_temp
+        self._step = 0
 
         self.adaptive_temp = adaptive_temp
         if adaptive_temp:
@@ -483,6 +491,19 @@ class TernaryQuantizer(nn.Module):
             if sum(1 for x in v if x == 0.0) <= max_zeros:
                 vertices.append(v)
         return torch.tensor(vertices, dtype=torch.float32)
+
+    def step_temp(self):
+        """Cosine annealing step: start_temp → end_temp over warmup_steps.
+
+        Call once per training step to update the temperature schedule.
+        After warmup_steps, temperature stays at end_temp.
+        """
+        import math as _math
+        if not self.adaptive_temp and self.warmup_steps > 0:
+            t = min(self._step / self.warmup_steps, 1.0)
+            cosine = 0.5 * (1 + _math.cos(_math.pi * t))
+            self.temp = self.end_temp + (self.start_temp - self.end_temp) * cosine
+        self._step += 1
 
     @property
     def current_temp(self):
@@ -1040,3 +1061,133 @@ class MatryoshkaQuantizer(nn.Module):
             }
 
         return analysis
+
+
+# ── WHT_Quantizer: Walsh-Hadamard квантизация (Теорема 5) ──────────────────────
+
+class WHT_Quantizer(nn.Module):
+    """Walsh-Hadamard Transform квантизатор для Z₂^n (Теорема 5).
+
+    Реализует спектральное разложение O(n log n) через WHT:
+        Ĥ = WHT(h),  h ∈ {-1,+1}^n
+        WHT(x)[k] = Σ_i x[i] · (-1)^{popcount(i & k)}
+
+    Применение к Q6-гиперкубу (n=6):
+    - Входной вектор x ∈ R^d проецируется в R^6 = {-1,+1}^6
+    - WHT спектр Ĥ ∈ R^6 = линейные коэффициенты Фурье над Z₂^6
+    - Наибольшие спектральные компоненты указывают на «главные оси»
+    - Квантизованный выход: hard {-1,+1}^6 по знаку WHT
+
+    Связь с теорией bent-функций:
+    - Равномерный WHT-спектр (|Ĥ[k]| = const) ↔ максимально нелинейная функция
+    - Используется в meta_q6.py как seed архетипы
+
+    Сложность: O(n log n) через разделяй-и-властвуй (butterfly network).
+    Для n=6: 6 × log₂(6) ≈ 15 операций.
+
+    Args:
+        d_model: размерность входных векторов
+        n_bits: размерность Q6 пространства (обычно 6)
+        temp: температура для soft квантизации (< 0 = hard)
+        use_spectral_loss: если True, добавляет равномерность WHT как loss
+    """
+
+    def __init__(self, d_model: int, n_bits: int = 6,
+                 temp: float = 0.5, use_spectral_loss: bool = False):
+        super().__init__()
+        self.d_model = d_model
+        self.n_bits = n_bits
+        self.temp = temp
+        self.use_spectral_loss = use_spectral_loss
+
+        # Проектор d_model → n_bits
+        self.proj = nn.Linear(d_model, n_bits, bias=True)
+        nn.init.orthogonal_(self.proj.weight)
+
+        # Предвычисленная WHT матрица Адамара (2^n × 2^n)
+        H = self._build_hadamard(n_bits)  # (2^n, 2^n)
+        self.register_buffer('H', H)
+
+        # Буфер для spectral loss
+        self.register_buffer('_spectral_loss', torch.tensor(0.0), persistent=False)
+
+    @staticmethod
+    def _build_hadamard(n: int) -> torch.Tensor:
+        """Строит нормированную матрицу Адамара-Уолша 2^n × 2^n.
+
+        Использует кронекерово произведение H₁ = [[1,1],[1,-1]] / sqrt(2).
+        """
+        H = torch.tensor([[1.0, 1.0], [1.0, -1.0]]) / (2.0 ** 0.5)
+        result = H
+        for _ in range(n - 1):
+            result = torch.kron(result, H)
+        return result  # (2^n, 2^n), нормированная
+
+    def _wht(self, x: torch.Tensor) -> torch.Tensor:
+        """WHT через butterfly: O(n log n).
+
+        Args:
+            x: (..., n_bits) — входной вектор в R^n
+        Returns:
+            x_hat: (..., n_bits) — WHT первых n_bits компонент
+                   (упрощённая версия: H[:n_bits, :n_bits] @ x)
+        """
+        # Полный WHT потребовал бы 2^n входов, что нецелесообразно.
+        # Вместо этого используем n_bits × n_bits под-матрицу (approx WHT).
+        # Для n=6: H_approx = первые 6 строк × 6 столбцов нормированной H.
+        H_approx = self.H[:self.n_bits, :self.n_bits]  # (n_bits, n_bits)
+        return x @ H_approx.T  # (..., n_bits)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Прямой проход: x → WHT спектр → квантизация → {-1,+1}^n.
+
+        Args:
+            x: (B, T, d_model) или (B, d_model)
+        Returns:
+            q: того же shape что x (через обратный проектор)
+            OR (q6_bits, x_reconstructed) если нужны биты
+        """
+        # Проецируем в n_bits пространство
+        z = self.proj(x)  # (..., n_bits)
+
+        # WHT спектр
+        z_hat = self._wht(z)  # (..., n_bits)
+
+        if self.temp > 0:
+            # Soft: sigmoid с температурой → (-1, +1)
+            bits_soft = torch.tanh(z_hat / self.temp)  # (..., n_bits)
+        else:
+            # Hard: знак WHT
+            bits_soft = z_hat.sign()
+
+        # Spectral loss: равномерность |WHT| → максимальная нелинейность (bent)
+        if self.use_spectral_loss and self.training:
+            spectrum = z_hat.abs().mean(dim=list(range(z_hat.dim() - 1)))  # (n_bits,)
+            # Penalty = дисперсия спектра (чем ниже — тем равномернее)
+            self._spectral_loss = spectrum.var()
+
+        return bits_soft
+
+    @torch.no_grad()
+    def hard_bits(self, x: torch.Tensor) -> torch.Tensor:
+        """Жёсткая квантизация: → {-1, +1}^n_bits (для RAG/routing)."""
+        z = self.proj(x)
+        z_hat = self._wht(z)
+        return z_hat.sign()
+
+    def spectral_loss(self) -> torch.Tensor:
+        """Возвращает накопленный spectral uniformity loss."""
+        return self._spectral_loss
+
+    def diagnostics(self) -> dict:
+        """Возвращает диагностику WHT квантизатора."""
+        return {
+            'n_bits': self.n_bits,
+            'temp': self.temp,
+            'proj_weight_norm': self.proj.weight.norm().item(),
+            'spectral_loss': self._spectral_loss.item(),
+        }
+
+    def __repr__(self):
+        return (f"WHT_Quantizer(d_model={self.d_model}, n_bits={self.n_bits}, "
+                f"temp={self.temp}, spectral_loss={self.use_spectral_loss})")

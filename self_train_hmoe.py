@@ -554,22 +554,35 @@ def _get_moes(model: Variant3GPT) -> List[HierarchicalMoEFFN]:
     return [block.hmoe for block in model.blocks if hasattr(block, 'hmoe')]
 
 
-# ── CrossDomainAnalogy: 36-клеточный матрица-сигнал ───────────────────────────
+# ── CrossDomainAnalogy: полная 6×6 матрица = 36 направленных пар ──────────────
+
+# 36 направленных пар: диагональ (A→A, 6) + верхний треугольник (A→B, 15) + нижний (B→A, 15)
+# Строится из 6 орбит (Hamming weight 1..6 — орбиты с ненулевыми размерами в Q6)
+_CDA_ORBITS = [1, 2, 3, 4, 5, 6]  # 6 Hamming-weight орбит Q6-гиперкуба
+_CDA_ALL_PAIRS: List[Tuple[int, int]] = [
+    (a, b) for a in _CDA_ORBITS for b in _CDA_ORBITS  # все 36 направленных пар (6×6)
+]
+
 
 def cross_domain_signal(model: Variant3GPT, rag: "RagBuffer",
                         n_pairs: int = 4) -> float:
-    """hexsym/CrossDomainAnalogy: дополнительный training signal через 36 направленных аналогий.
+    """hexsym/CrossDomainAnalogy: training signal по полной 6×6 матрице аналогий.
+
+    Использует все 36 направленных пар (верхний треугольник A→B = 15,
+    нижний B→A = 15, диагональ A→A = 6). Это закрывает задачу 0.5 из
+    FUTURE_TASKS.md: добавить B→A реверсы к исходным 15 парам.
 
     Идея: тексты из разных Q6-орбит (Hamming weight k) должны иметь
     различные embedding-паттерны. Тексты из одной орбиты (или близких) —
     похожие. Это обеспечивает геометрически согласованный routing.
 
     Реализация (lightweight — без дополнительного nn.Module):
-      1. Группируем тексты из RAG по Hamming weight орбите (0..6)
-      2. Сэмплируем n_pairs направленных пар (orbit_i → orbit_j)
-      3. Для пар из разных орбит: если |i−j|==1 → reward близости (0.7 target)
-         если |i−j|>=3 → penalize близости (0.3 target)
-      4. Возвращаем среднее квадратичное отклонение от target
+      1. Группируем тексты из RAG по Hamming weight орбите (1..6)
+      2. Сэмплируем n_pairs пар из _CDA_ALL_PAIRS (36 вариантов)
+         — равномерно покрывает все направления включая B→A реверсы
+      3. Для пар из разных орбит: если |i−j|==1 → reward близости
+         если |i−j|>=3 → penalize близости
+      4. Возвращаем среднее соответствие target
 
     Returns:
         float — средний сигнал аналогии (0 = нет RAG текстов, >0 = активен)
@@ -583,22 +596,27 @@ def cross_domain_signal(model: Variant3GPT, rag: "RagBuffer",
         hw = bin(q6v).count('1') if q6v >= 0 else 3  # fallback = orbit 3
         orbit_texts[hw].append((text, emb))
 
-    nonempty = [k for k, v in orbit_texts.items() if len(v) > 0]
+    nonempty = set(k for k, v in orbit_texts.items() if len(v) > 0)
     if len(nonempty) < 2:
         return 0.0
 
+    # Фильтруем _CDA_ALL_PAIRS по доступным орбитам
+    available_pairs = [(a, b) for a, b in _CDA_ALL_PAIRS if a in nonempty and b in nonempty]
+    if not available_pairs:
+        return 0.0
+
+    # Сэмплируем n_pairs из всех 36 направленных пар (включая B→A реверсы)
+    sampled = random.choices(available_pairs, k=n_pairs)
+
     total_signal = 0.0
     n_computed = 0
-    for _ in range(n_pairs):
-        # Выбираем две случайные орбиты
-        oi = random.choice(nonempty)
-        oj = random.choice(nonempty)
+    for oi, oj in sampled:
         dist = abs(oi - oj)
 
         # Target cosine similarity по Hamming distance между орбитами
         # dist=0 (same orbit)  → target sim = 0.8 (похожи)
-        # dist=1 (adjacent)    → target sim = 0.6
-        # dist=2               → target sim = 0.45
+        # dist=1 (adjacent)    → target sim = 0.62
+        # dist=2               → target sim = 0.44
         # dist>=3 (far)        → target sim = 0.25 (различны)
         target = max(0.25, 0.8 - dist * 0.18)
 
