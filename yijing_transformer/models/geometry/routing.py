@@ -10,17 +10,24 @@ import torch.nn.functional as F
 
 
 class GatedPathSelector(nn.Module):
-    """Гейтовый механизм выбора между геометрическим и стандартным путём."""
+    """Content-dependent gate between geometric and standard paths.
+
+    Instead of fixed 50/50 averaging before the gate decision,
+    the gate is computed from BOTH inputs independently, allowing
+    the model to weigh each path based on the actual content.
+    """
     def __init__(self, d_model: int, init_bias: float = 0.0):
         super().__init__()
-        self.gate_proj = nn.Linear(d_model, 1, bias=True)
+        # Gate from both paths (content-dependent, not averaged)
+        self.gate_proj = nn.Linear(d_model * 2, 1, bias=True)
         nn.init.zeros_(self.gate_proj.weight)
         nn.init.constant_(self.gate_proj.bias, init_bias)
         self._local = threading.local()
 
     def forward(self, x_standard, x_geometric):
-        combined = (x_standard + x_geometric) * 0.5
-        gate = torch.sigmoid(self.gate_proj(combined))
+        # Content-dependent: gate sees both paths, decides per-token
+        gate_input = torch.cat([x_standard, x_geometric], dim=-1)
+        gate = torch.sigmoid(self.gate_proj(gate_input))
         with torch.no_grad():
             self._local.gate_mean = gate.mean().item()
             self._local.gate_std = gate.std().item()
@@ -30,9 +37,9 @@ class GatedPathSelector(nn.Module):
         mean = getattr(self._local, 'gate_mean', 0.5)
         std  = getattr(self._local, 'gate_std',  0.0)
         return {
-            'gate_mean': mean,
-            'gate_std': std,
-            'prefers_geometry': mean > 0.5,
+            'gate_mean': self._last_gate_mean,
+            'gate_std': self._last_gate_std,
+            'geometry_preference': self._last_gate_mean,
         }
 
 
@@ -70,7 +77,7 @@ class AdaptiveGatedPathSelector(nn.Module):
             'gate_std': std,
             'gate_entropy': entropy,
             'temperature': self.log_temperature.exp().item(),
-            'prefers_geometry': mean > 0.5,
+            'geometry_preference': self._last_gate_mean,
         }
 
 
@@ -117,8 +124,10 @@ class GateLogger:
         if not self.history:
             return {}
         last = self.history[-1]
-        geo_layers = sum(1 for g in last['gates'].values() if g['prefers_geometry'])
-        std_layers = sum(1 for g in last['gates'].values() if not g['prefers_geometry'])
+        geo_layers = sum(1 for g in last['gates'].values()
+                         if g.get('geometry_preference', g.get('gate_mean', 0)) > 0.5)
+        std_layers = sum(1 for g in last['gates'].values()
+                         if g.get('geometry_preference', g.get('gate_mean', 0)) <= 0.5)
         return {
             'step': last['step'],
             'layers_prefer_geometry': geo_layers,
@@ -138,42 +147,52 @@ class GateLogger:
 
 
 class GeometryCurriculumScheduler:
-    """Планировщик curriculum learning для геометрических компонентов."""
+    """Organic curriculum scheduler with smooth transitions.
+
+    Instead of hard phase boundaries (if step < warmup: ... else: ...),
+    all transitions are smooth sigmoids. No discrete jumps.
+
+    The schedule is a single smooth curve:
+        strength = target * sigmoid(slope * (progress - inflection))
+
+    This naturally provides:
+    - Slow start (sigmoid tail at low progress)
+    - Smooth ramp (sigmoid middle)
+    - Saturated hold (sigmoid plateau)
+    """
     def __init__(self, strategy: str = 'linear', total_steps: int = 10000,
                  warmup_fraction: float = 0.3, target_strength: float = 0.1,
                  n_step_stages: int = 4):
         self.strategy = strategy
         self.total_steps = total_steps
         self.warmup_fraction = warmup_fraction
-        self.warmup_steps = int(total_steps * warmup_fraction)
         self.target_strength = target_strength
-        self.n_step_stages = n_step_stages
+        # Smooth inflection point replaces hard warmup boundary
+        self._inflection = warmup_fraction * 0.5  # midpoint of warmup
+        self._slope = 10.0  # steepness of transition
 
     def get_strength(self, step: int) -> float:
         progress = min(step / max(self.total_steps, 1), 1.0)
+
         if self.strategy == 'linear':
             return self.target_strength * progress
-        elif self.strategy == 'warmup_hold':
-            if step < self.warmup_steps:
-                return self.target_strength * step / self.warmup_steps
-            return self.target_strength
         elif self.strategy == 'cosine':
             return self.target_strength * 0.5 * (1 - math.cos(math.pi * progress))
-        elif self.strategy == 'step':
-            stage = min(int(progress * self.n_step_stages), self.n_step_stages)
-            return self.target_strength * stage / self.n_step_stages
         elif self.strategy == 'geometric_first':
-            if step < self.warmup_steps:
-                return 1.0
-            decay_progress = min((step - self.warmup_steps) / max(self.total_steps - self.warmup_steps, 1), 1.0)
-            return self.target_strength + (1.0 - self.target_strength) * (1 - decay_progress)
+            # Smooth decay from 1.0 to target using sigmoid
+            decay = 1.0 / (1.0 + math.exp(self._slope * (progress - self._inflection)))
+            return self.target_strength + (1.0 - self.target_strength) * decay
         else:
-            return self.target_strength
+            # Default organic schedule: smooth sigmoid ramp
+            # sigmoid(slope * (progress - inflection)) * target
+            ramp = 1.0 / (1.0 + math.exp(-self._slope * (progress - self._inflection)))
+            return self.target_strength * ramp
 
     def get_gate_bias(self, step: int) -> float:
         if self.strategy == 'geometric_first':
             progress = min(step / max(self.total_steps, 1), 1.0)
-            return 2.0 * (1 - progress)
+            # Smooth decay instead of linear
+            return 2.0 / (1.0 + math.exp(5.0 * (progress - 0.5)))
         return 0.0
 
 
@@ -297,7 +316,7 @@ class GeometricSourceMixer(nn.Module):
             return {
                 'gates': self._last_gates,
                 'scales': self.source_scales.detach().tolist(),
-                'active_sources': sum(1 for g in self._last_gates if g > 0.5),
+                'active_sources_soft': sum(g for g in self._last_gates),  # continuous sum
             }
         return {}
 
@@ -1173,26 +1192,27 @@ class ArchetypalInterlingua(nn.Module):
         # Температура влияет на жёсткость сигмоиды
         effective_temp = max(temp, 0.1)
 
-        probs = torch.sigmoid(logits / effective_temp)  # (B, n_archetypes, 2)
-
-        # STE: soft forward, hard backward
-        bits_hard = (probs > 0.5).float()
-        bits = probs + (bits_hard - probs).detach()
+        # Organic quantization: Gumbel-Sigmoid for full gradient flow.
+        # Instead of hard threshold (probs > 0.5) + .detach() which creates
+        # dead zones, use temperature-controlled sigmoid that smoothly
+        # approaches binary as temperature anneals toward zero.
+        # Gradients flow through the full computation at all temperatures.
+        bits = torch.sigmoid(logits / effective_temp)  # (B, n_archetypes, 2)
 
         bit_a = bits[..., 0]  # (B, n_archetypes)
         bit_b = bits[..., 1]  # (B, n_archetypes)
 
-        # Трит = bit_a + bit_b - 1
+        # Trit = bit_a + bit_b - 1 (fully differentiable)
         trit_scores = bit_a + bit_b - 1.0
 
-        # Статистика направления переходов
+        # Direction statistics (diagnostic only)
         with torch.no_grad():
-            hard_a = bits_hard[..., 0]
-            hard_b = bits_hard[..., 1]
+            hard_a = (bit_a > 0.5).float()
+            hard_b = (bit_b > 0.5).float()
             hard_trits = hard_a + hard_b - 1.0
             zero_mask = (hard_trits == 0)
             if zero_mask.any():
-                direction = hard_a - hard_b  # +1=осень, -1=весна
+                direction = hard_a - hard_b
                 spring = ((direction == -1) & zero_mask).float().sum().item()
                 autumn = ((direction == 1) & zero_mask).float().sum().item()
                 n_zeros = zero_mask.float().sum().item()
@@ -1233,18 +1253,11 @@ class ArchetypalInterlingua(nn.Module):
 
         temp = self.ternary_temperature
 
-        if temp > 0.15:
-            # Тёплая фаза: мягкие триты, градиент течёт напрямую
-            trit_scores = torch.tanh(scores / temp)
-        else:
-            # Холодная фаза: жёсткие триты с STE
-            raw = torch.tanh(scores)
-            threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
-
-            hard = torch.zeros_like(raw)
-            hard[raw > threshold] = 1.0
-            hard[raw < -threshold] = -1.0
-            trit_scores = raw + (hard - raw).detach()
+        # Organic ternary quantization: always use tanh with temperature.
+        # As temp anneals toward 0, tanh(scores/temp) naturally approaches
+        # hard {-1, 0, +1} without needing hard thresholds or .detach().
+        # Gradients flow smoothly at all temperatures.
+        trit_scores = torch.tanh(scores / max(temp, 0.05))
 
         return trit_scores
 
@@ -1674,15 +1687,13 @@ class BridgedInterlingua(nn.Module):
         temp = self.ternary_temperature
         effective_temp = max(temp, 0.1)
 
-        probs = torch.sigmoid(logits / effective_temp)
-        bits_hard = (probs > 0.5).float()
-        bits = probs + (bits_hard - probs).detach()
-
+        # Organic: smooth sigmoid, no hard threshold + detach
+        bits = torch.sigmoid(logits / effective_temp)
         trit_scores = bits[..., 0] + bits[..., 1] - 1.0
 
         with torch.no_grad():
-            hard_a = bits_hard[..., 0]
-            hard_b = bits_hard[..., 1]
+            hard_a = (bits[..., 0] > 0.5).float()
+            hard_b = (bits[..., 1] > 0.5).float()
             hard_trits = hard_a + hard_b - 1.0
             zero_mask = (hard_trits == 0)
             if zero_mask.any():
@@ -1697,14 +1708,8 @@ class BridgedInterlingua(nn.Module):
 
         return trit_scores
 
-    def _ternary_quantize(self, contribution: torch.Tensor,
-                          source_idx: int = 0) -> torch.Tensor:
-        """Тернарная квантизация с temperature annealing.
-
-        Args:
-            contribution: (B, n_archetypes, d_model)
-            source_idx: индекс bridge-выхода — выбирает ИНДИВИДУАЛЬНЫЙ trit_proj.
-        """
+    def _ternary_quantize(self, contribution: torch.Tensor) -> torch.Tensor:
+        """Organic ternary quantization — smooth at all temperatures."""
         if self.use_paired_bit:
             return self._paired_bit_quantize(contribution)
 
@@ -1713,16 +1718,7 @@ class BridgedInterlingua(nn.Module):
         self._last_raw_scores = scores
 
         temp = self.ternary_temperature
-
-        if temp > 0.15:
-            trit_scores = torch.tanh(scores / temp)
-        else:
-            raw = torch.tanh(scores)
-            threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
-            hard = torch.zeros_like(raw)
-            hard[raw > threshold] = 1.0
-            hard[raw < -threshold] = -1.0
-            trit_scores = raw + (hard - raw).detach()
+        trit_scores = torch.tanh(scores / max(temp, 0.05))
 
         return trit_scores
 

@@ -12,6 +12,13 @@ CrossDomainAnalogy — модуль межэкспертных аналогий 
   информацию, но не умеет ей пользоваться. Нужны специальные
   микромодули для осмысленного кросс-доменного переноса.
 
+Четырёхуровневая система (info3):
+  Аналогии естественно возникают МЕЖДУ уровнями:
+  - Formula↔Theorem (MATH↔HUMAN): математика психотипов
+  - Archetype↔Algorithm (CODE↔RECON): паттерны → восстановление
+  - Archetype↔Archetype (CODE↔SYSTEM): проектирование ↔ архитектура
+  Эти связи ОРГАНИЧЕСКИ обнаруживаются через обучение, не задаются жёстко.
+
 Архитектура:
   1. AnalogyMatrix — матрица C(6,2)=15 парных "мостиков" между 6 экспертами
   2. ProverbCondenser — сжатие последовательности в "формулу" (аналог пословицы)
@@ -146,14 +153,18 @@ class CrossDomainAnalogy(nn.Module):
       MATH→MATH: самоотсылка (Гёдель) — математика порождает математику
     """
 
+    # Default expert names — can be overridden via constructor.
+    # These are organic labels describing what the router learns to recognize,
+    # not hard domain boundaries. The router discovers specialization from content.
     EXPERT_NAMES = ['MATH', 'CODE', 'HUMAN', 'SYSTEM', 'RECON', 'INFO']
 
-    def __init__(self, d_model, n_experts=6, d_analogy=None, threshold=0.3,
-                 directed=True):
+    def __init__(self, d_model, n_experts=6, expert_names=None,
+                 d_analogy=None, threshold=0.3):
         super().__init__()
         self.n_experts = n_experts
         self.threshold = threshold
-        self.directed = directed
+        if expert_names is not None:
+            self.EXPERT_NAMES = expert_names
         names = self.EXPERT_NAMES[:n_experts]
 
         # ProverbCondenser для каждого эксперта

@@ -244,7 +244,9 @@ def run_eval(model, sp, use_domain_locked=False, verbose=True):
     for name, text in COMFORT_ZONE.items():
         ppl = compute_perplexity(model, sp, text)
         comfort_ppls[name] = ppl
-        status = "+" if ppl < 15 else "~" if ppl < 30 else "-"
+        # Soft status: gradient instead of binary cutoffs
+        score = 1.0 / (1.0 + (ppl / 15.0) ** 2)  # smooth score centered at PPL=15
+        status = "+" if score > 0.5 else "~" if score > 0.2 else "-"
         log(f"  [{status}] PPL={ppl:6.1f}  {name}")
 
     discomfort_ppls = {}
@@ -417,20 +419,45 @@ def run_eval(model, sp, use_domain_locked=False, verbose=True):
     log("  SUMMARY")
     log("═" * 60)
 
+    # Soft scoring: continuous score [0, 1] instead of hard PASS/FAIL.
+    # Each metric maps to a sigmoid score centered at the target value.
+    # Score 0.5 = exactly at target, >0.5 = exceeding, <0.5 = below.
+    import math as _math
+
+    def _soft_score_lower(val, target, scale=0.3):
+        """Score for metrics where lower is better (e.g. PPL)."""
+        return 1.0 / (1.0 + _math.exp((val - target) / max(target * scale, 0.1)))
+
+    def _soft_score_higher(val, target, scale=0.3):
+        """Score for metrics where higher is better (e.g. accuracy)."""
+        return 1.0 / (1.0 + _math.exp(-(val - target) / max(target * scale, 0.1)))
+
     targets = {
-        'ppl_comfort':        ('< 15',   lambda v: v < 15),
-        'ppl_gap':            ('> 15x',  lambda v: v > 15),
-        'routing_accuracy':   ('> 70%',  lambda v: v > 0.7),
-        'routing_confidence': ('> 15%',  lambda v: v > 0.15),
-        'code_completion_top1': ('> 55%', lambda v: v > 0.55),
-        'domain_mixing_rate': ('< 20%',  lambda v: v < 0.2),
-        'speed_standard':     ('> 50',   lambda v: v > 50),
+        'ppl_comfort':          ('< 15',  15,   'lower'),
+        'ppl_gap':              ('> 15x', 15,   'higher'),
+        'routing_accuracy':     ('> 70%', 0.7,  'higher'),
+        'routing_confidence':   ('> 15%', 0.15, 'higher'),
+        'code_completion_top1': ('> 55%', 0.55, 'higher'),
+        'domain_mixing_rate':   ('< 20%', 0.2,  'lower'),
+        'speed_standard':       ('> 50',  50,   'higher'),
     }
 
-    for key, (target_str, check_fn) in targets.items():
+    total_score = 0.0
+    n_metrics = 0
+    for key, (target_str, target_val, direction) in targets.items():
         val = results.get(key, 0)
-        passed = check_fn(val)
-        mark = "PASS" if passed else "FAIL"
+        if direction == 'lower':
+            score = _soft_score_lower(val, target_val)
+        else:
+            score = _soft_score_higher(val, target_val)
+
+        total_score += score
+        n_metrics += 1
+        results[f'{key}_score'] = score
+
+        # Display: score bar instead of binary PASS/FAIL
+        bar_len = int(score * 20)
+        bar = '█' * bar_len + '░' * (20 - bar_len)
 
         if 'accuracy' in key or 'confidence' in key or 'rate' in key or 'completion' in key:
             val_str = f"{val*100:.1f}%"
@@ -439,7 +466,11 @@ def run_eval(model, sp, use_domain_locked=False, verbose=True):
         else:
             val_str = f"{val:.1f}"
 
-        log(f"  [{mark}] {key:25s}  {val_str:>10s}  (target: {target_str})")
+        log(f"  {bar} {score:.0%} {key:25s}  {val_str:>10s}  (target: {target_str})")
+
+    avg_score = total_score / max(n_metrics, 1)
+    results['overall_score'] = avg_score
+    log(f"\n  Overall organic score: {avg_score:.0%}")
 
     return results
 

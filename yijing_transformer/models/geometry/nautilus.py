@@ -65,10 +65,16 @@ class NautilusChamber(nn.Module):
         self.module_type = module_type
         self.chamber_idx = chamber_idx
 
-        # Обучаемый масштаб — мелкие камеры стартуют с меньшим весом
-        # Геометрическая прогрессия: chamber 0 → init_scale, chamber 6 → init_scale * 4
-        progression = 1.0 + 3.0 * (chamber_idx / max(n_chambers - 1, 1))
-        self.scale = nn.Parameter(torch.tensor(init_scale * progression))
+        # Learnable scale per chamber — initialized with soft progression
+        # but free to adapt during training (no fixed geometric ratio).
+        # softplus ensures positive scale without hard clamp.
+        init_value = math.log(math.exp(init_scale * (1.0 + 3.0 * (chamber_idx / max(n_chambers - 1, 1)))) - 1.0 + 1e-6)
+        self._scale_param = nn.Parameter(torch.tensor(init_value))
+
+    @property
+    def scale(self):
+        """Positive scale via softplus — learnable without hard constraints."""
+        return F.softplus(self._scale_param)
 
         # Content-dependent gate: «нужна ли эта камера для данного токена?»
         self.gate_proj = nn.Linear(d_model, 1, bias=True)
@@ -92,19 +98,14 @@ class NautilusChamber(nn.Module):
         if curriculum_mask < 1e-6:
             return torch.zeros_like(x)
 
-        # Применяем геометрический модуль
-        if self.module_type == 'cube_diagonal':
-            # CubeDiagonalAttention возвращает bias, конвертируем в enrichment
-            bias = self.module.get_bias(x)  # (B, T, T)
-            # Causal mask: запрещаем утечку информации из будущих токенов
-            T = x.shape[1]
-            causal = torch.tril(torch.ones(T, T, device=x.device))
-            bias = bias.masked_fill(causal.unsqueeze(0) == 0, float('-inf'))
-            weights = F.softmax(bias, dim=-1)
-            weights = weights.nan_to_num(0.0)
-            enrichment = torch.bmm(weights, x) - x  # delta
-        elif self.module_type == 'privileged_axis':
-            # PrivilegedAxisAttention возвращает bias
+        # Apply geometric module organically — unified enrichment extraction.
+        # Instead of hard if/elif dispatch on string type, all modules
+        # are handled through two generic protocols:
+        #   1. Bias-producing modules (have get_bias) → softmax attention delta
+        #   2. Direct modules (return transformed x) → subtract identity for delta
+        # No string matching needed — the module's interface decides.
+        if hasattr(self.module, 'get_bias'):
+            # Bias-producing modules (CubeDiagonal, PrivilegedAxis, etc.)
             bias = self.module.get_bias(x)  # (B, T, T)
             T = x.shape[1]
             causal = torch.tril(torch.ones(T, T, device=x.device))
@@ -112,18 +113,13 @@ class NautilusChamber(nn.Module):
             weights = F.softmax(bias, dim=-1)
             weights = weights.nan_to_num(0.0)
             enrichment = torch.bmm(weights, x) - x  # delta
-        elif self.module_type == 'dual_embedding':
-            enrichment = self.module(x) - x  # DualEmbedding возвращает x + scale*...
-        elif self.module_type == 'd4_equivariant':
-            enrichment = self.module(x) - x  # D4 возвращает x + scale*...
-        elif self.module_type == 'palace':
-            enrichment = self.module(x)  # PalaceAttention возвращает attention output
-        elif self.module_type == 'heisenberg':
-            enrichment = self.module(x) - x  # delta
-        elif self.module_type == 'flower_gat':
-            enrichment = self.module(x) - x  # FlowerGAT возвращает x + node_enrichment
         else:
-            enrichment = self.module(x) - x
+            # Direct modules — try forward, extract delta
+            module_out = self.module(x)
+            if module_out.shape == x.shape:
+                enrichment = module_out - x  # delta from residual-style modules
+            else:
+                enrichment = module_out  # raw output (e.g. PalaceAttention)
 
         # Content-dependent gate
         gate = torch.sigmoid(self.gate_proj(x))  # (B, T, 1)
@@ -134,7 +130,7 @@ class NautilusChamber(nn.Module):
         # Диагностика
         with torch.no_grad():
             self._last_gate_mean = gate.mean().item()
-            self._last_scale = self.scale.item()
+            self._last_scale = self.scale.item() if isinstance(self.scale, torch.Tensor) else self.scale
 
         return result
 
@@ -148,33 +144,30 @@ class NautilusChamber(nn.Module):
 
 
 class NautilusScheduler:
-    """Прогрессивная активация камер — мелкие раньше, крупные позже.
+    """Smooth progressive chamber activation — no hard phase boundaries.
 
-    При training step=0 активна только камера 0.
-    К step=warmup_steps активны все камеры.
-    Каждая камера «раскрывается» по косинусному расписанию.
+    Each chamber has a sigmoid activation curve centered at its natural
+    activation point. All transitions are smooth — no if/elif step checks.
+
+    Chamber i activates around step = warmup * (i + 0.5) / n_chambers
+    with smooth sigmoid transition (no discrete jump).
     """
 
     def __init__(self, n_chambers: int, warmup_steps: int = 2000):
         self.n_chambers = n_chambers
-        self.warmup_steps = warmup_steps
+        self.warmup_steps = max(warmup_steps, 1)
 
     def get_masks(self, step: int) -> list:
-        """Возвращает список масок [0..1] для каждой камеры."""
+        """Returns smooth [0..1] masks for each chamber via sigmoid."""
         masks = []
         for i in range(self.n_chambers):
-            # Камера i начинает раскрываться на step = warmup * i / n_chambers
-            # и полностью раскрыта на step = warmup * (i + 1) / n_chambers
-            start = self.warmup_steps * i / self.n_chambers
-            end = self.warmup_steps * (i + 1) / self.n_chambers
-            if step < start:
-                masks.append(0.0)
-            elif step >= end:
-                masks.append(1.0)
-            else:
-                # Косинусный ramp-up
-                progress = (step - start) / (end - start)
-                masks.append(0.5 * (1.0 - math.cos(math.pi * progress)))
+            # Center of activation for chamber i
+            center = self.warmup_steps * (i + 0.5) / self.n_chambers
+            # Steepness: scales with warmup duration
+            slope = 8.0 * self.n_chambers / self.warmup_steps
+            # Smooth sigmoid — no hard boundaries
+            mask = 1.0 / (1.0 + math.exp(-slope * (step - center)))
+            masks.append(mask)
         return masks
 
 

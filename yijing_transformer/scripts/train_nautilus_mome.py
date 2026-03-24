@@ -37,6 +37,9 @@ Training phases:
   Phase 3: Fine-tune Router on mixed data
   Phase 4: Train CrossDomainAnalogy (inter-expert analogies)
   Phase 5: Train SYNTH expert (cross-domain synthesizer)
+  Phase 9: Archetype differentiation
+  Phase 10: Antonym differentiation (binary + ternary)
+  Phase 11: Organic contrastive routing (sharpen specialization)
 
 Usage:
   python train_nautilus_mome.py                    # Full pipeline
@@ -68,6 +71,20 @@ import sentencepiece as spm
 
 # ==================== Configuration ====================
 
+# ── Organic Expert Domains ──
+# Experts are defined by CONTENT SIGNALS, not by repository origin.
+# The router learns to recognize these patterns from the data itself.
+# Repo hints are soft suggestions for initial data grouping only —
+# the router is free to override them based on actual content.
+#
+# Four-level alignment (info3):
+#   Level 1 (Formula):    MATH — abstract mathematical structures
+#   Level 2 (Archetype):  CODE, SYSTEM — structural patterns & architecture
+#   Level 3 (Algorithm):  RECON, INFO — procedural processes & management
+#   Level 4 (Theorem):    HUMAN — practical wisdom, ethics, meaning
+#
+# The router discovers these levels organically through training.
+# No domain is "locked" — content flows to whichever expert resonates.
 # ─── Гексаграммный слой экспертов ──────────────────────────────────────────
 # Каждый эксперт связан с одной из 64 гексаграмм И-Цзин (Q6 = {-1,+1}^6).
 # Гексаграмма — не декорация, а геометрический якорь в пространстве архетипов.
@@ -100,38 +117,73 @@ HEXAGRAM_MAP = {
 EXPERT_DOMAINS = {
     'MATH': {
         'name': 'Mathematical Structures',
-        'repos': ['meta', 'data2', 'pro2'],
+        'content_signals': [
+            'formulas', 'equations', 'proofs', 'theorems',
+            'hexagrams', 'trigrams', 'hypercube', 'geometry',
+            'tensor', 'matrix', 'eigenvalue', 'gradient',
+        ],
+        'repo_hints': ['meta', 'data2', 'pro2'],
         'description': 'Math, formulas, algorithms, hexagrams, transformers',
+        'four_level': 'formula',
         'hexagram': HEXAGRAM_MAP['MATH'],
     },
     'CODE': {
         'name': 'Software Engineering',
-        'repos': ['daten3', 'daten2', 'data20'],
+        'content_signals': [
+            'def ', 'class ', 'import ', 'function ',
+            'return ', 'const ', 'interface ', 'async ',
+            '.tsx', '.py', '.ts', '.js',
+        ],
+        'repo_hints': ['daten3', 'daten2', 'data20'],
         'description': 'TypeScript, Flask, React, full-stack, KMS',
+        'four_level': 'archetype',
         'hexagram': HEXAGRAM_MAP['CODE'],
     },
     'HUMAN': {
         'name': 'Humanitarian Knowledge',
-        'repos': ['info3', 'daten22', 'info'],
+        'content_signals': [
+            'этика', 'архетип', 'поведени', 'мудрость',
+            'психолог', 'смысл', 'ценност', 'человек',
+            'ethics', 'wisdom', 'meaning', 'archetype',
+        ],
+        'repo_hints': ['info3', 'daten22', 'info'],
         'description': 'Ethics, archetypes, MBTI, behavioral formulas',
+        'four_level': 'theorem',
         'hexagram': HEXAGRAM_MAP['HUMAN'],
     },
     'SYSTEM': {
         'name': 'System Architecture',
-        'repos': ['info7', 'daten', 'universal-file-storage-mcp'],
+        'content_signals': [
+            'docker', 'kubernetes', 'nginx', 'deploy',
+            'pipeline', 'orchestrat', 'container', 'mcp',
+            'SELECT ', 'CREATE TABLE', 'API', 'endpoint',
+        ],
+        'repo_hints': ['info7', 'daten', 'universal-file-storage-mcp'],
         'description': 'AI orchestration, DevOps, MCP, containers',
+        'four_level': 'archetype',
         'hexagram': HEXAGRAM_MAP['SYSTEM'],
     },
     'RECON': {
         'name': 'Pattern Recognition',
-        'repos': ['meta2'],
+        'content_signals': [
+            'распозна', 'реконструкц', 'OCR', 'паттерн',
+            'восстановл', 'сканир', 'документ', 'puzzle',
+        ],
+        'repo_hints': ['meta2'],
         'description': 'Document reconstruction, OCR, puzzle algorithms',
+        'four_level': 'algorithm',
         'hexagram': HEXAGRAM_MAP['RECON'],
     },
     'INFO': {
         'name': 'Information Management',
-        'repos': ['info1', 'info4', 'info5', 'daten11', 'data30', 'in4'],
+        'content_signals': [
+            'catalog', 'search', 'index', 'metadata',
+            'knowledge base', 'автоматизац', 'каталог',
+            'README', 'documentation', 'config',
+        ],
+        'repo_hints': ['info1', 'info4', 'info5', 'daten11', 'data30', 'in4'],
         'description': 'Knowledge bases, catalogs, search, automation',
+        'four_level': 'algorithm',
         'hexagram': HEXAGRAM_MAP['INFO'],
     },
 }
@@ -229,28 +281,81 @@ def collect_text_from_repos(repo_dirs=None):
     return all_text
 
 
+def _score_content_signals(text, domain_key):
+    """Score how well a text matches a domain's content signals.
+
+    Returns a float [0, 1] indicating signal density.
+    This is a soft, organic measure — not a hard label.
+    """
+    signals = EXPERT_DOMAINS[domain_key].get('content_signals', [])
+    if not signals:
+        return 0.0
+    text_lower = text[:5000].lower()  # sample first 5K chars for speed
+    matches = sum(1 for s in signals if s.lower() in text_lower)
+    return matches / len(signals)
+
+
+def _detect_domain_organic(text, repo_name):
+    """Detect domain organically: content signals first, repo hint as fallback.
+
+    Priority:
+      1. Content signal scoring (organic — based on what's IN the text)
+      2. Repo hint (soft fallback — based on where text came FROM)
+      3. 'INFO' default (catch-all for uncategorized content)
+
+    If multiple domains score equally, the text goes to ALL matching domains
+    (soft boundaries — a file can belong to multiple experts).
+    """
+    # Score all domains by content signals
+    scores = {dk: _score_content_signals(text, dk) for dk in EXPERT_DOMAINS}
+    max_score = max(scores.values())
+
+    # If any domain has strong content match (>= 0.15), use it
+    if max_score >= 0.15:
+        return [dk for dk, s in scores.items() if s >= max_score * 0.7]
+
+    # Soft fallback: repo hint
+    repo_to_domain = {}
+    for dk, info in EXPERT_DOMAINS.items():
+        for repo in info.get('repo_hints', []):
+            repo_to_domain[repo] = dk
+    if repo_name in repo_to_domain:
+        return [repo_to_domain[repo_name]]
+
+    return ['INFO']  # catch-all
+
+
 def prepare_domain_data():
-    """Split collected text into domain-specific files for expert training."""
+    """Split collected text into domain-specific files using organic content detection.
+
+    Instead of hard repo→domain mapping, each file is scored against
+    all domains' content signals. Files with strong signals go to the
+    matching domain(s). Files without clear signals fall back to repo
+    hints, then to INFO as catch-all.
+
+    This allows the same file to contribute to multiple experts if it
+    contains cross-domain content (e.g., Russian code comments → RECON + CODE).
+    """
     os.makedirs(DOMAIN_DIR, exist_ok=True)
 
-    # Map repo → domain
-    repo_to_domain = {}
-    for domain_key, domain_info in EXPERT_DOMAINS.items():
-        for repo in domain_info['repos']:
-            repo_to_domain[repo] = domain_key
-
     domain_texts = defaultdict(list)
+    cross_domain_count = 0
 
     for repo_dir in ALL_REPO_DIRS:
         if not os.path.isdir(repo_dir):
             continue
         repo_name = os.path.basename(repo_dir)
-        domain = repo_to_domain.get(repo_name, 'INFO')  # default to INFO
 
         texts = collect_text_from_repos([repo_dir])
-        domain_texts[domain].extend(texts)
+        for text in texts:
+            domains = _detect_domain_organic(text, repo_name)
+            if len(domains) > 1:
+                cross_domain_count += 1
+            for domain in domains:
+                domain_texts[domain].append(text)
 
-    print("\n  Domain data distribution:")
+    print(f"\n  Organic domain detection: {cross_domain_count} cross-domain files")
+    print("  Domain data distribution:")
     for domain, texts in domain_texts.items():
         text_blob = '\n'.join(texts)
         domain_path = os.path.join(DOMAIN_DIR, f'{domain}.txt')
@@ -417,16 +522,22 @@ class MicroExpert(nn.Module):
 
 
 class ExpertRouter(nn.Module):
-    """Routes tokens to top-k micro-experts.
+    """Routes tokens to experts with adaptive top-k selection.
 
-    Uses learned routing with load balancing loss.
-    With BPE tokens, the router can understand semantic context.
+    Organic routing: instead of always activating exactly top-2 experts,
+    adapts the number of active experts based on routing confidence.
+
+    - High confidence (one expert dominates) → activate 1 expert (efficient)
+    - Medium confidence → activate 2 experts (default)
+    - Low confidence (cross-domain) → activate up to 3 experts (thorough)
+
+    The adaptation is smooth via soft gating, not hard k-switching.
     """
 
     def __init__(self, d_model, n_experts, top_k=2, temperature=1.0):
         super().__init__()
         self.n_experts = n_experts
-        self.top_k = top_k
+        self.top_k = top_k  # base top-k (used as maximum)
         self.temperature = temperature
 
         # Two-layer router for better context understanding
@@ -437,26 +548,50 @@ class ExpertRouter(nn.Module):
             nn.Linear(d_model // 2, n_experts),
         )
 
+        # Adaptive top-k: learns when to use more/fewer experts
+        # Maps routing logits → a soft "how many experts" signal
+        self.adaptive_k = nn.Sequential(
+            nn.Linear(n_experts, n_experts),
+            nn.GELU(),
+            nn.Linear(n_experts, 1),
+        )
+
     def forward(self, x):
         """
         Args:
             x: (B, T, d_model)
         Returns:
-            expert_weights: (B, T, n_experts) — sparse, top-k non-zero
+            expert_weights: (B, T, n_experts) — sparse, adaptive non-zero count
             aux_loss: load balancing loss
         """
         logits = self.router(x) / self.temperature  # (B, T, n_experts)
 
-        # Top-k selection
-        top_k_logits, top_k_indices = logits.topk(self.top_k, dim=-1)
-        top_k_weights = F.softmax(top_k_logits, dim=-1)
+        # Always select top_k experts as candidates
+        top_k = min(self.top_k, self.n_experts)
+        top_k_logits, top_k_indices = logits.topk(top_k, dim=-1)
+        top_k_weights = F.softmax(top_k_logits, dim=-1)  # (B, T, top_k)
+
+        # Adaptive gating: learn per-token how many experts to actually use.
+        # k_gate ∈ [0, 1]: 0 = only top-1, 1 = full top-k
+        # When the router is confident (one logit dominates), k_gate → 0
+        # When uncertain (logits are flat), k_gate → 1
+        k_gate = torch.sigmoid(self.adaptive_k(logits))  # (B, T, 1)
+
+        # Apply adaptive gating: fade out lower-ranked experts
+        if top_k > 1:
+            # Create fade mask: [1.0, k_gate, k_gate², ...] for each position
+            fade = torch.ones_like(top_k_weights)
+            for rank in range(1, top_k):
+                fade[:, :, rank] = k_gate.squeeze(-1) ** rank
+            top_k_weights = top_k_weights * fade
+            # Re-normalize
+            top_k_weights = top_k_weights / (top_k_weights.sum(dim=-1, keepdim=True) + 1e-8)
 
         # Scatter to full expert dimension
         expert_weights = torch.zeros_like(logits)
         expert_weights.scatter_(-1, top_k_indices, top_k_weights)
 
         # Load balancing auxiliary loss
-        # Encourage uniform expert utilization
         avg_routing = expert_weights.mean(dim=(0, 1))  # (n_experts,)
         target = torch.ones_like(avg_routing) / self.n_experts
         aux_loss = F.mse_loss(avg_routing, target) * self.n_experts
@@ -553,30 +688,37 @@ def _build_solan_table_for_bpe(sp_model_path: str, vocab_size: int = 4096) -> 't
 
 
 class NautilusBridge(nn.Module):
-    """Simplified bridge that merges expert outputs hierarchically.
+    """Organic bridge that merges expert outputs via content-dependent attention.
 
-    Inspired by NautilusHierarchy but adapted for MoME:
-    - Takes weighted expert outputs
-    - Applies hierarchical merging (pairs → groups → all)
-    - Uses residual gating for stability
+    Instead of mechanical pairwise merge (0+1, 2+3, 4+5 by index order),
+    uses cross-attention where the core hidden state QUERIES expert outputs.
+    The model itself decides how to blend experts based on current context.
+
+    Architecture:
+        Query  = core_hidden (what the model currently needs)
+        Keys   = expert_outputs (what each expert proposes)
+        Values = expert_outputs (expert contributions)
+        → Attention-weighted sum → the model blends organically
+
+    This replaces the old fixed-index pairing with content-dependent merging.
     """
 
-    def __init__(self, d_model, n_experts):
+    def __init__(self, d_model, n_experts, n_heads=4):
         super().__init__()
         self.n_experts = n_experts
+        self.d_model = d_model
 
-        # Pairwise merge (experts 0+1, 2+3, 4+5 → 3 groups)
-        n_pairs = (n_experts + 1) // 2
-        self.pair_merge = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(d_model * 2, d_model),
-                nn.GELU(),
-            ) for _ in range(n_pairs)
-        ])
+        # Cross-attention: core queries expert proposals
+        self.query_proj = nn.Linear(d_model, d_model)
+        self.key_proj = nn.Linear(d_model, d_model)
+        self.value_proj = nn.Linear(d_model, d_model)
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        self.scale = self.head_dim ** -0.5
 
-        # Global merge (3 groups → 1)
-        self.global_merge = nn.Sequential(
-            nn.Linear(d_model * n_pairs, d_model),
+        # Output projection after attention
+        self.out_proj = nn.Sequential(
+            nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Linear(d_model, d_model),
         )
@@ -595,31 +737,39 @@ class NautilusBridge(nn.Module):
             merged: (B, T, d_model)
         """
         B, T, D = core_hidden.shape
+        n_exp = len(expert_outputs)
 
-        # Weight expert outputs
+        # Weight expert outputs by routing
         weighted = []
         for i, exp_out in enumerate(expert_outputs):
             w = expert_weights[:, :, i:i+1]  # (B, T, 1)
             weighted.append(exp_out * w)
 
-        # Pairwise merge
-        pair_outputs = []
-        for i in range(0, len(weighted), 2):
-            if i + 1 < len(weighted):
-                pair_in = torch.cat([weighted[i], weighted[i+1]], dim=-1)
-            else:
-                pair_in = torch.cat([weighted[i], torch.zeros_like(weighted[i])], dim=-1)
-            pair_outputs.append(self.pair_merge[i // 2](pair_in))
+        # Stack expert outputs: (B, T, n_experts, D)
+        expert_stack = torch.stack(weighted, dim=2)
 
-        # Global merge
-        global_in = torch.cat(pair_outputs, dim=-1)
-        # Pad if needed
-        expected = self.global_merge[0].in_features
-        if global_in.size(-1) < expected:
-            pad = torch.zeros(B, T, expected - global_in.size(-1), device=global_in.device)
-            global_in = torch.cat([global_in, pad], dim=-1)
+        # Cross-attention: core hidden queries expert proposals
+        # Q from core: (B, T, D)
+        # K, V from experts: (B, T, n_experts, D) → reshape for attention
+        Q = self.query_proj(core_hidden)                          # (B, T, D)
+        K = self.key_proj(expert_stack.view(B * T, n_exp, D))    # (B*T, n_exp, D)
+        V = self.value_proj(expert_stack.view(B * T, n_exp, D))  # (B*T, n_exp, D)
 
-        merged = self.global_merge(global_in)
+        # Reshape Q for multi-head: (B*T, 1, n_heads, head_dim) → (B*T, n_heads, 1, head_dim)
+        Q = Q.view(B * T, 1, self.n_heads, self.head_dim).transpose(1, 2)
+        K = K.view(B * T, n_exp, self.n_heads, self.head_dim).transpose(1, 2)
+        V = V.view(B * T, n_exp, self.n_heads, self.head_dim).transpose(1, 2)
+
+        # Attention: (B*T, n_heads, 1, head_dim) @ (B*T, n_heads, head_dim, n_exp)
+        attn = torch.matmul(Q, K.transpose(-2, -1)) * self.scale  # (B*T, n_heads, 1, n_exp)
+        attn = F.softmax(attn, dim=-1)
+
+        # Weighted sum of expert values
+        merged = torch.matmul(attn, V)  # (B*T, n_heads, 1, head_dim)
+        merged = merged.transpose(1, 2).reshape(B, T, D)  # (B, T, D)
+
+        # Project and gate
+        merged = self.out_proj(merged)
 
         # Residual connection with gate
         output = core_hidden + self.residual_gate * self.ln(merged)
@@ -826,8 +976,18 @@ class ArchetypeLayer(nn.Module):
         # AUXILIARY: Expert weights → 4 Q4 axes (routing signal)
         self.expert_to_axes = nn.Linear(n_experts, 4, bias=True)
 
-        # Learnable blend between hidden-derived and expert-derived axes
-        self.axis_blend = nn.Parameter(torch.tensor(1.5))  # sigmoid(1.5)≈0.82, favors hidden
+        # Context-dependent blend: instead of a fixed global scalar,
+        # the blend between hidden-derived and expert-derived axes
+        # is computed per-token from the content itself.
+        # On some tokens hidden state is more informative (e.g. code),
+        # on others routing is more informative (e.g. cross-domain).
+        # A small MLP learns this per-token decision.
+        self.blend_net = nn.Sequential(
+            nn.Linear(d_model + n_experts, d_model // 4),
+            nn.GELU(),
+            nn.Linear(d_model // 4, 4),  # per-axis blend
+            nn.Sigmoid(),
+        )
 
         # 16 archetype embeddings (learnable)
         self.archetype_emb = nn.Embedding(16, d_model)
@@ -865,8 +1025,12 @@ class ArchetypeLayer(nn.Module):
         # Step 1b: Expert routing → axes (sparse, per-token)
         expert_axes = torch.tanh(self.expert_to_axes(expert_weights))  # (B, T, 4)
 
-        # Step 1c: Blend (learnable, favors hidden state)
-        blend = torch.sigmoid(self.axis_blend)
+        # Step 1c: Context-dependent blend (per-token, per-axis)
+        # The model decides for each token and each axis how much to trust
+        # hidden state vs routing signal. Some tokens may need routing
+        # (cross-domain), others may need hidden state (clear single-domain).
+        blend_input = torch.cat([x, expert_weights], dim=-1)  # (B, T, D+n_experts)
+        blend = self.blend_net(blend_input)  # (B, T, 4), each in [0,1]
         axes = blend * hidden_axes + (1 - blend) * expert_axes  # (B, T, 4)
 
         # Step 2: Soft assignment to 16 archetypes
@@ -897,7 +1061,7 @@ class ArchetypeLayer(nn.Module):
             'axis_means': axes.mean(dim=(0, 1)).tolist(),
             'archetype_probs': archetype_probs,  # for loss computation
             'axes': axes,  # (B, T, 4) for supervision loss
-            'blend': blend.item(),
+            'blend': blend.mean(dim=(0, 1)).tolist(),  # per-axis avg blend
         }
         return enriched_x, info
 
@@ -1076,15 +1240,16 @@ class NautilusMoME(nn.Module):
         # routing entropy is high (= router is uncertain = cross-domain input).
         # Like surrealist poetry mixes domains, SYNTH synthesizes insights
         # from multiple experts when no single expert dominates.
+        #
+        # Organic activation: instead of a hard threshold (entropy > 0.55),
+        # SYNTH uses a learnable soft gate that maps entropy → activation
+        # via sigmoid. The model learns WHEN to synthesize, not us.
         if enable_synth:
             self.synth_expert = MicroExpert(d_model, d_expert, dropout)
-            # Entropy threshold: activate SYNTH when routing is uncertain
-            # With top-2 routing, max entropy = log(2) ≈ 0.693
-            # Median entropy ~0.45-0.55; use 0.55 to activate on
-            # above-average uncertainty (= genuine cross-domain content)
-            self.synth_entropy_threshold = nn.Parameter(
-                torch.tensor(0.55), requires_grad=False
-            )
+            # Soft activation gate: maps routing entropy → [0, 1] activation
+            # sigmoid(scale * (entropy - center)) learns both threshold and sharpness
+            self.synth_center = nn.Parameter(torch.tensor(0.45))   # learnable center
+            self.synth_sharpness = nn.Parameter(torch.tensor(4.0)) # learnable steepness
             # Learnable mixing weight for SYNTH contribution
             self.synth_gate = nn.Parameter(torch.tensor(0.05))
 
@@ -1222,34 +1387,33 @@ class NautilusMoME(nn.Module):
         # ArchetypeLayer: project routing to 16 PseudoRAG archetypes
         x, archetype_info = self.archetype_layer(x, expert_weights)
 
-        # SYNTH expert: activate when routing entropy is high
+        # SYNTH expert: organic soft activation based on routing entropy.
+        # Instead of hard threshold (entropy > 0.55 → activate),
+        # uses learnable sigmoid gate: sigmoid(sharpness * (entropy - center))
+        # The model learns WHEN and HOW MUCH to synthesize.
         synth_info = {}
         if self.enable_synth:
             # Compute per-token routing entropy
-            # High entropy = router uncertain = cross-domain token
             ew_safe = expert_weights.clamp(min=1e-8)
             token_entropy = -(ew_safe * ew_safe.log()).sum(dim=-1)  # (B, T)
             avg_entropy = token_entropy.mean().item()
 
-            # SYNTH activates proportionally to how much entropy exceeds threshold
-            synth_activation = (token_entropy - self.synth_entropy_threshold).clamp(min=0)
-            synth_activation = synth_activation / (synth_activation.max() + 1e-8)  # normalize
+            # Soft activation: smooth sigmoid instead of hard threshold
+            # sigmoid(sharpness * (entropy - center)) → [0, 1] per token
+            synth_activation = torch.sigmoid(
+                self.synth_sharpness * (token_entropy - self.synth_center)
+            )  # (B, T), smooth and differentiable
 
-            if synth_activation.sum() > 0:
-                synth_out = self.synth_expert(x)  # (B, T, D)
-                synth_contribution = synth_out * synth_activation.unsqueeze(-1) * self.synth_gate
-                x = x + synth_contribution
-                synth_info = {
-                    'avg_entropy': avg_entropy,
-                    'activation_frac': (synth_activation > 0).float().mean().item(),
-                    'gate': self.synth_gate.item(),
-                }
-            else:
-                synth_info = {
-                    'avg_entropy': avg_entropy,
-                    'activation_frac': 0.0,
-                    'gate': self.synth_gate.item(),
-                }
+            synth_out = self.synth_expert(x)  # (B, T, D)
+            synth_contribution = synth_out * synth_activation.unsqueeze(-1) * self.synth_gate
+            x = x + synth_contribution
+            synth_info = {
+                'avg_entropy': avg_entropy,
+                'activation_mean': synth_activation.mean().item(),
+                'center': self.synth_center.item(),
+                'sharpness': self.synth_sharpness.item(),
+                'gate': self.synth_gate.item(),
+            }
 
         # TwilightInterpreter: preserve model's natural language,
         # provide parallel human-readable channel
@@ -2458,6 +2622,127 @@ def phase10_antonym_differentiation(model, sp, train_data, val_data, args,
     return best_val
 
 
+# ==================== Phase 11: Organic Contrastive Routing ====================
+
+
+def phase11_contrastive_routing(model, sp, train_data, val_data, args,
+                                 n_steps=1000, lr=5e-5, margin=0.15):
+    """Phase 11: Sharpen expert routing organically via contrastive loss.
+
+    Instead of hard-coding which expert should handle which content,
+    uses a contrastive objective: for each batch, the routing of domain-
+    specific data should CLEARLY prefer its natural expert.
+
+    The contrastive loss says: "the top expert's weight should exceed
+    the second-best by at least `margin`". This makes routing decisions
+    more confident without telling the model WHICH expert to use.
+
+    Only trains: router + bridge + adaptive_k (expert weights frozen).
+    The model discovers sharper specialization organically.
+
+    Four-level alignment:
+      Contrastive loss sharpens boundaries BETWEEN levels:
+      Formula-tokens → clearly MATH, not CODE
+      Archetype-tokens → clearly CODE/SYSTEM, not INFO
+      Algorithm-tokens → clearly RECON/INFO, not MATH
+      Theorem-tokens → clearly HUMAN, not SYSTEM
+    """
+    print("\n" + "=" * 70)
+    print("  Phase 11: Organic Contrastive Routing")
+    print("  Sharpening expert specialization through contrastive margin loss")
+    print(f"  Steps: {n_steps}, LR: {lr}, Margin: {margin}")
+    print("=" * 70)
+
+    # Freeze everything except router and bridge
+    for p in model.parameters():
+        p.requires_grad = False
+    for p in model.router.parameters():
+        p.requires_grad = True
+    for p in model.bridge.parameters():
+        p.requires_grad = True
+
+    optimizer = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=lr, weight_decay=0.01,
+    )
+
+    best_val = float('inf')
+    block_size = args.block_size
+    batch_size = args.batch_size
+
+    for step in range(n_steps):
+        model.train()
+        x, y = get_batch(train_data, block_size, batch_size)
+        logits, ce_loss, info = model(x, targets=y)
+
+        # Contrastive routing loss:
+        # For each token, the gap between top-1 and top-2 expert should be >= margin
+        routing = info['routing']  # (B, T, n_experts)
+        sorted_routing, _ = routing.sort(dim=-1, descending=True)
+        top1 = sorted_routing[:, :, 0]  # (B, T)
+        top2 = sorted_routing[:, :, 1]  # (B, T)
+
+        # Hinge loss: penalize when gap < margin
+        contrastive_loss = F.relu(margin - (top1 - top2)).mean()
+
+        # Routing entropy loss: encourage lower entropy (more decisive)
+        ew_safe = routing.clamp(min=1e-8)
+        entropy = -(ew_safe * ew_safe.log()).sum(dim=-1).mean()
+        entropy_loss = entropy * 0.1  # gentle nudge toward decisiveness
+
+        # Combined loss
+        total_loss = ce_loss + 0.5 * contrastive_loss + entropy_loss
+
+        optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        # Adjust learning rate (WSD schedule)
+        current_lr = get_lr_wsd(step, n_steps, lr)
+        for pg in optimizer.param_groups:
+            pg['lr'] = current_lr
+
+        if step % 100 == 0 or step == n_steps - 1:
+            avg_gap = (top1 - top2).mean().item()
+            confident_frac = ((top1 - top2) > margin).float().mean().item()
+            print(f"  Step {step:4d}: CE={ce_loss.item():.3f} "
+                  f"contrastive={contrastive_loss.item():.4f} "
+                  f"entropy={entropy.item():.3f} "
+                  f"gap={avg_gap:.3f} confident={confident_frac:.1%}")
+
+        if (step + 1) % args.eval_every == 0:
+            val_loss, val_ppl = evaluate(model, val_data, block_size, batch_size)
+            print(f"  [Eval] step={step+1} val_loss={val_loss:.4f} PPL={val_ppl:.2f}")
+            if val_loss < best_val:
+                best_val = val_loss
+                torch.save({
+                    'model': model.state_dict(),
+                    'phase': 11,
+                    'step': step,
+                }, CHECKPOINT_PATH)
+
+    # Unfreeze everything
+    model.unfreeze_all()
+
+    # Final eval
+    val_loss, val_ppl = evaluate(model, val_data, block_size, batch_size)
+    routing_test = info['routing']
+    sorted_r, _ = routing_test.sort(dim=-1, descending=True)
+    final_gap = (sorted_r[:, :, 0] - sorted_r[:, :, 1]).mean().item()
+    final_confident = ((sorted_r[:, :, 0] - sorted_r[:, :, 1]) > margin).float().mean().item()
+    print(f"\n  Phase 11 FINAL: val={val_loss:.4f} PPL={val_ppl:.2f}")
+    print(f"  Routing gap: {final_gap:.3f}, Confident: {final_confident:.1%}")
+    print(f"  >> Saved Phase 11 checkpoint to {CHECKPOINT_PATH}")
+
+    torch.save({
+        'model': model.state_dict(),
+        'phase': 11,
+    }, CHECKPOINT_PATH)
+
+    return best_val
+
+
 # ==================== Main ====================
 
 def main():
@@ -2482,7 +2767,9 @@ def main():
     parser.add_argument('--wd', type=float, default=0.01, help='Weight decay')
     parser.add_argument('--eval-every', type=int, default=500, help='Eval interval')
     # Control
-    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3/4/5/9/10)')
+    parser.add_argument('--phase', type=int, default=0, help='Start from phase (0/1/2/3/4/5/9/10/11)')
+    parser.add_argument('--contrastive-steps', type=int, default=1000, help='Phase 11 contrastive routing steps')
+    parser.add_argument('--contrastive-margin', type=float, default=0.15, help='Phase 11 margin for routing gap')
     parser.add_argument('--resume', type=str, default=None, help='Checkpoint to resume')
     parser.add_argument('--variant', type=str, default='both', choices=['a', 'b', 'both'],
                         help='Phase 10 variant: a=antonym, b=ternary, both=sequential')
@@ -2555,6 +2842,14 @@ def main():
     if args.phase <= 10 and train_data is not None and hasattr(model, 'archetype_layer'):
         phase10_antonym_differentiation(model, sp, train_data, val_data, args,
                                          variant=args.variant)
+
+    # Phase 11: Organic contrastive routing (sharpen expert specialization)
+    if args.phase <= 11 and train_data is not None:
+        phase11_contrastive_routing(
+            model, sp, train_data, val_data, args,
+            n_steps=args.contrastive_steps,
+            margin=args.contrastive_margin,
+        )
 
     # Final evaluation
     print("\n" + "=" * 70)
