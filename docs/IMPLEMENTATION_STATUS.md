@@ -55,9 +55,9 @@
 
 | Утверждение из документации | Где заявлено | Что в коде | Вердикт |
 |----------------------------|-------------|------------|---------|
-| **«19 доказанных теорем»** | KNOWLEDGE_FRAMEWORK.md | Описаны 4 из 19. Остальные 15 — галочки без формулировок | ❌ **Не доказаны в коде** |
-| **PseudoRAG** | CONCEPTUAL_STAGE.md | Нет класса PseudoRAG. Упоминается как концепт в validate_q4_q6.py | ❌ **Не реализован** |
-| **Multi-GPU / DDP обучение** | — | 0 результатов по DistributedDataParallel/DDP. Есть только device safety (.to(device)) | ❌ **Не реализовано** |
+| **«19 доказанных теорем»** | KNOWLEDGE_FRAMEWORK.md | Задокументированы в docs/THEOREMS.md. 4 полностью верифицированы в коде, 15 — формулировки | ⚠️ **Задокументированы** |
+| **PseudoRAG** | CONCEPTUAL_STAGE.md | ✅ `PseudoRAGProjection` + `PseudoRAGDistillationLoss` в models/pseudo_rag.py. Интегрирован через `use_pseudo_rag=True` | ✅ **Реализован** |
+| **Multi-GPU / DDP обучение** | — | ✅ `DDPWrapper` + `setup_ddp_from_env()` в training/ddp.py. Конфиг: `use_ddp=True` | ✅ **Реализован** |
 | **7-портовая архитектура** | PORTAL-PROTOCOL.md | portal.py имеет 3–5 адаптеров, не 7 портов | ⚠️ **Частично (3/7)** |
 | **Интеграция 6 источников в единый модуль** | PLAN-v51 | Компоненты каждого источника существуют по отдельности, но единого модуля интеграции нет | ⚠️ **Разрозненно** |
 | **SOLAN как система внимания** | CONCEPTUAL_STAGE.md | GlyphTokenizer с SOLAN-76 существует, но как токенизатор. Не как attention mechanism. Прирост <1% (PPL 2.32→2.31) | ⚠️ **Токенизатор есть, attention нет** |
@@ -75,9 +75,9 @@
 | PrefixTuning, LogitLens | models/prefix_tuning.py | ✅ 15 тестов | ❌ только в тестах |
 | DistillationTrainer | training/distillation.py | ✅ 4 теста | ❌ только в тестах |
 | EMA (Exponential Moving Average) | training/ema.py | ✅ 1 тест | ❌ только в тестах |
-| ExpertChoice routing | models/expert_choice.py | — | ❌ только в knowledge_system.py |
+| ExpertChoice routing | models/expert_choice.py | ✅ тесты | ✅ интегрирован через `use_expert_choice=True` |
 | Extensions A2–E14 (9 классов) | models/extensions.py | ✅ через run_all_extensions.py | ❌ не в основных моделях |
-| 8 из 16 attention паттернов | geometry/attention.py | ✅ тесты | ⚠️ условно через конфиг, не по умолчанию |
+| 8 из 16 attention паттернов | geometry/attention.py | ✅ 21 тест в test_conditional_attention.py | ⚠️ условно через конфиг, протестированы все 12 + комбинации |
 
 > **Примечание:** все 43 файла `utils_v*.py` импортируются через bridge-модули (`bridge_schedulers.py`, `bridge_optimizers.py`, `bridge_regularization.py` и др.) — мёртвого кода среди них нет.
 
@@ -138,6 +138,8 @@
 | test_abriale.py | 24 | AbrialeLayer, scatter, topk |
 | test_multigpu_precision.py | 20 | fp16/bf16 forward/backward, device transfer |
 | test_training_utils.py | ~30 | Sophia, DynamicTemp, GradScaler |
+| test_integration_scale.py | 12 | d_model=256, seq_len=64: forward, backward, loss decrease, MoE, KV-cache |
+| test_conditional_attention.py | 21 | Все 12 условных attention паттернов + комбинации + config examples |
 
 **Тип тестов:** unit + component integration. Проверяют shapes, gradients, math constraints, loss decrease. **НЕ проверяют** качество генерации или generalisation на реальных данных.
 
@@ -147,12 +149,12 @@
 
 | Что отсутствует | Приоритет | Сложность |
 |----------------|-----------|-----------|
-| Multi-GPU / DDP обучение | Высокий | Средняя |
-| Бенчмарки на WikiText-103/OpenWebText (d≥256, >10K шагов) | Высокий | Средняя |
-| Тесты качества генерации (BLEU, perplexity на held-out) | Высокий | Низкая |
-| Единый модуль интеграции 6 источников | Средний | Высокая |
-| PseudoRAG как реализованный класс | Средний | Средняя |
-| Полные формулировки 19 теорем | Низкий | Низкая |
+| ~~Multi-GPU / DDP обучение~~ | ~~Высокий~~ | ~~Средняя~~ | ✅ Реализовано: training/ddp.py |
+| Бенчмарки на WikiText-103/OpenWebText (d≥256, >10K шагов) | Высокий | Средняя | ⚠️ Масштабные тесты добавлены (test_integration_scale.py) |
+| Тесты качества генерации (BLEU, perplexity на held-out) | Высокий | Низкая | |
+| Единый модуль интеграции 6 источников | Средний | Высокая | |
+| ~~PseudoRAG как реализованный класс~~ | ~~Средний~~ | ~~Средняя~~ | ✅ Реализовано: models/pseudo_rag.py |
+| ~~Полные формулировки 19 теорем~~ | ~~Низкий~~ | ~~Низкая~~ | ✅ Задокументировано: docs/THEOREMS.md |
 | SOLAN как attention mechanism (не только tokenizer) | Низкий | Средняя |
 | 7-портовая архитектура (сейчас 3–5) | Низкий | Средняя |
 
@@ -162,9 +164,14 @@
 
 **Реализовано в коде:** 6 моделей, 64 геометрических модуля, 4 тренировочных пайплайна, 5 стратегий генерации, 12 квантизаторов, LoRA, speculative decoding, ONNX export — всё с working forward() и 1731 тестом.
 
-**Только теория:** PseudoRAG, 15 из 19 теорем, Multi-GPU/DDP, 7-портовый протокол, единая интеграция 6 источников, SOLAN-attention.
+**Только теория:** 7-портовый протокол, единая интеграция 6 источников, SOLAN-attention.
 
-**Главный разрыв:** код работает на toy-scale (d=128, 800 шагов, <100K токенов). Масштабирование на реальные данные и размеры не проверено.
+**Закрыто в этом обновлении:** PseudoRAG (models/pseudo_rag.py), DDP (training/ddp.py), ExpertChoice MoE (интеграция в model.py), 19 теорем (docs/THEOREMS.md), масштабные тесты d=256 (test_integration_scale.py), тесты всех 12 attention паттернов (test_conditional_attention.py), исправлен баг batch broadcast в attention bias (model.py:655).
+
+**Главный разрыв:** бенчмарки проведены на toy-scale (d=128, 800 шагов, <100K токенов). Масштабные тесты подтверждают работоспособность при d=256, но production benchmarks на WikiText-103 отсутствуют.
+
+---
+
 # Implementation Status — Что реализовано и где искать
 
 > **Актуально:** 2026-03-24  
@@ -477,4 +484,4 @@ out = bank(x)  # (B, T, d_model)
 
 ---
 
-*Последнее обновление: 2026-03-24 | Ветка: `claude/repository-audit-fvlEG`*
+*Последнее обновление: 2026-03-24 | Ветка: `claude/update-dev-status-c2O9q`*

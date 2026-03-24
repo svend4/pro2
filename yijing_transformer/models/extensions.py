@@ -1,4 +1,7 @@
 """
+EXPERIMENTAL — не используется в production моделях.
+Все 9 классов используются только в scripts/run_all_extensions.py (benchmark harness).
+
 Расширения YiJing-Transformer: фазы A2–E14.
 
 A2: Multi-Head Geometric Attention (отдельный кодбук на голову)

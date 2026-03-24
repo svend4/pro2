@@ -324,6 +324,15 @@ class YiJingConfig:
     moe_top_k: int = 2           # сколько экспертов активировать
     n_experts: int = 8           # число экспертов (= число триграмм)
 
+    # Expert Choice MoE: каждый эксперт выбирает свои top-C токенов (perfect load balancing)
+    use_expert_choice: bool = False       # Expert Choice routing (Zhou et al., 2022)
+    expert_choice_capacity: float = 1.0   # capacity factor для Expert Choice
+
+    # PseudoRAG: мост Q4 (16 архетипов) → Q6 (64 гексаграммы)
+    # Ref: PSEUDORAG_YIJING_BRIDGE.md — формальное вложение Q4 ⊂ Q6
+    use_pseudo_rag: bool = False          # PseudoRAG Q4→Q6 projection bridge
+    pseudo_rag_distill_weight: float = 0.1  # вес distillation loss (Q4→Q6 кластеры)
+
     # DomainMoE: эксперты по доменам корпуса (ai_agents, infosystems, ...)
     use_domain_moe: bool = False          # включить доменную MoE вместо SwiGLU/TrigramMoE
     domain_moe_n_experts: int = 6        # один эксперт на домен
@@ -448,6 +457,7 @@ class YiJingConfig:
     abriale_balance_weight: float = 0.01 # вес aux loss для балансировки правил
 
     # Обучение
+    use_ddp: bool = False            # Distributed Data Parallel (torchrun --nproc_per_node=N)
     lr: float = 3e-4
     warmup_steps: int = 2000
     batch_size: int = 8
