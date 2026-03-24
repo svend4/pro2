@@ -97,7 +97,7 @@ def main():
             block.hmoe = HierarchicalMoEFFN(HMOE_CFG)
 
     if os.path.exists(args.checkpoint):
-        ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
         model.load_state_dict(ckpt.get("model_state", ckpt), strict=False)
         print(f"  Загружен: {args.checkpoint}")
     else:

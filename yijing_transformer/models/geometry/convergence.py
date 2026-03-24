@@ -68,7 +68,8 @@ class GlyphComposer(nn.Module):
                 dropout=0.1, batch_first=True,
                 norm_first=True,
             )
-            self.composer = nn.TransformerEncoder(layer, num_layers=n_compose_layers)
+            self.composer = nn.TransformerEncoder(layer, num_layers=n_compose_layers,
+                                                   enable_nested_tensor=False)
         else:
             self.composer = None
 
@@ -132,13 +133,13 @@ class GlyphComposer(nn.Module):
             spread = ((window - centroid.unsqueeze(1)) ** 2).sum(dim=-1).mean(dim=1, keepdim=True).add(1e-8).sqrt()  # (B, 1)
 
             # 3. Спектр Лапласиана подграфа
-            # Adjacency: a_ij = 1 если Hamming(v_i, v_j) <= 2
+            # Adjacency: a_ij ≈ σ(gain·(2 - hamming)) — soft порог вокруг hamming=2.
             # В Q6 с {-1,+1}: Hamming = (6 - dot(v_i, v_j)) / 2
-            # Adjacency через Hamming distance (пороговое сравнение не дифференцируемо,
-            # но float() операции должны пропускать градиент через dots → window)
+            # Sigmoid вместо boolean (hamming<=2).float() сохраняет градиенты:
+            # d(adj)/d(dots) ≠ 0, поэтому eigenvalues Лапласиана обучаемы.
             dots = torch.bmm(window, window.transpose(1, 2))  # (B, k, k)
             hamming = (6.0 - dots) / 2.0
-            adj = (hamming <= 2).float()
+            adj = torch.sigmoid(4.0 * (2.0 - hamming))  # soft adjacency, grad-friendly
             # Убираем self-loops для Лапласиана
             adj = adj * (1.0 - torch.eye(k, device=adj.device).unsqueeze(0))
 
@@ -187,11 +188,11 @@ class GlyphComposer(nn.Module):
         edge_pooled = []
         for w in range(n_sigils):
             start = w * self.stride
-            end = min(start + self.window_size - 1, edge_emb.shape[1])
+            end = min(start + self.window_size, edge_emb.shape[1])
             if start < edge_emb.shape[1]:
                 edge_pooled.append(edge_emb[:, start:end].mean(dim=1))
             else:
-                edge_pooled.append(torch.zeros(B, self.d_model, device=sigil_emb.device))
+                edge_pooled.append(torch.zeros(B, self.d_model, device=edge_emb.device, dtype=edge_emb.dtype))
         edge_pooled = torch.stack(edge_pooled, dim=1)  # (B, n_sigils, d_model)
 
         # Glyph-level pooling (тот же windowing)
@@ -320,7 +321,7 @@ class TokenAbstractor(nn.Module):
         if self.d_model >= 6:
             centers_q6 = self.cluster_centers[:, :6]  # (64, 6)
         else:
-            return torch.tensor(0.0, device=self.cluster_centers.device)
+            return self.cluster_centers.new_tensor(0.0)
 
         # Sign → бинаризация
         centers_binary = centers_q6.sign()  # (64, 6) в {-1, +1}

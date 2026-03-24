@@ -52,13 +52,14 @@ from yijing_transformer.models.variant3_extensions import (
     HexagramEvaluator, TextQualityFilter,
     get_hexagrams, get_biangua, bfs_distances,
 )
+from yijing_transformer.constants import HEX_NAMES
 
 # ─── конфигурация ─────────────────────────────────────────────────────────────
 
 torch.manual_seed(42)
 random.seed(42)
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CFG = Variant3Config(
     vocab_size=256, block_size=32, d_model=128,
     n_heads=4, n_layers=4, ffn_mult=4,
@@ -77,19 +78,6 @@ dist_matrix = bfs_distances(biangua)
 evaluator   = HexagramEvaluator(threshold=0.01)
 qfilter     = TextQualityFilter(CFG.d_model)
 
-HEX_NAMES = [
-    "Творчество","Исполнение","Начало","Юность","Ожидание","Конфликт",
-    "Войско","Единение","Малое накопление","Хождение","Мир","Застой",
-    "Братство","Великое","Скромность","Воодушевление","Следование","Исправление",
-    "Горное","Созерцание","Укус","Украшение","Распад","Возврат",
-    "Беспорочность","Великое накопление","Питание","Избыток","Бездна","Красота",
-    "Взаимодействие","Длительность","Отступание","Великая мощь","Прогресс","Затмение",
-    "Семья","Разрыв","Малые преграды","Освобождение","Уменьшение","Умножение",
-    "Прорыв","Соединение","Собирание","Подъём","Угнетение","Колодец",
-    "Революция","Котёл","Гром","Гора","Постепенность","Невеста",
-    "Изобилие","Путник","Ветер","Радость","Рассеивание","Ограничение",
-    "Правда","Малые препятствия","Уже завершено","Ещё не завершено",
-]
 def hname(i): return HEX_NAMES[i] if i < 64 else f"#{i}"
 
 

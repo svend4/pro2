@@ -1,5 +1,54 @@
 # Задачи на будущее / Future Tasks
 # Обновляется по мере работы — не удалять
+#
+# Документация по сессиям: docs/CHANGELOG.md
+# Полный статус реализации: docs/IMPLEMENTATION_STATUS.md
+# Все эксперименты: docs/EXPERIMENTS.md
+# Теория vs код: docs/THEORY_VS_PRACTICE.md  ← НОВЫЙ
+
+---
+
+## ✅ ПРИОРИТЕТ 0 — закрыть разрывы теория→код (из аудита 2026-03-24)
+
+Полная дорожная карта: [docs/THEORY_VS_PRACTICE.md — Часть 5](docs/THEORY_VS_PRACTICE.md)
+
+| # | Задача | Статус | Файл |
+|---|--------|--------|------|
+| 0.1 | Подключить `interlingua_fixed.py` в `model.py` | ✅ 2026-03-24 | `models/model.py` |
+| 0.2 | Temperature `end_temp=0.01`, `warmup_steps=5000` | ✅ 2026-03-24 | `geometry/quantizers.py` |
+| 0.3 | Запустить `train_with_glyph.py --steps 1000`, интегрировать | ✅ 2026-03-24 | `experiments/train_with_glyph.py` + `self_train_hmoe.py` |
+| 0.4 | Реализовать `WHT_Quantizer` (Walsh-Hadamard, O(6 log 6)) | ✅ 2026-03-24 | `geometry/quantizers.py` |
+| 0.5 | CrossDomainAnalogy 15→36 пар (добавить B→A реверсы) | ✅ 2026-03-24 | `self_train_hmoe.py` |
+| 0.6 | Q4⊂Q6 инициализация RAG из Q4-кластеров (если hamming<2.5) | ✅ 2026-03-24 | `e2_self_improve.py` |
+
+**Все 6 задач PRIORITY 0 закрыты (commit c1b4d6b):**
+- ✅ 0.1: `model.py` использует `ArchetypalInterlinguaFixed` по умолчанию
+- ✅ 0.2: `TernaryQuantizer.step_temp()` + `_build_quantizer` передаёт warmup params
+- ✅ 0.3: `train_with_glyph.py` triplet-loss → delta_margin=+0.33; `--glyph` флаг в `self_train_hmoe.py`
+- ✅ 0.4: `WHT_Quantizer` — Walsh-Hadamard O(n log n) в `quantizers.py`
+- ✅ 0.5: `cross_domain_signal()` — 36 направленных пар, B→A реверсы
+- ✅ 0.6: `e2_self_improve.py` — `q4_cluster_init()` + условная активация при hamming<2.5
+
+**Текущий статус (avg_hamming=2.56):** Q4 init реализован, но не активируется (2.56 > 2.5).
+
+---
+
+## ✅ ВЫПОЛНЕНО 2026-03-24 — experiments + geometry modules
+
+Ветка: `claude/repository-audit-fvlEG` | Коммиты: `88ddec5`, `67fd389`
+
+| Задача | Файл | Результат |
+|--------|------|-----------|
+| validate_q4_q6.py | `experiments/validate_q4_q6.py` | avg_hamming=2.56 (PARTIAL) |
+| interlingua_fixed: start_temp/end_temp, readout_attn, self-test | `geometry/interlingua_fixed.py` | spread=0.25 → PASS |
+| kasatkin_router: hex_label, Q6ExpertBank, DOMAIN_ALT | `geometry/kasatkin_router.py` | confidence=0.44 → PASS |
+| xerox_test: 11→14 кейсов, multi-arch loader | `experiments/xerox_test.py` | 6/14 mock |
+| run_all_checks.sh: 4→5 проверок, $CHECKPOINT | `run_all_checks.sh` | — |
+| monitor_improve.py | `monitor_improve.py` | создан |
+| train_with_glyph.py | `experiments/train_with_glyph.py` | создан |
+| Документация: EXPERIMENTS.md, IMPLEMENTATION_STATUS.md, CHANGELOG.md | `docs/` | создана |
+
+Детали: [docs/CHANGELOG.md](docs/CHANGELOG.md) · [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
 
 ---
 

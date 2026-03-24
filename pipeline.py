@@ -31,6 +31,9 @@ import sys
 import time
 from typing import Dict, List
 
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _PI = math.pi
@@ -85,8 +88,8 @@ def read_avg_lci(log_path: str) -> float:
             return sum(r.get("lci_r_final", 0) for r in log) / len(log)
         elif "avg_lci" in r0:             # multi_salesman / bidir
             return sum(r.get("avg_lci", 0) for r in log) / len(log)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [warn] read_avg_lci({log_path}): {e}")
     return 0.0
 
 
@@ -113,6 +116,11 @@ def run_pipeline(
     run_id   = f"pipeline_{int(time.time())}"
     history  = []          # [{phase, checkpoint, avg_lci}]
 
+    if not os.path.isfile(start_checkpoint):
+        raise FileNotFoundError(
+            f"start_checkpoint не найден: {start_checkpoint!r}\n"
+            "Убедитесь, что файл существует перед запуском пайплайна."
+        )
     current_ckpt = start_checkpoint
     print(f"\n{'═' * 72}")
     print(f"  CURRICULUM PIPELINE")

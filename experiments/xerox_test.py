@@ -33,20 +33,26 @@ XEROX_TESTS = [
      "Стандартная forward-функция PyTorch"),
     ("class Transformer(nn.Module):\n    def __init__(self):", "CODE", 15.0,
      "Определение класса нейросети"),
-    ("import torch\nimport torch.nn as nn", "CODE", 8.0,
+    ("import torch\nimport torch.nn as nn\nimport torch.nn.functional as F", "CODE", 8.0,
      "Импорты PyTorch"),
+    ("loss = F.cross_entropy(logits.view(-1, vocab_size), targets.view(-1))", "CODE", 18.0,
+     "Функция потерь"),
 
     # RECON-тесты: модель должна понимать документацию на русском
     ("Маршрутизация запроса к эксперту через роутер", "RECON", 35.0,
      "Русское описание routing"),
     ("Тернарная квантизация работает через Gumbel-Softmax", "RECON", 40.0,
      "Русское описание архитектуры"),
+    ("Гексаграмма И-Цзин соответствует вершине 6-мерного гиперкуба", "RECON", 60.0,
+     "Основная идея на русском"),
 
     # MATH-тесты: формулы и математика
     ("loss = -sum(p * log(q)) / n", "MATH", 18.0,
      "Кросс-энтропийная функция потерь"),
     ("hamming_distance = sum(a != b for a, b in zip(v1, v2))", "MATH", 15.0,
      "Расстояние Хэмминга в коде"),
+    ("routing_weights = F.softmax(scores / temperature, dim=-1)", "MATH", 22.0,
+     "Температурный softmax"),
 
     # SYSTEM-тесты: конфигурация и инфраструктура
     ("d_model: 128\nn_heads: 4\nn_layers: 4", "SYSTEM", 20.0,
@@ -55,9 +61,9 @@ XEROX_TESTS = [
      "Git-команда"),
 
     # САМО-ОПИСАНИЕ
-    ("YiJing-Transformer использует 64 гексаграммы как архетипы.", "RECON", 50.0,
+    ("YiJing-Transformer использует 64 гексаграммы как архетипы мышления", "RECON", 70.0,
      "Само-описание архитектуры на русском"),
-    ("Q6 = {-1,+1}^6 вершины 6-мерного гиперкуба", "MATH", 30.0,
+    ("Q6 = {-1,+1}^6 вершины 6-мерного гиперкуба, kirchhoff_val стремится к pi", "MATH", 40.0,
      "Математическое само-описание"),
 ]
 
@@ -87,11 +93,18 @@ def compute_ppl_with_model(text: str, model, tokenizer=None) -> float:
     tokens_tensor = torch.tensor(tokens[:512], dtype=torch.long).unsqueeze(0)
 
     with torch.no_grad():
-        logits, loss = model(tokens_tensor[:, :-1], tokens_tensor[:, 1:])
-        if loss is not None:
-            return math.exp(min(loss.item(), 20))
+        try:
+            logits, loss = model(tokens_tensor[:, :-1], tokens_tensor[:, 1:])
+            if loss is not None:
+                return math.exp(min(loss.item(), 20))
+        except Exception:
+            pass
 
         import torch.nn.functional as F
+        try:
+            logits, *_ = model(tokens_tensor[:, :-1])
+        except Exception:
+            return float('inf')
         log_probs = F.log_softmax(logits, dim=-1)
         target = tokens_tensor[:, 1:]
         gathered = log_probs.gather(-1, target.unsqueeze(-1)).squeeze(-1)
@@ -104,9 +117,9 @@ def get_routing_mock(text: str) -> dict:
     text_lower = text.lower()
     scores = {
         'CODE':   sum(1 for w in ['def ', 'class ', 'import', 'return', '(self', ':'] if w in text),
-        'RECON':  sum(1 for w in ['маршрутизация', 'архитектура', 'модель', 'гексаграмм', 'тернарн', 'yijing'] if w in text_lower),
-        'MATH':   sum(1 for w in ['loss', 'hamming', 'sum(', 'log(', 'q6', '{-1'] if w in text_lower),
-        'SYSTEM': sum(1 for w in ['d_model', 'yaml', 'config', 'git', 'n_heads', 'n_layers'] if w in text_lower),
+        'RECON':  sum(1 for w in ['маршрутизация', 'архитектура', 'модель', 'гексаграмм', 'тернарн', 'yijing', 'квантизац'] if w in text_lower),
+        'MATH':   sum(1 for w in ['loss', 'hamming', 'sum(', 'log(', 'q6', '{-1', 'softmax', 'routing_weights'] if w in text_lower),
+        'SYSTEM': sum(1 for w in ['d_model', 'yaml', 'config', 'git', 'n_heads', 'n_layers', 'commit'] if w in text_lower),
         'HUMAN':  1,
         'INFO':   sum(1 for w in ['json', 'yaml', 'config', 'settings'] if w in text_lower),
     }
@@ -185,7 +198,7 @@ def run_xerox_test(
 
         if verbose:
             status = "OK" if test_passed else "FAIL"
-            routing_str = "OK" if routing_ok else f"FAIL(→{actual_domain})"
+            routing_str = "OK" if routing_ok else f"FAIL(got {actual_domain})"
             ppl_str = f"OK({ppl:.1f})" if ppl_ok else f"FAIL({ppl:.1f}>{max_ppl})"
             print(f"[{status}] [{expected_domain}] {description}")
             print(f"    Routing: {routing_str} | PPL: {ppl_str}")
@@ -215,10 +228,13 @@ def run_xerox_test(
                 by_domain[d]['passed'] += 1
 
         print("\nРезультаты по доменам:")
-        for domain, stats in by_domain.items():
+        for domain, stats in sorted(by_domain.items()):
             domain_score = stats['passed'] / stats['total']
             bar = "#" * int(domain_score * 10) + "." * (10 - int(domain_score * 10))
             print(f"  {domain:<8} [{bar}] {stats['passed']}/{stats['total']}")
+
+        print(f"\nЗапускать каждые 500 шагов обучения.")
+        print(f"Цель: score >= 0.8 до начала масштабирования.")
 
     return {
         'step': step,
@@ -233,29 +249,44 @@ def run_xerox_test(
 # ─── Загрузка модели ──────────────────────────────────────────────────────────
 
 def load_model_from_checkpoint(ckpt_path: Path):
-    """Загружает LeanYiJingGPT из checkpoint."""
+    """Загружает модель из checkpoint (пробует несколько архитектур)."""
     import torch
-    from yijing_transformer.models.lean_model import LeanYiJingGPT
 
-    saved = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    saved = torch.load(ckpt_path, map_location='cpu', weights_only=True)
 
-    if 'model_state' in saved:
-        cfg = saved.get('config', {})
-        model = LeanYiJingGPT(
-            vocab_size=cfg.get('vocab_size', 256),
-            d_model=cfg.get('d_model', 128),
-            n_layers=cfg.get('n_layers', 4),
-            n_heads=cfg.get('n_heads', 4),
-            block_size=cfg.get('block_size', 256),
-        )
-        model.load_state_dict(saved['model_state'], strict=False)
+    # Вариант 1: LeanYiJingGPT
+    try:
+        from yijing_transformer.models.lean_model import LeanYiJingGPT
+        if 'model_state' in saved:
+            cfg = saved.get('config', {})
+            model = LeanYiJingGPT(
+                vocab_size=cfg.get('vocab_size', 256),
+                d_model=cfg.get('d_model', 128),
+                n_layers=cfg.get('n_layers', 4),
+                n_heads=cfg.get('n_heads', 4),
+                block_size=cfg.get('block_size', 256),
+            )
+            model.load_state_dict(saved['model_state'], strict=False)
+            model.eval()
+            print(f"Загружена LeanYiJingGPT из {ckpt_path.name} "
+                  f"(step={saved.get('step','?')}, ppl={saved.get('final_ppl','?')})")
+            return model
+    except Exception:
+        pass
+
+    # Вариант 2: HierarchicalMoE state_dict напрямую
+    try:
+        from yijing_transformer.models.hierarchical_moe import HierarchicalMoEConfig, HierarchicalMoEModel
+        cfg = HierarchicalMoEConfig()
+        model = HierarchicalMoEModel(cfg)
+        model.load_state_dict(saved, strict=False)
         model.eval()
-        print(f"Модель загружена из {ckpt_path.name} "
-              f"(step={saved.get('step', '?')}, "
-              f"ppl={saved.get('final_ppl', '?')})")
+        print(f"Загружена HierarchicalMoE из {ckpt_path.name}")
         return model
+    except Exception:
+        pass
 
-    raise ValueError(f"Неизвестный формат checkpoint: {list(saved.keys())}")
+    raise ValueError(f"Не удалось загрузить модель из {ckpt_path}")
 
 
 # ─── Точка входа ──────────────────────────────────────────────────────────────
@@ -285,5 +316,3 @@ if __name__ == '__main__':
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     print(f"\nРезультаты сохранены: {save_path}")
-    print(f"\nСледующий шаг: запускать этот тест каждые 500 шагов обучения.")
-    print(f"Цель: score >= 0.8 до начала масштабирования.")

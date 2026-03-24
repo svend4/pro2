@@ -85,7 +85,7 @@ class ExpertChoiceRouter(nn.Module):
 
         # Каждый эксперт выбирает top-C токенов
         output = torch.zeros_like(x)
-        tokens_processed = torch.zeros(B, T, device=x.device)
+        tokens_processed = torch.zeros(B, T, device=x.device, dtype=x.dtype)
 
         for e in range(self.n_experts):
             # Top-C токены для этого эксперта

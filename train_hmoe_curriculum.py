@@ -59,7 +59,7 @@ torch.manual_seed(42)
 random.seed(42)
 
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Модель (малый размер для демонстрации)
 MODEL_CFG = dict(
@@ -508,7 +508,7 @@ def main():
 
     start_phase = 1
     if args.resume and os.path.exists(args.resume):
-        ckpt = torch.load(args.resume, map_location="cpu")
+        ckpt = torch.load(args.resume, map_location="cpu", weights_only=True)
         model.load_state_dict(ckpt["model_state"], strict=False)
         start_phase = ckpt.get("next_phase", 1)
         print(f"  Чекпоинт загружен: {args.resume}  (продолжаем с фазы {start_phase})")

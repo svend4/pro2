@@ -245,7 +245,7 @@ def plot_model_analysis(checkpoint_path, save_dir='.'):
         print("matplotlib not available")
         return
 
-    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
     state = ckpt['model_state_dict']
 
     # Собираем hex_scale, head_scales, temp, bian_gua по слоям

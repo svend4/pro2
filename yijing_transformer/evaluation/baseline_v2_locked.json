@@ -1,0 +1,32 @@
+{
+  "ppl_comfort": 23.536565526746745,
+  "ppl_discomfort": 302.5671291281631,
+  "ppl_gap": 12.855194560324806,
+  "ppl_by_domain": {
+    "Python pytest": 14.738797927125884,
+    "Python class": 10.352714979632816,
+    "React component": 11.739685498735227,
+    "Import statements": 8.01890892343502,
+    "Russian docs": 64.17097455239801,
+    "Markdown structure": 36.63325520295909,
+    "Docker/config": 29.164187293088336,
+    "Math formula": 13.473999836599575,
+    "Medical": 217.38873671506622,
+    "Legal": 265.77857467044345,
+    "Poetry": 548.2804981917714,
+    "Chemistry": 231.0888871116549,
+    "Philosophy": 110.52910428185474,
+    "News": 150.0048761003125,
+    "Casual": 248.6389144838151,
+    "Nonsense": 648.8274414703867
+  },
+  "routing_accuracy": 0.75,
+  "routing_confidence": 0.02675702102048111,
+  "code_completion_top1": 0.5,
+  "code_completion_top5": 0.8333333333333334,
+  "domain_mixing_rate": 0.6875,
+  "gen_ppl_standard": 11.234778753095675,
+  "gen_ppl_locked": 9.880236514501302,
+  "speed_standard": 118.87252172015401,
+  "speed_locked": 115.89436527289432
+}

@@ -44,7 +44,10 @@ import os
 import random
 import sys
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
+
+# Prevent thread contention between numpy/BLAS and PyTorch (fixes ~87-min hang).
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import torch
 
@@ -52,7 +55,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
 from yijing_transformer.models.hierarchical_moe import (
-    DOMAIN_GROUPS, set_moe_stage,
+    set_moe_stage,
 )
 from self_train_hmoe import (
     lci_from_routing, lci_from_embeddings, micro_train, quality_filter,
@@ -63,12 +66,12 @@ from nautilus_clover import _lci_loss_step
 
 # meta_q6: интеграция с svend4/meta (bent seeds, temperature annealing)
 try:
-    from meta_q6 import bent_seed_texts, metropolis_temperature, cosine_temperature
+    from meta_q6 import bent_seed_texts, metropolis_temperature
     _META_Q6_AVAILABLE = True
 except ImportError:
     _META_Q6_AVAILABLE = False
 
-DEVICE = "cpu"
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _ROOT  = os.path.dirname(os.path.abspath(__file__))
 
 # ── Aut(Q6) орбиты по весу Хэмминга (hexsym) ─────────────────────────────────
@@ -458,7 +461,7 @@ def _load_model(path: str) -> Variant3GPT:
     cfg = Variant3Config(**MODEL_CFG)
     m   = Variant3GPT(cfg)
     if os.path.exists(path):
-        ck = torch.load(path, map_location=DEVICE, weights_only=False)
+        ck = torch.load(path, map_location=DEVICE, weights_only=True)
         m.load_state_dict(ck.get("model_state", ck), strict=False)
         print(f"  Загружен: {path}")
     else:
