@@ -1,4 +1,8 @@
 """
+Готов к использованию: DistillationTrainer(teacher, student, optimizer, cfg).
+Вызов: trainer.step(x, y) → {total_loss, hard_loss}.
+Также: distillation_loss() и feature_distillation_loss() как standalone функции.
+
 Knowledge Distillation для YiJing-Transformer.
 
 Обучает student модель на soft targets от teacher модели.

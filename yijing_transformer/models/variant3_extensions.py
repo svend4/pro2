@@ -1017,6 +1017,7 @@ class TextQualityFilter(nn.Module):
         self.pool = nn.Linear(d_model, d_model, bias=False)
         self.quality_heads = nn.Linear(d_model, 6, bias=True)
         self.register_buffer("hexagrams", get_hexagrams())
+        self.register_buffer("_q6_powers", torch.tensor([32, 16, 8, 4, 2, 1], dtype=torch.long))
 
     def forward(self, x: Tensor) -> Tuple[Tensor, Tensor, int]:
         """
@@ -1041,8 +1042,7 @@ class TextQualityFilter(nn.Module):
     def quality_bits(self, quality_scores: Tensor) -> Tensor:
         """Convert quality scores to binary hexagram index (0–63)."""
         bits = (quality_scores > 0.0).long()  # (B, 6)
-        powers = torch.tensor([32, 16, 8, 4, 2, 1], device=bits.device)
-        return (bits * powers).sum(dim=-1)  # (B,) in [0, 63]
+        return (bits * self._q6_powers).sum(dim=-1)  # (B,) in [0, 63]
 
 
 # ---------------------------------------------------------------------------

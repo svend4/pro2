@@ -281,6 +281,22 @@ def train(args):
 
     print(f"Bridge components: {bridge.summary()}")
 
+    # EMA (Exponential Moving Average) — сглаженные веса для инференса
+    ema = None
+    if getattr(cfg, 'use_ema', False):
+        from training.ema import EMA
+        ema = EMA(model, decay=getattr(cfg, 'ema_decay', 0.999))
+        print(f"EMA enabled: decay={ema.decay}")
+
+    # Early Stopping — прекращение обучения при отсутствии улучшений
+    early_stopper = None
+    if getattr(cfg, 'early_stop_patience', 0) > 0:
+        from training.ema import EarlyStopping
+        early_stopper = EarlyStopping(
+            patience=cfg.early_stop_patience, min_delta=0.001
+        )
+        print(f"Early stopping: patience={cfg.early_stop_patience}")
+
     start_step = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=True)
@@ -360,7 +376,7 @@ def train(args):
 
     # Mixed precision
     use_amp = cfg.use_amp and device.type == 'cuda'
-    scaler = GradScaler('cuda', enabled=use_amp)
+    scaler = GradScaler(device.type, enabled=use_amp)
     amp_dtype = torch.float16 if use_amp else torch.float32
     if use_amp:
         print("Using mixed precision (AMP) training")
@@ -418,6 +434,10 @@ def train(args):
             scaler.update()
             optimizer.zero_grad()
 
+            # EMA: обновляем скользящее среднее весов
+            if ema is not None:
+                ema.update()
+
             # Bridge: мониторинг после шага (Loss Spike, Grokking, etc.)
             alerts = bridge.after_step(
                 step, loss.item() * cfg.grad_accum_steps,
@@ -438,45 +458,59 @@ def train(args):
         if step % cfg.val_every == 0:
             val_loss = estimate_val_loss(model, cfg, device, data_fn=data_fn)
             metrics = {'val_loss': val_loss}
-            # Периодический анализ квантизации
-            if args.model == 'yijing' and hasattr(model, 'quantization_analytics'):
-                qa = model.quantization_analytics()
-                for layer_name, info in qa.items():
-                    for k, v in info.items():
-                        if isinstance(v, (int, float)):
-                            metrics[f'{layer_name}/{k}'] = v
-            # v62: Convergence Bridge diagnostics (GlyphTokenizer)
-            if args.model == 'yijing' and hasattr(model, 'convergence_bridge'):
-                cb = model.convergence_bridge
-                corr = cb.token_abstractor.cluster_hexagram_correlation().item()
-                metrics['convergence/hex_correlation'] = round(corr, 4)
-                metrics['convergence/bridge_scale'] = round(cb.bridge_scale.item(), 4)
-                metrics['convergence/abstractor_temp'] = round(
-                    cb.token_abstractor.temperature.item(), 4)
-                metrics['convergence/composer_scale'] = round(
-                    cb.glyph_composer.scale.item(), 4)
+            # Периодический анализ квантизации (no_grad: метрики не должны
+            # накапливать граф вычислений и утекать GPU-память)
+            with torch.no_grad():
+                if args.model == 'yijing' and hasattr(model, 'quantization_analytics'):
+                    qa = model.quantization_analytics()
+                    for layer_name, info in qa.items():
+                        for k, v in info.items():
+                            if isinstance(v, (int, float)):
+                                metrics[f'{layer_name}/{k}'] = v
+                # v62: Convergence Bridge diagnostics (GlyphTokenizer)
+                if args.model == 'yijing' and hasattr(model, 'convergence_bridge'):
+                    cb = model.convergence_bridge
+                    corr = cb.token_abstractor.cluster_hexagram_correlation().item()
+                    metrics['convergence/hex_correlation'] = round(corr, 4)
+                    metrics['convergence/bridge_scale'] = round(cb.bridge_scale.item(), 4)
+                    metrics['convergence/abstractor_temp'] = round(
+                        cb.token_abstractor.temperature.item(), 4)
+                    metrics['convergence/composer_scale'] = round(
+                        cb.glyph_composer.scale.item(), 4)
 
-            # v63: Nautilus hierarchy diagnostics
-            if args.model == 'yijing' and hasattr(model, 'nautilus'):
-                nautilus_stats = model.nautilus.get_nautilus_stats()
-                metrics.update(nautilus_stats)
+                # v63: Nautilus hierarchy diagnostics
+                if args.model == 'yijing' and hasattr(model, 'nautilus'):
+                    nautilus_stats = model.nautilus.get_nautilus_stats()
+                    metrics.update(nautilus_stats)
 
-            # Interlingua stats (temperature annealing, archetypes)
-            if args.model == 'yijing' and hasattr(model, 'archetypal_interlingua'):
-                il = model.archetypal_interlingua
-                il_stats = il.get_interlingua_stats()
-                metrics['interlingua/global_gate'] = il_stats['global_gate']
-                metrics['interlingua/scale'] = il_stats['scale']
-                trit = il_stats.get('trit_distribution', {})
-                metrics['interlingua/trit_pos'] = trit.get('pos', 0)
-                metrics['interlingua/trit_zero'] = trit.get('zero', 0)
-                metrics['interlingua/trit_neg'] = trit.get('neg', 0)
-                if 'ternary_temperature' in il_stats:
-                    metrics['interlingua/ternary_temperature'] = il_stats['ternary_temperature']
-                if 'active_archetypes' in il_stats:
-                    metrics['interlingua/active_archetypes'] = il_stats['active_archetypes']
-                    metrics['interlingua/usage_mean'] = il_stats['archetype_usage_mean']
+                # Interlingua stats (temperature annealing, archetypes)
+                if args.model == 'yijing' and hasattr(model, 'archetypal_interlingua'):
+                    il = model.archetypal_interlingua
+                    il_stats = il.get_interlingua_stats()
+                    metrics['interlingua/global_gate'] = il_stats['global_gate']
+                    metrics['interlingua/scale'] = il_stats['scale']
+                    trit = il_stats.get('trit_distribution', {})
+                    metrics['interlingua/trit_pos'] = trit.get('pos', 0)
+                    metrics['interlingua/trit_zero'] = trit.get('zero', 0)
+                    metrics['interlingua/trit_neg'] = trit.get('neg', 0)
+                    if 'ternary_temperature' in il_stats:
+                        metrics['interlingua/ternary_temperature'] = il_stats['ternary_temperature']
+                    if 'active_archetypes' in il_stats:
+                        metrics['interlingua/active_archetypes'] = il_stats['active_archetypes']
+                        metrics['interlingua/usage_mean'] = il_stats['archetype_usage_mean']
+            # EMA: оценка с усреднёнными весами
+            if ema is not None:
+                with ema.average_parameters():
+                    ema_val = estimate_val_loss(model, cfg, device, data_fn=data_fn)
+                    metrics['val_loss_ema'] = ema_val
+
             logger.log(metrics, step)
+
+            # Early Stopping: проверяем val_loss
+            if early_stopper is not None:
+                if early_stopper(val_loss):
+                    print(f"Early stopping at step {step}: val_loss={val_loss:.4f}")
+                    break
 
         if step % cfg.save_every == 0:
             os.makedirs(args.checkpoint_dir, exist_ok=True)

@@ -185,9 +185,9 @@ class BianGuaAttention(nn.Module):
 
         scores = scores + ham_bias
 
-        # Causal mask
-        causal = torch.tril(torch.ones(T, T, device=x.device))
-        scores = scores.masked_fill(causal.unsqueeze(0).unsqueeze(0) == 0,
+        # Causal mask (bool dtype — меньше памяти, multi-GPU safe)
+        causal = torch.ones(T, T, device=x.device, dtype=torch.bool).tril()
+        scores = scores.masked_fill(~causal.unsqueeze(0).unsqueeze(0),
                                     float('-inf'))
 
         attn = F.softmax(scores, dim=-1)
@@ -238,9 +238,11 @@ class TernaryGate(nn.Module):
         # x: (B, T, d)
         scores = torch.tanh(self.gate_proj(x) / self.temperature)  # (B, T, d)
 
-        # Dynamic threshold from uncertainty budget (detached for STE stability)
+        # Dynamic threshold from uncertainty budget
         # budget=0.3 → ~30% of values are zero → threshold ≈ 0.35
-        threshold = ((1.0 - self.uncertainty_budget) * 0.5 + 0.1).detach()
+        # НЕ detach — позволяет uncertainty_budget обучаться через threshold.
+        # STE (line 250) уже обрабатывает gradient для hard gate.
+        threshold = (1.0 - self.uncertainty_budget) * 0.5 + 0.1
 
         gate_hard = torch.zeros_like(scores)
         gate_hard[scores >  threshold] =  1.0
@@ -685,7 +687,6 @@ def biangua_path(start_hex: int, end_hex: int) -> Optional[List[int]]:
     """
     hexagrams = _make_hexagrams()
     biangua   = _make_biangua_matrix(hexagrams)
-    adj       = biangua.nonzero(as_tuple=False)  # (6*64, 2)
 
     # BFS
     from collections import deque
@@ -696,7 +697,7 @@ def biangua_path(start_hex: int, end_hex: int) -> Optional[List[int]]:
         current, path = queue.popleft()
         if current == end_hex:
             return path
-        neighbors = biangua[current].nonzero(as_tuple=False).squeeze(-1).tolist()
+        neighbors = biangua[current].nonzero(as_tuple=False).view(-1).tolist()
         for nb in neighbors:
             if nb not in visited:
                 visited.add(nb)

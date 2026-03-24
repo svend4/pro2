@@ -1,4 +1,7 @@
 """
+Интегрирован в YiJingGPT через use_diff_attn=True в YiJingConfig.
+Заменяет стандартный attention на differential (softmax1 - λ·softmax2).
+
 Differential Attention и KV-cache quantization.
 
 Differential Attention вычисляет attention как разность двух softmax карт,

@@ -330,7 +330,7 @@ class GumbelQuantizer(nn.Module):
                 + self.commitment_weight * (x - quantized.detach()).pow(2).mean()
             )
         else:
-            self._commitment_loss = torch.tensor(0.0, device=x.device)
+            self._commitment_loss = x.new_tensor(0.0)
         return quantized
 
     def get_commitment_loss(self):
@@ -848,6 +848,8 @@ class MatryoshkaQuantizer(nn.Module):
         hex_cb = generate_hypercube(4)  # (16, 4)
         self.register_buffer('hex_codebook', hex_cb)
         self.register_buffer('hex_cb_norm_sq', (hex_cb ** 2).sum(dim=1))
+        # Hex digit → index conversion weights (multi-GPU safe: buffer, not forward-time tensor)
+        self.register_buffer('_hex_digit_weights', torch.tensor([8, 4, 2, 1], dtype=torch.long))
 
         # === Projections to d_model (for enriched output) ===
         # Level 0: Q_n quantized coordinates → d_model
@@ -1004,8 +1006,7 @@ class MatryoshkaQuantizer(nn.Module):
                 hex_vectors.append(bits_4)
                 # Convert {-1,+1}⁴ → index [0-15]
                 bits_01 = ((bits_4 + 1) / 2).long()
-                weights = torch.tensor([8, 4, 2, 1], device=bits_01.device)
-                idx = (bits_01 * weights).sum(dim=-1)
+                idx = (bits_01 * self._hex_digit_weights).sum(dim=-1)
                 hex_indices.append(idx)
             result['hex_digits'] = torch.stack(hex_indices, dim=-1)
             result['hex_vectors'] = torch.cat(hex_vectors, dim=-1)

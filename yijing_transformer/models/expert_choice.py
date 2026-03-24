@@ -1,4 +1,7 @@
 """
+Интегрирован в YiJingGPT через use_expert_choice=True в YiJingConfig.
+Также используется в knowledge_system.py.
+
 Expert Choice MoE routing и Cross-Layer Parameter Sharing.
 
 Expert Choice: вместо token→expert routing (top-k),
@@ -85,7 +88,7 @@ class ExpertChoiceRouter(nn.Module):
 
         # Каждый эксперт выбирает top-C токенов
         output = torch.zeros_like(x)
-        tokens_processed = torch.zeros(B, T, device=x.device)
+        tokens_processed = torch.zeros(B, T, device=x.device, dtype=x.dtype)
 
         for e in range(self.n_experts):
             # Top-C токены для этого эксперта

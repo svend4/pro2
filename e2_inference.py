@@ -40,6 +40,8 @@ from collections import defaultdict
 _ROOT = Path(__file__).parent
 sys.path.insert(0, str(_ROOT))
 
+from yijing_transformer.constants import HEX_NAMES
+_HEX_NAMES = HEX_NAMES
 
 # ── Имена гексаграмм и доменов ────────────────────────────────────────────────
 from yijing_transformer.constants import HEX_NAMES as _HEX_NAMES, DOMAINS as _DOMAINS

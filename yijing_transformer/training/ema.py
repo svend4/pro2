@@ -1,4 +1,8 @@
 """
+Готов к использованию в training pipeline.
+EMA: use_ema=True в YiJingConfig, вызывать ema.update() после каждого шага.
+EarlyStopping: early_stop_patience > 0 в YiJingConfig.
+
 EMA (Exponential Moving Average) и Early Stopping для YiJing-Transformer.
 
 EMA поддерживает скользящее среднее весов модели для более стабильного инференса.

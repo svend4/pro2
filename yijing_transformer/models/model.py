@@ -56,6 +56,7 @@ from .geometry import (
     MobiusAttentionPattern,
     PrivilegedAxisAttention,
     HeisenbergAttention,
+    SOLANAttention,
     FlowerOfLifeGAT,
     StructuralDefectLayer,
     HexagramAttentionPattern,
@@ -72,6 +73,8 @@ from .geometry import (
     ArchetypalInterlingua,
     # v61: BridgedInterlingua (двойная прослойка)
     BridgedInterlingua,
+    # v51-unified: Six Sources integration
+    SixSourceLayer,
     # v54: Kasatkin 3D embedding
     CubicAttentionBias,
     CubicPositionalEncoding,
@@ -83,6 +86,16 @@ from .geometry import (
 )
 # v60-fixed: ArchetypalInterlinguaFixed — per-source trit_proj, diversity loss, cosine annealing
 from yijing_transformer.models.geometry.interlingua_fixed import ArchetypalInterlinguaFixed
+# Expert Choice MoE routing (Zhou et al., 2022)
+from yijing_transformer.models.expert_choice import ExpertChoiceRouter
+# PseudoRAG: Q4 (16 архетипов) → Q6 (64 гексаграмм) bridge
+from yijing_transformer.models.pseudo_rag import PseudoRAGProjection, PseudoRAGDistillationLoss
+# Единый модуль 6 источников (Склярова+Фомюк+Андреев+Касаткин+Герман+Беляев)
+from yijing_transformer.models.geometry.six_sources import SixSourceLayer
+# v14: Differential Attention (Ye et al., 2024)
+from yijing_transformer.models.diff_attn import DifferentialAttention
+# v17: Prefix Tuning + Multi-Token Prediction
+from yijing_transformer.models.prefix_tuning import PrefixTuning, MultiTokenPredictionHead
 # v57: Abriale — событийно-управляемые изотропные N-местные связи (Пацкин)
 from yijing_transformer.models.geometry.abriale import AbrialeLayer
 from yijing_transformer.tokenizer.glyph_tokenizer import _SOLAN_MAP, _bits_to_vertex
@@ -358,7 +371,13 @@ class YiJingTransformerLayer(nn.Module):
         self.use_recursive_cube = getattr(cfg, 'use_recursive_cube', False)
         self.use_weaving_loom = getattr(cfg, 'use_weaving_loom', False)
 
-        if self.use_quadrant_attention:
+        # v14: Differential Attention (two-softmax difference)
+        self.use_diff_attn = getattr(cfg, 'use_diff_attn', False)
+
+        if self.use_diff_attn:
+            self.attn = DifferentialAttention(cfg.d_model, cfg.n_heads, dropout=cfg.dropout)
+            self._attn_returns_cache = False
+        elif self.use_quadrant_attention:
             self.attn = QuadrantAttention(cfg.d_model, cfg.n_heads)
             self._attn_returns_cache = False
         elif self.use_recursive_cube:
@@ -409,6 +428,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_heisenberg and not (self.use_quadrant_attention or self.use_recursive_cube or self.use_weaving_loom):
             self.heisenberg_attn = HeisenbergAttention(cfg.d_model)
 
+        # v71: SOLAN-76 Q6 attention — additive enrichment
+        self.use_solan_attn = getattr(cfg, 'use_solan_attention', False)
+        if self.use_solan_attn:
+            self.solan_attn = SOLANAttention(cfg.d_model, n_heads=cfg.n_heads, block_size=cfg.block_size)
+
         # v53: Hexagram attention pattern (64 fixed patterns)
         self.use_hex_attn_pattern = getattr(cfg, 'use_hex_attn_pattern', False)
         if self.use_hex_attn_pattern:
@@ -447,6 +471,8 @@ class YiJingTransformerLayer(nn.Module):
             self._enrichment_sources = []
             if self.use_heisenberg:
                 self._enrichment_sources.append('heisenberg')
+            if self.use_solan_attn:
+                self._enrichment_sources.append('solan')
             if self.use_palace_attention:
                 self._enrichment_sources.append('palace')
             if self.use_privileged_axis:
@@ -588,6 +614,11 @@ class YiJingTransformerLayer(nn.Module):
         if self.use_d4_equivariant:
             self.d4_layer = D4EquivariantLayer(cfg.d_model)
 
+        # v51-unified: Six Sources integration (после квантизатора)
+        self.use_six_sources = getattr(cfg, 'use_six_sources', False)
+        if self.use_six_sources:
+            self.six_sources = SixSourceLayer(cfg.d_model)
+
         # v51: Dual Embedding (Касаткин 4.4)
         self.use_dual_embedding = getattr(cfg, 'use_dual_embedding', False)
         if self.use_dual_embedding:
@@ -596,9 +627,18 @@ class YiJingTransformerLayer(nn.Module):
         # FFN или MoE
         self.use_moe = cfg.use_hex_moe
         self.use_domain_moe = getattr(cfg, 'use_domain_moe', False)
+        self.use_expert_choice = getattr(cfg, 'use_expert_choice', False)
         self.ln_ffn = nn.LayerNorm(cfg.d_model)
 
-        if self.use_domain_moe:
+        if self.use_expert_choice:
+            self.ffn = ExpertChoiceRouter(
+                d_model=cfg.d_model,
+                n_experts=cfg.n_experts,
+                capacity_factor=getattr(cfg, 'expert_choice_capacity', 1.0),
+                ffn_hidden=cfg.ffn_hidden,
+                dropout=cfg.dropout,
+            )
+        elif self.use_domain_moe:
             self.ffn = DomainMoE(
                 d_model=cfg.d_model,
                 n_experts=getattr(cfg, 'domain_moe_n_experts', 6),
@@ -656,7 +696,8 @@ class YiJingTransformerLayer(nn.Module):
             attn_out = self.attn(h)
             # For alternative attentions: compose bias post-hoc
             if extra_bias is not None:
-                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (B,T,T)
+                bias_w = F.softmax(extra_bias.squeeze(1), dim=-1)  # (?,T,T)
+                bias_w = bias_w.expand(B, -1, -1)  # (B,T,T)
                 attn_out = attn_out + 0.05 * torch.bmm(bias_w, h)
 
         # v54/v58/v59: Geometric source mixing (replaces fixed coefficients)
@@ -667,6 +708,8 @@ class YiJingTransformerLayer(nn.Module):
             enrichments = []
             if self.use_heisenberg:
                 enrichments.append(self.heisenberg_attn(h))
+            if self.use_solan_attn:
+                enrichments.append(self.solan_attn(h))
             if self.use_palace_attention:
                 enrichments.append(self.palace_attn(h))
             if self.use_privileged_axis:
@@ -717,6 +760,10 @@ class YiJingTransformerLayer(nn.Module):
             if self.use_heisenberg:
                 attn_out = attn_out + 0.1 * self.heisenberg_attn(h)
 
+            # v71: SOLAN-76 Q6 attention enrichment (additive)
+            if self.use_solan_attn:
+                attn_out = attn_out + 0.1 * self.solan_attn(h)
+
             # v51: compose additional attention biases (additive post-processing)
             if self.use_palace_attention:
                 palace_out = self.palace_attn(h)
@@ -751,6 +798,10 @@ class YiJingTransformerLayer(nn.Module):
         else:
             self._antipodal_loss = 0.0
 
+        # v51-unified: Six Sources integration
+        if self.use_six_sources:
+            x, _six_aux = self.six_sources(x)
+
         # 3. 变卦 трансформация
         if self.bian_gua is not None:
             x = self.bian_gua(x)
@@ -771,7 +822,11 @@ class YiJingTransformerLayer(nn.Module):
 
         # 5. FFN или MoE
         h_ffn = self.ln_ffn(x)
-        if self.use_domain_moe:
+        if self.use_expert_choice:
+            ffn_out, aux_info = self.ffn(h_ffn)
+            x = x + ffn_out
+            self._aux_loss = 0.0  # Expert Choice has perfect load balance, no aux loss
+        elif self.use_domain_moe:
             ffn_out, aux_loss = self.ffn(h_ffn, domain_ids=domain_ids)
             x = x + ffn_out
             self._aux_loss = aux_loss
@@ -1001,6 +1056,31 @@ class YiJingGPT(nn.Module):
                 enabled_chambers=enabled,
             )
 
+        # PseudoRAG: Q4→Q6 bridge (формальное вложение 16 архетипов → 64 гексаграммы)
+        self.use_pseudo_rag = getattr(cfg, 'use_pseudo_rag', False)
+        if self.use_pseudo_rag:
+            self.pseudo_rag = PseudoRAGProjection(d_model=cfg.d_model)
+            self.pseudo_rag_distill = PseudoRAGDistillationLoss(
+                temperature=getattr(cfg, 'distill_temp', 2.0),
+            )
+            self._pseudo_rag_distill_weight = getattr(cfg, 'pseudo_rag_distill_weight', 0.1)
+
+        # v17: Prefix Tuning — обучаемые prefix-токены
+        self.prefix_len = getattr(cfg, 'prefix_len', 0)
+        if self.prefix_len > 0:
+            self.prefix_tuning = PrefixTuning(cfg, prefix_len=self.prefix_len)
+        else:
+            self.prefix_tuning = None
+
+        # v17: Multi-Token Prediction — предсказание N следующих токенов
+        self.mtp_n_future = getattr(cfg, 'mtp_n_future', 0)
+        if self.mtp_n_future > 0:
+            self.mtp_head = MultiTokenPredictionHead(
+                cfg.d_model, cfg.vocab_size, n_future=self.mtp_n_future,
+            )
+        else:
+            self.mtp_head = None
+
         self.core = YiJingTransformer(cfg)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
         self.apply(self._init_weights)
@@ -1106,6 +1186,26 @@ class YiJingGPT(nn.Module):
             x, nautilus_info = self.nautilus(x)
 
         hidden, new_kv_cache = self.core(x, kv_cache=kv_cache, domain_ids=domain_ids)
+
+        # PseudoRAG: blend Q4→Q6 projection with quantizer-enriched hidden states
+        pseudo_rag_info = None
+        if self.use_pseudo_rag:
+            # Q6 weights from PseudoRAG bridge: (B, T, 64)
+            q6_weights = self.pseudo_rag(hidden)
+            # Full Q6 embedding: (64, 6) → project back to d_model via from_qd of first layer
+            q6_embed = self.pseudo_rag.get_full_q6_embedding()  # (64, 6)
+            # Мягкая реконструкция: weighted sum of Q6 vertices → (B, T, 6)
+            q6_soft = torch.matmul(q6_weights, q6_embed)  # (B, T, 6)
+            # Проецируем 6D → d_model через первый слой from_qd (shared geom)
+            first_layer = self.core.layers[0]
+            q6_contribution = first_layer.from_qd(q6_soft)  # (B, T, D)
+            # Blend: масштабируем как hex_scale первого слоя
+            hidden = hidden + first_layer.hex_scale * 0.5 * q6_contribution
+            pseudo_rag_info = {
+                'q6_weights': q6_weights,
+                'q4_logits': self.pseudo_rag.get_q4_logits(hidden),
+            }
+
         logits = self.head(hidden)
 
         loss = None
@@ -1133,6 +1233,28 @@ class YiJingGPT(nn.Module):
                     abriale_info['hit_weights']
                 )
                 loss = loss + self._abriale_balance_weight * abriale_loss
+
+            # PseudoRAG distillation loss: Q4 teacher → Q6 student
+            if pseudo_rag_info is not None:
+                # Self-distillation: Q4 logits serve as teacher targets
+                q4_targets = pseudo_rag_info['q4_logits'].detach()
+                # Q6 logits from raw projection (before softmax)
+                q6_logits = self.pseudo_rag.proj_q4(hidden)  # reuse for Q4 part
+                # Full Q6 logits = coarse + fine
+                q6_logits_full = self.pseudo_rag.refine_proj(hidden)
+                q4_coarse = self.pseudo_rag.proj_q4(hidden)
+                q6_expanded = torch.matmul(
+                    F.softmax(q4_coarse, dim=-1),
+                    self.pseudo_rag.cluster_expand,
+                )
+                q6_logits_for_distill = q6_expanded + self.pseudo_rag.blend_scale * q6_logits_full
+                distill_loss = self.pseudo_rag_distill(q6_logits_for_distill, q4_targets)
+                loss = loss + self._pseudo_rag_distill_weight * distill_loss
+
+            # v17: Multi-Token Prediction auxiliary loss
+            if self.mtp_head is not None:
+                mtp_loss, _ = self.mtp_head.compute_loss(hidden, targets)
+                loss = loss + 0.1 * mtp_loss
 
         return logits, loss, new_kv_cache
 

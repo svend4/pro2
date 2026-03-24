@@ -108,7 +108,8 @@ class Sophia(torch.optim.Optimizer):
                     state['hessian'] = torch.ones_like(p)
 
                 # Hutchinson estimator: E[z * (Hz)] ≈ diag(H)
-                z = torch.randint_like(p, 0, 2) * 2.0 - 1.0  # Rademacher
+                # Mixed-precision safe: z должен совпадать по dtype с p.grad
+                z = torch.randint(0, 2, p.shape, device=p.device, dtype=p.dtype) * 2.0 - 1.0
                 hz = torch.autograd.grad(
                     p.grad, p, grad_outputs=z, retain_graph=True
                 )[0]
