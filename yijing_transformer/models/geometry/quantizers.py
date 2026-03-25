@@ -295,13 +295,16 @@ class GumbelQuantizer(nn.Module):
         self.n_groups = total_dim // group_dim
         self.n_codewords = 2 ** group_dim
         self.hard = hard
-        self.commitment_weight = commitment_weight
+        # Learnable commitment weight (replaces hard 0.25 constant)
+        self._commitment_logit = nn.Parameter(
+            torch.tensor(commitment_weight).clamp(0.01, 0.99).logit()
+        )
         self.log_temp = nn.Parameter(torch.tensor(max(temp, 1e-4)).log())
 
         codebook = generate_hypercube(group_dim)
         self.register_buffer('codebook', codebook)
         self.register_buffer('codebook_norm_sq', (codebook ** 2).sum(dim=1))
-        self.register_buffer('_commitment_loss', torch.tensor(0.0), persistent=False)
+        self._commitment_loss = torch.tensor(0.0)
 
     @property
     def current_temp(self):
@@ -318,16 +321,19 @@ class GumbelQuantizer(nn.Module):
         if self.training:
             weights = F.gumbel_softmax(logits, tau=self.current_temp, hard=self.hard)
         else:
-            idx = logits.argmax(dim=-1)
-            weights = F.one_hot(idx, self.n_codewords).float()
+            # Soft inference: use low-temperature softmax instead of hard argmax
+            # This preserves the soft routing philosophy at inference time
+            inference_temp = self.current_temp * 0.1 + 1e-6  # sharper but still soft
+            weights = F.softmax(logits / inference_temp, dim=-1)
 
         quantized_groups = weights @ self.codebook
         quantized = quantized_groups.reshape(*shape, self.total_dim)
 
-        if self.training and self.commitment_weight > 0:
+        if self.training:
+            commitment_weight = torch.sigmoid(self._commitment_logit)
             self._commitment_loss = (
                 (x.detach() - quantized).pow(2).mean()
-                + self.commitment_weight * (x - quantized.detach()).pow(2).mean()
+                + commitment_weight * (x - quantized.detach()).pow(2).mean()
             )
         else:
             self._commitment_loss = x.new_tensor(0.0)
@@ -462,6 +468,12 @@ class TernaryQuantizer(nn.Module):
             torch.tensor(uncertainty_budget).clamp(0.01, 0.99).logit()
         )
 
+        # Learnable blend strength (replaces hard 1/(1+temp) formula)
+        self.blend_logit = nn.Parameter(torch.tensor(0.5))  # init ~0.62 blend
+
+        # Learnable steepness for hard_quantize (replaces hard 5.0/(budget+0.1))
+        self.log_steepness = nn.Parameter(torch.tensor(3.0).log())  # ~3.0 init
+
         # All modes are initialized — the model can blend between them
         # via soft gating, instead of hard enum dispatch.
         # Factored mode (always available for factored quantization)
@@ -484,7 +496,7 @@ class TernaryQuantizer(nn.Module):
         # Soft mode gate: learns to blend factored vs full when both available
         if self._has_factored:
             self.mode_gate_logit = nn.Parameter(torch.tensor(
-                1.5 if mode == 'factored' else -1.5  # initialize toward preferred mode
+                0.0  # neutral init — let the model learn its preferred blend
             ))
         else:
             self.mode_gate_logit = None
@@ -565,13 +577,13 @@ class TernaryQuantizer(nn.Module):
         # Organic mode blending: when both factored and full are available,
         # the model softly blends between them via a learned gate.
         if self._has_factored and self.mode_gate_logit is not None:
+            # Soft blend between factored and full quantization
             gate = torch.sigmoid(self.mode_gate_logit)  # scalar in [0, 1]
             q_factored = self._soft_quantize_factored(x)
             q_full = self._soft_quantize_full(x)
             quantized = gate * q_factored + (1 - gate) * q_full
-        elif self._has_factored and self.mode == 'factored':
-            quantized = self._soft_quantize_factored(x)
         else:
+            # Fallback: only full codebook available (dim not divisible by 3)
             quantized = self._soft_quantize_full(x)
 
         # Uncertainty penalty
@@ -582,9 +594,8 @@ class TernaryQuantizer(nn.Module):
         # Smooth STE: temperature-controlled instead of hard .detach()
         if self.adaptive_temp:
             return quantized
-        # Soft residual: blend toward quantized proportional to temperature
-        temp = self.current_temp
-        blend = 1.0 / (1.0 + temp)  # low temp → blend≈1 (more quantized)
+        # Learnable blend: soft gate controls how much quantization is applied
+        blend = torch.sigmoid(self.blend_logit)  # learned blend in [0, 1]
         return x + blend * (quantized - x)
 
     def hard_quantize(self, x: torch.Tensor) -> torch.Tensor:
@@ -594,8 +605,8 @@ class TernaryQuantizer(nn.Module):
         gradient flow. The uncertainty_budget controls the width of
         the zero-zone through the steepness parameter.
         """
-        # Steepness from uncertainty budget: more budget → wider zero zone → lower steepness
-        steepness = 5.0 / (self.uncertainty_budget + 0.1)
+        # Learnable steepness: the model discovers its own sharpness
+        steepness = self.log_steepness.exp()
         result = torch.tanh(x * steepness)
         return result
 

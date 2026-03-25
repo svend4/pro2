@@ -259,8 +259,9 @@ class HeisenbergAttention(nn.Module):
     def __init__(self, d_model: int, min_temp: float = 0.1, max_temp: float = 5.0):
         super().__init__()
         self.d_model = d_model
-        self.min_temp = min_temp
-        self.max_temp = max_temp
+        # Learnable temp bounds via softplus (replaces hard clamp)
+        self._log_min_temp = nn.Parameter(torch.tensor(min_temp).log())
+        self._log_max_temp = nn.Parameter(torch.tensor(max_temp).log())
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)
@@ -272,7 +273,10 @@ class HeisenbergAttention(nn.Module):
         v = self.v_proj(x)
         q_uncertainty = q.norm(dim=-1, keepdim=True)
         temperature = self.hbar_half / (q_uncertainty + 1e-8)
-        temperature = temperature.clamp(self.min_temp, self.max_temp)
+        # Soft bounds via learnable min/max
+        min_t = self._log_min_temp.exp()
+        max_t = self._log_max_temp.exp()
+        temperature = min_t + (max_t - min_t) * torch.sigmoid(temperature - (min_t + max_t) / 2)
         attn = torch.matmul(q, k.transpose(-2, -1))
         attn = attn * temperature
         if mask is not None:

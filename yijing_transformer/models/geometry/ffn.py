@@ -215,7 +215,7 @@ class MultiScaleHypercubeLayer(nn.Module):
 
     def forward(self, x):
         z = self.proj_to(x)
-        temp = self.temp.exp().clamp(min=0.01, max=5.0)
+        temp = F.softplus(self.temp) + 1e-4  # soft positive constraint, no hard bounds
         z_flat = z.reshape(-1, self.dim)
         dists = torch.cdist(z_flat.unsqueeze(0), self.vertices.unsqueeze(0)).squeeze(0)
         weights = F.softmax(-dists / temp, dim=-1)
