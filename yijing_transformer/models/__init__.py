@@ -42,3 +42,35 @@ from .export import (
     export_torchscript,
     create_model_card,
 )
+from .polyglot import (
+    PolyglotQuartet,
+    PolyglotConfig,
+    PolyglotMusician,
+    PolyglotConductor,
+    RosettaBridge,
+    RepresentationHead,
+    build_polyglot,
+)
+from .polyglot_translation import (
+    TranslationHead,
+    CrossTranslator,
+    CycleConsistencyLoss,
+    TranslationDemo,
+)
+from .polyglot_curriculum import (
+    DifficultyEstimator,
+    CurriculumScheduler,
+    CurriculumDataLoader,
+    CurriculumTrainer,
+    build_curriculum_trainer,
+)
+from .polyglot_supervised import (
+    SupervisedConfig,
+    SupervisedTrainer,
+    DistillationLoss,
+    ContrastiveSupervisedLoss,
+    AnnotatedPairLoss,
+    LayerFreezer,
+    WarmupCosineScheduler,
+    build_supervised_trainer,
+)
