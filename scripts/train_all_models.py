@@ -299,8 +299,29 @@ def create_all_models():
                     block.interlingua = il
 
             model.load_state_dict(sd, strict=False)
+
+            # Расширяем vocab 256 → 4096 (как для YiJingGPT)
+            target_vocab = 4096
+            d = 128
+            old_emb = model.tok_emb.weight.data  # (256, 128)
+            new_emb = nn.Embedding(target_vocab, d)
+            nn.init.normal_(new_emb.weight, mean=0.0, std=0.02)
+            new_emb.weight.data[:256] = old_emb
+            model.tok_emb = new_emb
+
+            if hasattr(model, 'head') and model.head is not None:
+                old_head = model.head
+                new_head = nn.Linear(d, target_vocab, bias=old_head.bias is not None)
+                nn.init.normal_(new_head.weight, mean=0.0, std=0.02)
+                if new_head.bias is not None:
+                    nn.init.zeros_(new_head.bias)
+                new_head.weight.data[:256] = old_head.weight.data
+                if old_head.bias is not None and new_head.bias is not None:
+                    new_head.bias.data[:256] = old_head.bias.data
+                model.head = new_head
+
             models['hmoe'] = model
-            print(f"  ✓ hmoe — из чекпоинта")
+            print(f"  ✓ hmoe — из чекпоинта (vocab 256→4096)")
         else:
             print(f"  ✗ hmoe — чекпоинт не найден")
     except Exception as e:
