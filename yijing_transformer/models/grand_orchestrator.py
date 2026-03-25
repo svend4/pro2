@@ -137,6 +137,12 @@ class ModelWrapper(nn.Module):
             return torch.zeros(idx.shape[0], idx.shape[1], self.target_vocab_size,
                                device=idx.device), None, {'type': 'hmoe_component'}
 
+        # Клампим input_ids если vocab модели меньше общего
+        if self.src_vocab > 0 and self.src_vocab < self.target_vocab_size:
+            idx = idx.clamp(0, self.src_vocab - 1)
+            if targets is not None:
+                targets = targets.clamp(0, self.src_vocab - 1)
+
         # Вызываем forward модели
         try:
             result = self.model(idx, targets)
@@ -164,7 +170,7 @@ class ModelWrapper(nn.Module):
             loss = None
             info = {}
 
-        if info is None:
+        if info is None or not isinstance(info, dict):
             info = {}
 
         # Проецируем логиты к общему vocab_size

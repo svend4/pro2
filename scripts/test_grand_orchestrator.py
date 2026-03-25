@@ -80,12 +80,17 @@ def try_load_nautilus_yijing():
     """NautilusYiJing — MoME + геометрия."""
     try:
         from yijing_transformer.models.nautilus_yijing import NautilusYiJing, NautilusYiJingConfig
-        cfg = NautilusYiJingConfig(vocab_size=4096, d_model=128, block_size=256, n_layers=4)
+        cfg = NautilusYiJingConfig(
+            vocab_size=4096, d_model=128, block_size=256,
+            n_layers=4, n_heads=4, d_expert=64, n_experts=6, top_k=2,
+            dropout=0.05, enable_synth=False,
+        )
         model = NautilusYiJing(cfg)
         n_p = sum(p.numel() for p in model.parameters())
         return model, f"создана (новая), {n_p:,} п."
     except Exception as e:
-        return None, f"ошибка: {e}"
+        import traceback
+        return None, f"ошибка: {e}\n    {traceback.format_exc().splitlines()[-2]}"
 
 
 def try_load_yijing_gpt():
@@ -116,12 +121,72 @@ def try_load_yijing_gpt():
             cfg.use_rope = True
             cfg.weight_tying = True
             cfg.label_smoothing = 0.0
-            # Disable optional features for simplicity
-            for attr in ['use_four_level_pe', 'use_cubic_pe', 'use_bidirectional_tri',
-                         'use_convergence_bridge', 'use_matrix_grammar', 'use_abriale',
-                         'use_nautilus', 'use_pseudo_rag', 'use_diff_attn',
-                         'use_expert_choice', 'use_six_sources']:
+            # Все опциональные фичи выключены
+            for attr in [
+                'use_four_level_pe', 'use_cubic_pe', 'use_bidirectional_tri',
+                'use_convergence_bridge', 'use_matrix_grammar', 'use_abriale',
+                'use_nautilus', 'use_pseudo_rag', 'use_diff_attn',
+                'use_expert_choice', 'use_six_sources', 'use_alibi',
+                'use_glyph_tokenizer', 'use_glyph_prior', 'use_gradient_ckpt',
+                'use_gumbel', 'use_hex_moe', 'use_swiglu', 'use_flash_attn',
+                'use_bian_gua', 'use_quadrant_attention',
+            ]:
                 setattr(cfg, attr, False)
+            # Числовые атрибуты с дефолтами
+            cfg.bias = False
+            cfg.n_kv_heads = None
+            cfg.sliding_window = None
+            cfg.attention_sinks = 0
+            cfg.rope_base = 10000
+            cfg.rope_scaling = None
+            cfg.rope_scaling_factor = 1.0
+            cfg.quantizer_type = 'factored6'
+            cfg.quant_total_dim = 6
+            cfg.quant_dim_schedule = None
+            cfg.quant_group_dim = 6
+            cfg.multi_scale_quant = False
+            cfg.temp = 1.0
+            cfg.adaptive_temp = False
+            cfg.commitment_weight = 0.25
+            cfg.head_dim = d // cfg.n_heads
+            cfg.n_experts = 0
+            cfg.moe_top_k = 2
+            cfg.hex_strength = 0.1
+            cfg.gate_init_bias = 0.0
+            cfg.total_steps = 10000
+            cfg.token_merge_ratio = 0.0
+            cfg.prefix_len = 0
+            cfg.mtp_n_future = 0
+            cfg.ffn_hidden = d * cfg.ffn_mult
+            cfg.distill_temp = 2.0
+            cfg.pseudo_rag_distill_weight = 0.1
+            # Curriculum/convergence
+            cfg.curriculum_strategy_geo = 'linear'
+            cfg.curriculum_target_strength = 1.0
+            cfg.curriculum_warmup_fraction = 0.1
+            cfg.convergence_n_clusters = 64
+            cfg.convergence_window_size = 4
+            cfg.convergence_stride = 2
+            cfg.convergence_compose_layers = 1
+            cfg.convergence_n_heads = 4
+            # Abriale
+            cfg.abriale_d_event = 64
+            cfg.abriale_n_heads = 4
+            cfg.abriale_arity = 2
+            cfg.abriale_n_rules = 64
+            cfg.abriale_n_hits = 4
+            cfg.abriale_n_alternatives = 2
+            cfg.abriale_n_event_types = 8
+            cfg.abriale_balance_weight = 0.01
+            # Nautilus
+            cfg.nautilus_chambers = 'all'
+            cfg.nautilus_init_scale = 0.01
+            cfg.nautilus_warmup_steps = 2000
+            cfg.nautilus_mode = 'sequential'
+            # Matrix grammar
+            cfg.matrix_grammar_rows = 8
+            cfg.matrix_grammar_cols = 8
+            cfg.matrix_grammar_heads = 4
 
             model = YiJingGPT(cfg)
             model.load_state_dict(sd, strict=False)
@@ -322,7 +387,7 @@ def main():
 
         orch = build_grand_orchestrator(
             models, mode=mode, vocab_size=4096, d_model=128,
-            freeze=True, expert_top_k=3,
+            freeze=False, expert_top_k=3,
         )
 
         # Обучение
@@ -371,7 +436,7 @@ def main():
 
     orch_best = build_grand_orchestrator(
         models, mode=best_mode, vocab_size=4096, d_model=128,
-        freeze=True, expert_top_k=3,
+        freeze=False, expert_top_k=3,
     )
     train_orchestrator(orch_best, tokenizer, steps=200, lr=2e-3)
 
