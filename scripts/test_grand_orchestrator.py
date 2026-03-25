@@ -76,6 +76,70 @@ def try_load_hierarchical_e2():
         return None, f"ошибка: {e}"
 
 
+def try_load_hmoe():
+    """HierarchicalMoE — Variant3GPT с обученным HierarchicalMoEFFN."""
+    try:
+        from yijing_transformer.models.variant3 import Variant3Config, Variant3GPT
+        from yijing_transformer.models.hierarchical_moe import HMoEConfig, HierarchicalMoEFFN
+        from yijing_transformer.models.geometry.routing import ArchetypalInterlingua
+
+        ckpt_path = os.path.join(ROOT, 'hmoe_fixed_joint.pt')
+        if not os.path.exists(ckpt_path):
+            return None, "чекпоинт hmoe_fixed_joint.pt не найден"
+
+        ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+        sd = ckpt.get('model_state', ckpt)
+
+        # Восстановить конфиг из self_train_hmoe
+        model_cfg = dict(
+            vocab_size=256, block_size=64, d_model=128,
+            n_heads=4, n_layers=4, ffn_mult=4,
+            hamming_lambda=0.15, uncertainty_budget=0.25,
+            dropout=0.1, use_domain_routing=False,
+            use_hierarchical_moe=True,
+        )
+        hmoe_cfg = HMoEConfig(d_model=128, use_multiscale=True, use_hex_tier=False)
+
+        cfg = Variant3Config(**model_cfg)
+        model = Variant3GPT(cfg)
+
+        # Заменить hmoe в каждом блоке
+        for block in model.blocks:
+            if hasattr(block, 'hmoe'):
+                block.hmoe = HierarchicalMoEFFN(hmoe_cfg)
+
+        # Заменить interlingua: чекпоинт использует ArchetypalInterlingua из routing.py
+        # (trit_projs output dim=1), а не ArchetypalInterlinguaFixed (output dim=64).
+        # Variant3Block вызывает interlingua(source_list, core) → (out, aux),
+        # а ArchetypalInterlingua.forward(x, source_list) → out (другой порядок + без aux).
+        # Патчим forward чтобы state_dict ключи совпадали напрямую (без вложенного .inner).
+        def _make_adapted_forward(il):
+            _orig_forward = il.forward
+            def _adapted_forward(source_outputs, core_hidden):
+                out = _orig_forward(core_hidden, source_outputs)
+                aux = il.get_interlingua_loss() if hasattr(il, 'get_interlingua_loss') else 0.0
+                return out, aux
+            return _adapted_forward
+
+        for block in model.blocks:
+            if hasattr(block, 'interlingua'):
+                il = ArchetypalInterlingua(
+                    d_model=128, n_sources=2, n_archetypes=64,
+                    uncertainty_budget=0.25,
+                )
+                il.forward = _make_adapted_forward(il)
+                block.interlingua = il
+
+        model.load_state_dict(sd, strict=False)
+        model.eval()
+        n_p = sum(p.numel() for p in model.parameters())
+        phase = ckpt.get('phase_name', '?')
+        return model, f"загружена из чекпоинта (фаза: {phase}), {n_p:,} п."
+    except Exception as e:
+        import traceback
+        return None, f"ошибка: {e}\n    {traceback.format_exc().splitlines()[-2]}"
+
+
 def try_load_nautilus_yijing():
     """NautilusYiJing — MoME + геометрия."""
     try:
@@ -188,11 +252,39 @@ def try_load_yijing_gpt():
             cfg.matrix_grammar_cols = 8
             cfg.matrix_grammar_heads = 4
 
+            # 1) Build model with checkpoint vocab_size (256 byte-level)
             model = YiJingGPT(cfg)
             model.load_state_dict(sd, strict=False)
+
+            # 2) Expand embedding & head from 256 → 4096 for BPE tokenizer
+            target_vocab = 4096
+            if v < target_vocab:
+                import torch.nn as nn
+                # Expand token embedding: (256, d) → (4096, d)
+                old_emb = model.tok_emb.weight.data          # (256, d)
+                new_emb = nn.Embedding(target_vocab, d)
+                nn.init.normal_(new_emb.weight, mean=0.0, std=0.02)
+                new_emb.weight.data[:v] = old_emb
+                model.tok_emb = new_emb
+
+                # Expand LM head: (d, 256) → (d, 4096)
+                if hasattr(model, 'head') and model.head is not None:
+                    old_head = model.head
+                    new_head = nn.Linear(d, target_vocab, bias=old_head.bias is not None)
+                    nn.init.normal_(new_head.weight, mean=0.0, std=0.02)
+                    if new_head.bias is not None:
+                        nn.init.zeros_(new_head.bias)
+                    new_head.weight.data[:v] = old_head.weight.data
+                    if old_head.bias is not None and new_head.bias is not None:
+                        new_head.bias.data[:v] = old_head.bias.data
+                    model.head = new_head
+
+                # Update config so downstream sees 4096
+                cfg.vocab_size = target_vocab
+
             model.eval()
             n_p = sum(p.numel() for p in model.parameters())
-            return model, f"загружена из чекпоинта, {n_p:,} п."
+            return model, f"загружена из чекпоинта (vocab {v}→{target_vocab}), {n_p:,} п."
         else:
             return None, "чекпоинт не найден"
     except Exception as e:
@@ -360,6 +452,7 @@ def main():
         ('yijing',           try_load_yijing_gpt),
         ('hierarchical_e2',  try_load_hierarchical_e2),
         ('nautilus_yijing',  try_load_nautilus_yijing),
+        ('hmoe',             try_load_hmoe),
     ]
 
     for name, loader in loaders:
