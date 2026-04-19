@@ -79,6 +79,90 @@ class NautilusPortal:
         }
 
 
+def render_html(result: PortalResult, portal: "NautilusPortal") -> str:
+    c = result.consensus or {}
+    coverage_pct = int(c.get("coverage", 0) * 100)
+    present = ", ".join(c.get("present_in", []))
+    missing = ", ".join(c.get("missing_in", []))
+
+    entries_html = ""
+    for e in result.entries:
+        repo = e.id.split(":")[0].upper()
+        links_html = ""
+        if e.links:
+            links_html = "<div class='links'>→ " + ", ".join(
+                f"<code>{l}</code>" for l in e.links[:4]
+            ) + "</div>"
+        entries_html += f"""
+        <div class="entry">
+            <div class="repo-tag">{repo}</div>
+            <div class="title">{e.title}</div>
+            <div class="content">{e.content[:200]}</div>
+            {links_html}
+        </div>"""
+
+    cross_html = ""
+    for lnk in result.cross_links[:10]:
+        cross_html += (
+            f"<li><code>{lnk['from']}</code> → <code>{lnk['to']}</code> "
+            f"<span class='repos'>({lnk['from_repo']} ↔ {lnk['to_repo']})</span></li>"
+        )
+
+    adapters_list = " · ".join(portal.adapters.keys())
+
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>⬡ Nautilus Portal — {result.query}</title>
+<style>
+  body {{ font-family: monospace; background: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }}
+  h1 {{ color: #58a6ff; }}
+  .query-form {{ margin: 16px 0; }}
+  .query-form input {{ background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+                       padding: 8px 12px; font-size: 16px; width: 300px; border-radius: 6px; }}
+  .query-form button {{ background: #238636; color: #fff; border: none; padding: 8px 16px;
+                        font-size: 16px; border-radius: 6px; cursor: pointer; margin-left: 8px; }}
+  .consensus {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                padding: 12px 16px; margin: 16px 0; }}
+  .coverage {{ font-size: 24px; color: {'#3fb950' if coverage_pct == 100 else '#d29922' if coverage_pct > 50 else '#f85149'}; }}
+  .entry {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+            padding: 12px 16px; margin: 10px 0; }}
+  .repo-tag {{ display: inline-block; background: #1f6feb; color: #fff; padding: 2px 8px;
+               border-radius: 4px; font-size: 12px; margin-bottom: 6px; }}
+  .title {{ font-size: 16px; font-weight: bold; color: #e6edf3; margin-bottom: 4px; }}
+  .content {{ color: #8b949e; font-size: 13px; white-space: pre-wrap; }}
+  .links {{ color: #58a6ff; font-size: 12px; margin-top: 6px; }}
+  .cross-links {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                  padding: 12px 16px; margin: 16px 0; }}
+  .cross-links li {{ margin: 4px 0; font-size: 13px; }}
+  .repos {{ color: #8b949e; }}
+  code {{ background: #21262d; padding: 1px 4px; border-radius: 3px; font-size: 12px; }}
+  .adapters {{ color: #8b949e; font-size: 12px; margin-top: 24px; }}
+</style>
+</head>
+<body>
+<h1>⬡ Nautilus Portal</h1>
+<form class="query-form" method="get">
+  <input name="q" value="{result.query}" placeholder="запрос...">
+  <button type="submit">Найти</button>
+</form>
+
+<div class="consensus">
+  <span class="coverage">{coverage_pct}% покрытие</span> &nbsp;·&nbsp;
+  найдено в: <strong>{present or '—'}</strong>
+  {f'&nbsp;·&nbsp; отсутствует: {missing}' if missing else ''}
+</div>
+
+<div>{entries_html}</div>
+
+{'<div class="cross-links"><strong>Межрепозиторные связи:</strong><ul>' + cross_html + '</ul></div>' if cross_html else ''}
+
+<div class="adapters">адаптеры: {adapters_list}</div>
+</body>
+</html>"""
+
+
 def render_text(result: PortalResult) -> str:
     lines = [f'\n⬡ NAUTILUS PORTAL — "{result.query}"', "=" * 50]
     for e in result.entries:
@@ -127,9 +211,6 @@ def main():
 def _serve(portal: NautilusPortal):
     from http.server import HTTPServer, BaseHTTPRequestHandler
     import urllib.parse
-    # импортируем рендерер из основного portal.py (один уровень выше)
-    sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent.parent))
-    from portal import render_html
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
