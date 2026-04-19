@@ -131,10 +131,31 @@ def try_load_hmoe():
                 block.interlingua = il
 
         model.load_state_dict(sd, strict=False)
+
+        # Расширяем vocab 256 → 4096 для BPE токенизатора
+        import torch.nn as tnn
+        target_vocab = 4096
+        d_m = 128
+        old_emb = model.tok_emb.weight.data  # (256, 128)
+        new_emb = tnn.Embedding(target_vocab, d_m)
+        tnn.init.normal_(new_emb.weight, mean=0.0, std=0.02)
+        new_emb.weight.data[:256] = old_emb
+        model.tok_emb = new_emb
+        if hasattr(model, 'head') and model.head is not None:
+            old_head = model.head
+            new_head = tnn.Linear(d_m, target_vocab, bias=old_head.bias is not None)
+            tnn.init.normal_(new_head.weight, mean=0.0, std=0.02)
+            if new_head.bias is not None:
+                tnn.init.zeros_(new_head.bias)
+            new_head.weight.data[:256] = old_head.weight.data
+            if old_head.bias is not None and new_head.bias is not None:
+                new_head.bias.data[:256] = old_head.bias.data
+            model.head = new_head
+
         model.eval()
         n_p = sum(p.numel() for p in model.parameters())
         phase = ckpt.get('phase_name', '?')
-        return model, f"загружена из чекпоинта (фаза: {phase}), {n_p:,} п."
+        return model, f"загружена из чекпоинта (vocab 256→4096, фаза: {phase}), {n_p:,} п."
     except Exception as e:
         import traceback
         return None, f"ошибка: {e}\n    {traceback.format_exc().splitlines()[-2]}"

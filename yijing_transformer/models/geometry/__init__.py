@@ -182,6 +182,15 @@ from .core import (
     generate_spacetime_pairs,
 )
 
+# Advanced Routing: GrMoE + SIPS + LatFormer soft masks
+from .advanced_routing import (
+    GrassmannianRouter,
+    Q6GrassmannianRouter,
+    Q6SoftAttentionMask,
+    EnhancedBianGuaAttention,
+    GrassmannianMoEFFN,
+)
+
 # Q6 Algebra: Z₂^6 арифметика (Теорема 3) + GERMES-нотация + Bent seeds
 from .q6_algebra import (
     Q6Arithmetic,
