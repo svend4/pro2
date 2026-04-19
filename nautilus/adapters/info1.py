@@ -4,6 +4,8 @@ Info1Adapter — адаптер для svend4/info1.
 """
 
 import json
+import os
+import urllib.parse
 import urllib.request
 from .base import BaseAdapter, PortalEntry
 
@@ -18,15 +20,20 @@ class Info1Adapter(BaseAdapter):
         "реализация": -2, "примеры": -3, "код": -4,
     }
 
+    def _github_headers(self) -> dict:
+        headers = {"User-Agent": "nautilus-portal/1.0"}
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
     def fetch(self, query: str) -> list[PortalEntry]:
         try:
             url = (
                 f"https://api.github.com/search/code"
-                f"?q={query}+repo:{self.REPO}+language:Markdown"
+                f"?q={urllib.parse.quote(query)}+repo:{self.REPO}+language:Markdown"
             )
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "nautilus-portal/1.0"}
-            )
+            req = urllib.request.Request(url, headers=self._github_headers())
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
             results = []
@@ -41,7 +48,7 @@ class Info1Adapter(BaseAdapter):
                     metadata={"alpha": alpha, "path": item["path"]},
                     links=[f"pro2:depth:{abs(alpha)}"],
                 ))
-            return results
+            return results or self._static_entries()
         except Exception:
             return self._static_entries()
 

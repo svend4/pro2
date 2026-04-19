@@ -1,6 +1,6 @@
 {
   "name": "nautilus",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Единая точка входа для экосистемы svend4. Читает все форматы, строит связи, показывает консенсус.",
   "registry": [
     {
@@ -30,6 +30,29 @@
       "format": "data2",
       "compatibility": 1,
       "passport": "passports/data2.md"
+    },
+    {
+      "repo": "svend4/data7",
+      "adapter": "data7",
+      "format": "data7",
+      "compatibility": 2,
+      "passport": "passports/data7.md"
+    },
+    {
+      "repo": "svend4/pro2",
+      "adapter": "infosystems",
+      "format": "infosystems",
+      "compatibility": 2,
+      "passport": "passports/infosystems.md",
+      "note": "домен внутри pro2, не отдельный репо"
+    },
+    {
+      "repo": "svend4/pro2",
+      "adapter": "ai_agents",
+      "format": "ai_agents",
+      "compatibility": 2,
+      "passport": "passports/ai_agents.md",
+      "note": "домен внутри pro2, не отдельный репо"
     }
   ],
   "consensus_threshold": 1.0,
