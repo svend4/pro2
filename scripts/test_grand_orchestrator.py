@@ -133,13 +133,14 @@ def try_load_hmoe():
         model.load_state_dict(sd, strict=False)
 
         # Расширяем vocab 256 → 4096 для BPE токенизатора
+        # BPE byte-fallback ids are 4..259 (<0x00>..<0xFF>): byte-level row b -> BPE row 4+b
         import torch.nn as tnn
         target_vocab = 4096
         d_m = 128
         old_emb = model.tok_emb.weight.data  # (256, 128)
         new_emb = tnn.Embedding(target_vocab, d_m)
         tnn.init.normal_(new_emb.weight, mean=0.0, std=0.02)
-        new_emb.weight.data[:256] = old_emb
+        new_emb.weight.data[4:260] =old_emb
         model.tok_emb = new_emb
         if hasattr(model, 'head') and model.head is not None:
             old_head = model.head
@@ -147,9 +148,9 @@ def try_load_hmoe():
             tnn.init.normal_(new_head.weight, mean=0.0, std=0.02)
             if new_head.bias is not None:
                 tnn.init.zeros_(new_head.bias)
-            new_head.weight.data[:256] = old_head.weight.data
+            new_head.weight.data[4:260] =old_head.weight.data
             if old_head.bias is not None and new_head.bias is not None:
-                new_head.bias.data[:256] = old_head.bias.data
+                new_head.bias.data[4:260] =old_head.bias.data
             model.head = new_head
 
         model.eval()
@@ -285,7 +286,7 @@ def try_load_yijing_gpt():
                 old_emb = model.tok_emb.weight.data          # (256, d)
                 new_emb = nn.Embedding(target_vocab, d)
                 nn.init.normal_(new_emb.weight, mean=0.0, std=0.02)
-                new_emb.weight.data[:v] = old_emb
+                new_emb.weight.data[4:4+v] =old_emb
                 model.tok_emb = new_emb
 
                 # Expand LM head: (d, 256) → (d, 4096)
@@ -295,9 +296,9 @@ def try_load_yijing_gpt():
                     nn.init.normal_(new_head.weight, mean=0.0, std=0.02)
                     if new_head.bias is not None:
                         nn.init.zeros_(new_head.bias)
-                    new_head.weight.data[:v] = old_head.weight.data
+                    new_head.weight.data[4:4+v] =old_head.weight.data
                     if old_head.bias is not None and new_head.bias is not None:
-                        new_head.bias.data[:v] = old_head.bias.data
+                        new_head.bias.data[4:4+v] =old_head.bias.data
                     model.head = new_head
 
                 # Update config so downstream sees 4096

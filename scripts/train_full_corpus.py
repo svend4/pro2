@@ -134,13 +134,14 @@ cfg.abriale_balance_weight=0.01; cfg.nautilus_chambers='all'; cfg.nautilus_init_
 cfg.nautilus_warmup_steps=2000; cfg.nautilus_mode='sequential'
 cfg.matrix_grammar_rows=8; cfg.matrix_grammar_cols=8; cfg.matrix_grammar_heads=4
 m = YiJingGPT(cfg); m.load_state_dict(sd, strict=False)
+# BPE byte-fallback ids are 4..259 (<0x00>..<0xFF>), so byte-level row b -> BPE row 4+b
 if v < 4096:
     oe=m.tok_emb.weight.data; ne=nn.Embedding(4096,d); nn.init.normal_(ne.weight,std=0.02)
-    ne.weight.data[:v]=oe; m.tok_emb=ne
+    ne.weight.data[4:4+v]=oe; m.tok_emb=ne
     oh=m.head; nh=nn.Linear(d,4096,bias=oh.bias is not None); nn.init.normal_(nh.weight,std=0.02)
     if nh.bias is not None: nn.init.zeros_(nh.bias)
-    nh.weight.data[:v]=oh.weight.data
-    if oh.bias is not None and nh.bias is not None: nh.bias.data[:v]=oh.bias.data
+    nh.weight.data[4:4+v]=oh.weight.data
+    if oh.bias is not None and nh.bias is not None: nh.bias.data[4:4+v]=oh.bias.data
     m.head=nh
 models['yijing'] = m
 print(f'  ✓ yijing (checkpoint, vocab {v}→4096)')
@@ -167,11 +168,11 @@ for b in m.blocks:
         il.forward=_mk(il); b.interlingua=il
 m.load_state_dict(sd, strict=False)
 oe=m.tok_emb.weight.data; ne=nn.Embedding(4096,128); nn.init.normal_(ne.weight,std=0.02)
-ne.weight.data[:256]=oe; m.tok_emb=ne
+ne.weight.data[4:260]=oe; m.tok_emb=ne
 oh=m.head; nh=nn.Linear(128,4096,bias=oh.bias is not None); nn.init.normal_(nh.weight,std=0.02)
 if nh.bias is not None: nn.init.zeros_(nh.bias)
-nh.weight.data[:256]=oh.weight.data
-if oh.bias is not None and nh.bias is not None: nh.bias.data[:256]=oh.bias.data
+nh.weight.data[4:260]=oh.weight.data
+if oh.bias is not None and nh.bias is not None: nh.bias.data[4:260]=oh.bias.data
 m.head=nh
 models['hmoe'] = m
 print(f'  ✓ hmoe (checkpoint, vocab 256→4096)')
