@@ -136,18 +136,18 @@ class GrassmannianRouter(nn.Module):
         weights = torch.zeros(B, T, self.n_experts, device=x.device)
         weights.scatter_(2, topk_idx, topk_weights)
 
-        # Load balancing loss
-        with torch.no_grad():
-            expert_frac = weights.sum(dim=(0, 1)) / (B * T)
-            if self.training:
+        # Switch-style balance loss: hard usage fraction x mean soft prob.
+        # Must go through the full softmax so under-used experts get gradient;
+        # the hard top-k weights alone carry no gradient to unselected experts.
+        probs = F.softmax(scores, dim=-1)
+        expert_frac = weights.detach().sum(dim=(0, 1)) / (B * T)
+        aux_loss = (expert_frac * probs.mean(dim=(0, 1))).sum() * self.n_experts
+        if self.training:
+            with torch.no_grad():
                 self.expert_load_ema = (
                     self.ema_decay * self.expert_load_ema
                     + (1 - self.ema_decay) * expert_frac
                 )
-
-        # Auxiliary loss: encourage uniform expert usage
-        uniform = torch.ones_like(expert_frac) / self.n_experts
-        aux_loss = F.mse_loss(expert_frac, uniform) * self.n_experts
 
         return weights, topk_idx, aux_loss
 
@@ -231,6 +231,9 @@ class Q6GrassmannianRouter(nn.Module):
         # Learnable blend between Grassmannian and Hamming scores
         self.geo_gate = nn.Parameter(torch.tensor(0.0))
 
+        self.register_buffer('expert_load_ema', torch.zeros(n_experts))
+        self.ema_decay = 0.99
+
     def forward(self, x: torch.Tensor):
         """
         Args:
@@ -240,8 +243,9 @@ class Q6GrassmannianRouter(nn.Module):
             indices: (B, T, top_k)
             aux_loss: scalar
         """
-        # Grassmannian routing
-        grass_weights, indices, aux_loss = self.grass_router(x)
+        # Grassmannian routing (its own balance loss is superseded by the one
+        # computed on the final combined selection below)
+        grass_weights, _, _ = self.grass_router(x)
 
         # Q6 geometric routing
         soft_bits = torch.tanh(self.q6_proj(x))  # (B, T, 6)
@@ -263,11 +267,22 @@ class Q6GrassmannianRouter(nn.Module):
         weights = torch.zeros_like(combined)
         weights.scatter_(2, topk_idx, topk_weights)
 
+        n_tok = x.shape[0] * x.shape[1]
+        expert_frac = weights.detach().sum(dim=(0, 1)) / n_tok
+        aux_loss = (expert_frac * combined.mean(dim=(0, 1))).sum() * self.n_experts
+        if self.training:
+            with torch.no_grad():
+                self.expert_load_ema = (
+                    self.ema_decay * self.expert_load_ema
+                    + (1 - self.ema_decay) * expert_frac
+                )
+
         return weights, topk_idx, aux_loss
 
     def get_diagnostics(self):
         diag = self.grass_router.get_diagnostics()
         diag['geo_gate'] = torch.sigmoid(self.geo_gate).item()
+        diag['load_balance'] = self.expert_load_ema.detach().cpu().tolist()
         return diag
 
 
